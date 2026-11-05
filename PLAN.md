@@ -17,7 +17,7 @@ The standardization work starts from these, so it doesn't reopen them. All were 
 - TarotGen.io's backend moves from Slim to Go.
 - Two shared repos, both named with "shared": shared-tooling (public, one submodule per project, folders named `<purpose>/<target>`) and shared-components-vue.
 - Stay on ESLint. Markdown lint, the test setup and a `standards/` guide all live in shared-tooling.
-- The component kit is built on Reka UI, with design tokens as plain CSS custom properties.
+- The component kit's own decisions are in shared-components-vue's `PLAN.md`.
 - modernc.org/sqlite is the one Go SQLite driver.
 - jsdom for Vitest tests that need a DOM, Vitest's `node` environment for the rest, Playwright for end-to-end tests.
 - The droplet's memory is tight, so its fixes come first.
@@ -76,18 +76,7 @@ Switching frameworks wouldn't buy much:
 
 ### 2. Consolidate the UI components
 
-This is the biggest gain for WCAG and reuse. Today there are four approaches:
-
-- PrimeVue + Tailwind in Home Library and Kindred Nights
-- Bulma + Reka UI in the Gallery and TarotGen.io
-- Hand-written components in Senpan, Fantasy Dossier and Fingerprint Generator
-- Mantine in Family Card Game
-
-Build one shared Vue component package (shared-components-vue) on Reka UI's headless, ARIA-pattern primitives, styled with your own tokens as plain CSS custom properties. Ship it the same way as `@jwill89/eslint-config`.
-
-- **Bulma** is maintained, but barely: still on 1.0.4, with about 400K weekly downloads against Tailwind's 125M.
-- **PrimeVue** works, but it's styled first, so you keep overriding its look. Its published roadmap leans toward the paid PrimeVue+ suite and templates, with nothing on accessibility.
-- **Automated checks:** run axe in Playwright on every project. Home Library and TarotGen.io already have Playwright, and the résumé site already uses axe-core.
+This is the biggest gain for WCAG and reuse. The Vue apps use three approaches today (PrimeVue, Bulma with Reka UI, and hand-written components), so the same dialog, toast and page header exist several times over. A shared library, shared-components-vue, replaces them. Its own `PLAN.md`, in that repo, covers why, what it builds, its design tokens and the order the apps adopt it.
 
 ### 3. Move TarotGen.io from Slim to Go
 
@@ -172,7 +161,7 @@ The copies have already drifted:
 | shared-tooling `test/a11y` | Accessibility tests | axe checks for Playwright on every route; a WCAG 2.2 AA checklist | Every site with a UI |
 | shared-tooling `.github/workflows` | CI | Reusable workflows, one per stack, plus OSV-Scanner | All repos |
 | shared-tooling `repo` | Repo files | editorconfig, gitattributes, Dependabot, copied in by a sync task | All repos |
-| shared-components-vue (own repo) | UI components | Components built on Reka UI, design tokens as CSS custom properties, axe tests per component | Every Vue front end |
+| shared-components-vue (own repo) | UI components | Shared Vue components; see that repo's `PLAN.md` | Every Vue front end |
 
 **C# and PowerShell both earn a folder.** The four plugins use three setups today: Kindred's `Directory.Build.props`, settings inside Senpan's and TarotGen.io's project files, and nothing in Venue Tools, though Senpan's file says it means to match Kindred. For PowerShell, a shared deploy module beats a shared lint file: the 14 deploy scripts total 4,321 lines, and helpers like `Resolve-PuttyTool`, `Write-Step` and `Fail` are copied into 11 of them.
 
@@ -180,7 +169,7 @@ The copies have already drifted:
 
 The VS Code markdownlint extension reads the same config files, so the IDE warnings drop with it. Turn on its fix-on-save (`source.fixAll.markdownlint` in `editor.codeActionsOnSave`). The Gallery's 100-column rule goes too: Markdown sets no line length, and 100 came from no standard.
 
-**Why the component kit stays separate.** An app should take a new component version on purpose, not because a lint rule changed in the same submodule. The kit also needs its own build (Vite's library mode), tests and version tags. Its axe tests check each component, but `test/a11y` still checks whole pages, where most real failures (headings, landmarks, focus order) show up.
+**Why the component kit is its own repo.** It ships code your apps run, so an app should take a new version on purpose, not because a lint rule changed in the same submodule. Its plan is in that repo.
 
 The one cost of a single tooling repo: a change for one stack moves the submodule for every project. Projects that don't use that folder just see nothing different.
 
@@ -190,7 +179,7 @@ The one cost of a single tooling repo: a change for one stack moves the submodul
 
 - **Go:** golangci-lint's `depguard` rule rejects a banned import, such as ncruces once Senpan and Modem Monitor move to modernc.
 - **Front end:** ESLint's `no-restricted-imports` does the same, such as `bulma` once the kit replaces it.
-- **Settled:** modernc.org/sqlite as the one SQLite driver (section 5), Reka UI under the component kit, jsdom for Vitest, and Playwright for end-to-end tests.
+- **Settled:** modernc.org/sqlite as the one SQLite driver (section 5), jsdom for Vitest, and Playwright for end-to-end tests.
 - **Also settled:** huma for OpenAPI, so `depguard` can reject kin-openapi.
 
 **How projects pull them in:**
@@ -202,7 +191,6 @@ The one cost of a single tooling repo: a change for one stack moves the submodul
 - PSScriptAnalyzer points `-Settings` at `shared/lint/pwsh`, and deploy scripts `Import-Module ./shared/deploy/pwsh`, keeping only their own steps and config.
 - C# plugins import `shared/lint/dotnet` from their `Directory.Build.props`.
 - Each repo's `.markdownlint-cli2.jsonc` `extends` `shared/lint/markdown`. Go-only repos need no Node locally: the VS Code extension lints in the editor, and the shared workflow runs it in CI.
-- shared-components-vue installs from a tagged release (`github:jwill89/shared-components-vue#v1.0.0`), with no submodule.
 - Keep shared-tooling public. CI then checks out the submodule and calls its workflows with no token, and it holds no secrets, since host details stay in each repo's ignored `deploy.config.ps1`.
 - For vulnerability checks, one OSV-Scanner step reads every lockfile type you use (npm, Go, Composer, pip). Keep govulncheck alongside it for Go, since it checks whether the vulnerable code is actually called.
 
@@ -348,7 +336,7 @@ Do what's urgent first, settle the decisions, build the tooling, and only then m
 7. **Then the migrations, in this order:**
    1. TarotGen.io to Go, the first codebase built under the standards from its first commit.
    2. Senpan's API to huma, replacing its hand-written spec and kin-openapi.
-   3. The component kit, starting with the Gallery and TarotGen.io, which both drop Bulma.
+   3. The component kit, following its own plan in shared-components-vue.
    4. Home Library's event stream, with its 1.0 work. It's small and touches nothing else.
    5. Vapor, once Vue 3.6 is stable.
 
@@ -374,8 +362,6 @@ Project facts come from each repo's manifests, deploy files and docs in Web Proj
 - [Stackmaven: Vue 3.6 Vapor Mode](https://stackmaven.io/news/vue-vapor-mode/)
 - [InfoQ: State of JS 2025 survey](https://www.infoq.com/news/2026/03/state-of-js-survey-2025)
 - [odan: The year in review 2025 (Slim maintainer)](https://odan.github.io/2025/12/12/recap-2025.html)
-- [PrimeVue roadmap](https://primevue.org/roadmap)
-- [Bulma vs Tailwind CSS](https://devtools-vs.pages.dev/bulma-vs-tailwindcss)
 - [Grav 2 stable released](https://getgrav.org/blog/grav-2-stable-released)
 - [Oxc: framework compatibility](https://oxc.rs/compatibility.html)
 - [Announcing Vite 8](https://vite.dev/blog/announcing-vite8.html)
