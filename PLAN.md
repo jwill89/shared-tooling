@@ -12,9 +12,7 @@ Four follow-up questions are answered below. Vue's Vapor mode is still a release
 
 ## Decisions so far
 
-The standardization work starts from these, so it doesn't reopen them.
-
-**Decided:**
+The standardization work starts from these, so it doesn't reopen them. All were decided on November 5, 2026.
 
 - TarotGen.io's backend moves from Slim to Go.
 - Two shared repos, both named with "shared": shared-tooling (public, one submodule per project, folders named `<purpose>/<target>`) and shared-components-vue.
@@ -23,18 +21,14 @@ The standardization work starts from these, so it doesn't reopen them.
 - modernc.org/sqlite is the one Go SQLite driver.
 - jsdom for Vitest tests that need a DOM, Vitest's `node` environment for the rest, Playwright for end-to-end tests.
 - The droplet's memory is tight, so its fixes come first.
-
-**Recommended here, not yet confirmed:**
-
 - Stay on Vue 3; keep Laravel for the Gallery, Python for Conlang Translator and React for Family Card Game; no Rust.
 - Home Library moves from polling to an SSE stream.
 - Coverage floors that only rise, rather than a fixed target.
+- huma for OpenAPI everywhere. It generates the spec from code with readable operation and schema names, so Senpan drops its hand-written spec and kin-openapi.
+- No hard wrap in Markdown (MD013 off). Markdown sets no line length, and the Gallery's 100 columns came from no standard, so its override goes.
+- Devkit Box is retired, since nothing used it. Its local folder is removed (every file matched GitHub); the `jwill89/devbox` repo still needs archiving.
 
-**Open questions:**
-
-- OpenAPI: huma, which generates the spec from code (Kindred, Home Library), or kin-openapi with a hand-written spec (Senpan). TarotGen.io's port needs the answer.
-- Markdown wrapping: keep the Gallery's 100-column wrap, or drop it.
-- Devkit Box: archive it, or keep the dev-container setup.
+No questions are open.
 
 ## Project by project
 
@@ -119,7 +113,7 @@ Run `systemd-cgtop -m` or `ps -eo rss,comm --sort=-rss | head -15` on the drople
 ### 5. Small inconsistencies
 
 - **Two SQLite drivers:** modernc in four projects, ncruces in two. Senpan's ncruces choice is correctly documented against `MemoryDenyWriteExecute`, but neither project needs ncruces: both use it only for a per-connection pragma hook and one interrupt check, which modernc also covers. Standardize on modernc, which is equally safe under that setting.
-- **Two OpenAPI approaches:** huma (code-first) in Kindred Nights and Home Library, kin-openapi with a hand-written spec in Senpan.
+- **Two OpenAPI approaches:** huma (code-first) in Kindred Nights and Home Library, kin-openapi with a hand-written spec in Senpan. Settled: huma, so Senpan moves to it.
 - **Résumé site:** it loads Vue from unpkg on every page load. Hosting that file yourself removes an outside dependency that can go down.
 
 ## Real-time: WebSockets, streams or REST
@@ -184,7 +178,7 @@ The copies have already drifted:
 
 **Markdown earns a folder too.** Under markdownlint's defaults your repos show 9,193 warnings, and 91% come from two rules: lines over 80 columns (6,031) and table pipes that don't line up (2,321). A shared config that turns both off, lets changelog headings repeat under different releases, and allows a few HTML tags cuts that to 428. Most of what's left (blank lines around lists and headings, list indents) `markdownlint-cli2 --fix` repairs on its own.
 
-The VS Code markdownlint extension reads the same config files, so the IDE warnings drop with it. Turn on its fix-on-save (`source.fixAll.markdownlint` in `editor.codeActionsOnSave`). The Gallery can keep its 100-column wrap as a local override.
+The VS Code markdownlint extension reads the same config files, so the IDE warnings drop with it. Turn on its fix-on-save (`source.fixAll.markdownlint` in `editor.codeActionsOnSave`). The Gallery's 100-column rule goes too: Markdown sets no line length, and 100 came from no standard.
 
 **Why the component kit stays separate.** An app should take a new component version on purpose, not because a lint rule changed in the same submodule. The kit also needs its own build (Vite's library mode), tests and version tags. Its axe tests check each component, but `test/a11y` still checks whole pages, where most real failures (headings, landmarks, focus order) show up.
 
@@ -197,7 +191,7 @@ The one cost of a single tooling repo: a change for one stack moves the submodul
 - **Go:** golangci-lint's `depguard` rule rejects a banned import, such as ncruces once Senpan and Modem Monitor move to modernc.
 - **Front end:** ESLint's `no-restricted-imports` does the same, such as `bulma` once the kit replaces it.
 - **Settled:** modernc.org/sqlite as the one SQLite driver (section 5), Reka UI under the component kit, jsdom for Vitest, and Playwright for end-to-end tests.
-- **Still to settle:** one OpenAPI library (huma or kin-openapi).
+- **Also settled:** huma for OpenAPI, so `depguard` can reject kin-openapi.
 
 **How projects pull them in:**
 
@@ -283,7 +277,7 @@ The material exists but is scattered: about 8,600 lines across 24 files, includi
 **How to gather it:**
 
 - Have Claude Code read every AGENTS.md, CLAUDE.md, CONTRIBUTING.md, plan and decision log, and sort each rule as shared, project-only, or conflicting.
-- Conflicts come to you as a list to decide; the agent doesn't pick. Some are already known: the Gallery wraps Markdown at 100 columns and the others don't, Kindred and Home Library generate OpenAPI with huma while Senpan writes its spec by hand, and front ends use Bulma, PrimeVue or neither.
+- Conflicts come to you as a list to decide; the agent doesn't pick. Three known ones are already settled: Markdown wrapping, OpenAPI, and the split between Bulma, PrimeVue and neither, which the component kit replaces.
 - Mark each rule with how it's checked. A rule a tool can check goes into the lint configs too, which keeps the guide short.
 
 ## Rust
@@ -311,7 +305,6 @@ Every repo gets a CLAUDE.md that points at the standards during rollout, so that
 | Project | Missing | Note |
 | --- | --- | --- |
 | Conlang Translator | Git repo, Dependabot, changelog, smoke check |  |
-| Devkit Box | Git repo, CI | Archive it if the dev-container setup is retired |
 | Family Card Game | CI, Dependabot, changelog, accessibility lint, HTTP smoke check | React, so `lint/web` needs a React variant |
 | Fantasy Dossier | Smoke check |  |
 | Fingerprint Generator | CI, Dependabot, tests, accessibility lint, smoke check |  |
@@ -339,9 +332,9 @@ Do what's urgent first, settle the decisions, build the tooling, and only then m
    - Add scheduled database backups to Senpan, the Gallery and Marxbot by copying Kindred's backup timer.
 2. **Get every project into a known state.**
    - Put Conlang Translator in git; its folder has no repo.
-   - Archive Devkit Box if its dev-container setup is retired.
+   - Archive `jwill89/devbox` on GitHub, which also stops its Monday image builds and its Dependabot updates. The local Devkit Box folder is already removed.
    - Move `SQL Backups` out of Web Projects. It holds old WordPress tables, users among them, which a Claude Code session opened there would read.
-3. **Gather the standards into `standards/` in this repo** (github.com/jwill89/shared-tooling, public). Claude Code sorts each rule as shared, project-only or conflicting and brings you the conflicts. Settle the open questions here too, above all the OpenAPI library, since TarotGen.io's port depends on it.
+3. **Gather the standards into `standards/` in this repo** (github.com/jwill89/shared-tooling, public). Claude Code sorts each rule as shared, project-only or conflicting and brings you the conflicts.
 4. **Seed shared-tooling from what you already have; no new rules yet.**
    - The eslint-config becomes `lint/web`, plus a React variant for Family Card Game.
    - Kindred's `.golangci.yml` becomes the `lint/go` template.
@@ -354,9 +347,10 @@ Do what's urgent first, settle the decisions, build the tooling, and only then m
 6. **Roll out one repo at a time**, one commit each: swap in the shared configs, point its CLAUDE.md at the standards, trim what moved there, and close that project's gaps (see Project gaps). Small fixes ride along: the SQLite switch in Senpan and Modem Monitor, jsdom, and Playwright for the résumé site.
 7. **Then the migrations, in this order:**
    1. TarotGen.io to Go, the first codebase built under the standards from its first commit.
-   2. The component kit, starting with the Gallery and TarotGen.io, which both drop Bulma.
-   3. Home Library's event stream, with its 1.0 work. It's small and touches nothing else.
-   4. Vapor, once Vue 3.6 is stable.
+   2. Senpan's API to huma, replacing its hand-written spec and kin-openapi.
+   3. The component kit, starting with the Gallery and TarotGen.io, which both drop Bulma.
+   4. Home Library's event stream, with its 1.0 work. It's small and touches nothing else.
+   5. Vapor, once Vue 3.6 is stable.
 
 **How the pieces connect.** You edit shared-tooling in its own folder, push, and tag a version. Each project holds it as a submodule at `shared/`, pinned to one commit. To take an update, a project runs `git submodule update --remote shared` and commits the new pointer. A fresh clone needs `git submodule update --init` once.
 
