@@ -8,6 +8,8 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-05
+
 Found while moving Kindred Nights, the pilot, onto shared-tooling.
 
 ### Added
