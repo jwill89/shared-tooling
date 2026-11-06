@@ -12,9 +12,11 @@
     only, so an ignored deploy.config.ps1 is never read, and the shared-tooling
     submodule's own files are left to its CI.
 
-    PSScriptAnalyzer 1.25.0 sometimes crashes inside its own UseCorrectCasing rule (a
-    NullReferenceException) on a file that passes on the next run. A crash is tried
-    again, up to three times; a finding is never retried.
+    PSScriptAnalyzer 1.25.0, the newest release, races with itself on a large file when
+    it starts cold: it throws a NullReferenceException, or "more than one dynamic module
+    in each dynamic assembly", and then passes once warm. Locally a process crashed at
+    most twice before passing; GitHub's Linux runner crashed three times in a row. So a
+    crash is tried again, up to six times in all; a finding is never retried.
 
 .PARAMETER Path
     The repo to lint. Defaults to the current folder.
@@ -43,10 +45,10 @@ try {
                 Invoke-ScriptAnalyzer -Path $file -Settings $settings -ErrorAction Stop
                 break
             } catch {
-                if ($try -ge 3) {
+                if ($try -ge 6) {
                     throw
                 }
-                Write-Warning "PSScriptAnalyzer crashed on ${file}: $($_.Exception.Message). Trying again."
+                Write-Warning "PSScriptAnalyzer crashed on ${file} (attempt $try of 6): $($_.Exception.Message) Trying again."
             }
         }
     }
