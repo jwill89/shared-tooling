@@ -12,6 +12,10 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 - `deploy/pwsh`'s README: connection sharing works against the droplet, tested by Kindred Nights' v0.29.4 deploy, the pilot; the reconnect paths are still tested only against a stand-in plink.
 
+### Fixed
+
+- `test/web/vitest.js` is marked as an ES module by a `package.json` of its own (`"type": "module"`, private, never installed). With no `package.json` above it, Node treated it as CommonJS, and every Vite build that imported it warned that Vite's native config loader, planned as the default in a future major version, would refuse it (the Simple Image Gallery's and Kindred Nights'). The import path is unchanged.
+
 ## [1.1.1] - 2026-11-05
 
 ### Fixed

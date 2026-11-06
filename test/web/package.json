@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "description": "Marks vitest.js as an ES module. Projects import it by path (../shared/test/web/vitest.js), never install it; without this, Node and Vite's native config loader read it as CommonJS.",
+  "type": "module"
+}
