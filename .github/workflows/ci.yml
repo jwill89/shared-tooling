@@ -43,6 +43,9 @@ jobs:
           version: v2.15.0
           install-mode: goinstall
           working-directory: lint/go
+      # The version go.yml defaults to, so a release that can't analyse current Go fails
+      # here before it reaches a project.
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
   workflows:
     runs-on: ubuntu-24.04

@@ -8,6 +8,10 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+### Fixed
+
+- `go.yml` runs govulncheck v1.9.0 by default instead of v1.1.4. The old release analyses code with `golang.org/x/tools` v0.29.0, which panicked (`unexpected expr: *ast.KeyValueExpr`) on Kindred Nights under Go 1.27, failing its first CI run on the shared workflows. shared-tooling's own CI now runs the same version on `lint/go`, so a release too old for current Go fails here first.
+
 ## [1.1.0] - 2026-11-05
 
 Found while moving Kindred Nights, the pilot, onto shared-tooling.

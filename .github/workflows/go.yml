@@ -26,10 +26,13 @@ on:
         description: The golangci-lint release, built from source with the module's toolchain.
         type: string
         default: v2.15.0
+      # Keep it recent: an old release analyses code with an old golang.org/x/tools, which
+      # crashes on newer Go (v1.1.4's x/tools v0.29.0 panicked on Kindred Nights under Go
+      # 1.27). shared-tooling's own CI runs this same version on lint/go.
       govulncheck-version:
         description: The govulncheck release.
         type: string
-        default: v1.1.4
+        default: v1.9.0
       race:
         description: Run the tests under the race detector.
         type: boolean
