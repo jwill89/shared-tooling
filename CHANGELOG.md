@@ -8,6 +8,8 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-06
+
 Everything a rollout brings, so a project takes it in one pass (decided 2026-11-06): the scheduled backup and end-to-end tests join the configs and the deploy.
 
 ### Added
