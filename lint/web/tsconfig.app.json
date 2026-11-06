@@ -8,6 +8,11 @@
     "noEmit": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    // An index into an array or a record may find nothing, and the type says so. Without
+    // it, the shared ESLint base's no-unnecessary-condition calls a guard for a missing
+    // row or key needless, and removing one would be a bug (Kindred Nights' pilot: 26 of
+    // its 30 findings were guards like that, all needed).
+    "noUncheckedIndexedAccess": true
   }
 }

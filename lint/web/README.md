@@ -39,6 +39,8 @@ The project holds shared-tooling as a submodule at `shared/`, so from a front en
    npm install -D ../shared/lint/web eslint prettier typescript stylelint
    ```
 
+   Once step 4 has removed the project's own copies of the plugins, run `npm dedupe`. A lockfile from before can keep an older copy nested under another package (Kindred Nights kept `eslint-plugin-vue` 10.11.1 under `@vue/eslint-config-typescript`), and ESLint warns that it is replacing one copy with the other.
+
 3. Point the configs at it:
 
    ```ts

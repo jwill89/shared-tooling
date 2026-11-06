@@ -8,6 +8,17 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+Found while moving Kindred Nights, the pilot, onto shared-tooling.
+
+### Added
+
+- `lint/web`'s `tsconfig.app.json` turns on `noUncheckedIndexedAccess`, so an index into an array or a record says it may find nothing. Without it, the shared ESLint base's `no-unnecessary-condition` calls the guards for a missing row or key needless, and removing them would be bugs: 26 of Kindred Nights' 30 findings were guards like that. Expect a few type errors where code assumed an index exists.
+
+### Fixed
+
+- `dotnet.yml` runs the tests from the test project's folder, so a `global.json` beside it is read, and passes `--project` only when that file picks Microsoft.Testing.Platform. Run from the repo root, `dotnet test --project` failed for a project on that platform (Kindred Nights' plugin tests).
+- `lint/web`'s README says to run `npm dedupe` once a project's own plugin copies are removed, since an older lockfile can keep a second copy nested.
+
 ## [1.0.1] - 2026-11-05
 
 ### Fixed

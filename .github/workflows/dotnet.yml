@@ -81,6 +81,22 @@ jobs:
         if: inputs.test-project != ''
         env:
           TEST_PROJECT: ${{ inputs.test-project }}
+        # From the test project's own folder, so a global.json beside it is read: one that
+        # picks Microsoft.Testing.Platform (Kindred Nights' plugins/global.json) makes
+        # `dotnet test` take --project; without one, the older runner takes a plain path.
         run: |
-          dotnet test --project "$TEST_PROJECT"
           dotnet format "$TEST_PROJECT" --verify-no-changes
+          cd "$(dirname "$TEST_PROJECT")"
+          name=$(basename "$TEST_PROJECT")
+          dir=$PWD
+          mtp=
+          while :; do
+            if grep -qs '"Microsoft.Testing.Platform"' "$dir/global.json"; then mtp=1; break; fi
+            if [ -f "$dir/global.json" ] || [ "$dir" = / ] || [ "$dir" = "$GITHUB_WORKSPACE" ]; then break; fi
+            dir=$(dirname "$dir")
+          done
+          if [ -n "$mtp" ]; then
+            dotnet test --project "$name"
+          else
+            dotnet test "$name"
+          fi
