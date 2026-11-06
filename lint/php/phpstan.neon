@@ -1,0 +1,15 @@
+# The shared PHPStan bar: level 8, full null-safety on top of the array value-type
+# rules, as Fantasy Dossier, the Gallery and TarotGen.io already hold it.
+# phpstan-strict-rules and phpstan-deprecation-rules (and Larastan or phpstan-phpunit
+# where a project has them) load through phpstan/extension-installer, so they need no
+# `includes:` here. Include this from the project's phpstan.neon and add its paths:
+#
+#   includes:
+#       - ../shared/lint/php/phpstan.neon
+#   parameters:
+#       paths:
+#           - src
+#
+# A project may raise the level (the résumé site runs 10); it doesn't lower it.
+parameters:
+    level: 8

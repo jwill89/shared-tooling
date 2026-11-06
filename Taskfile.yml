@@ -1,0 +1,45 @@
+# shared-tooling's own tasks, on the shared include it ships (as every repo uses it,
+# from ./shared/repo/Taskfile.yml). `task check` runs what CI runs.
+version: '3'
+
+includes:
+  shared: ./repo/Taskfile.yml
+
+tasks:
+  default:
+    silent: true
+    cmds:
+      - task --list
+
+  setup:
+    desc: Install the front-end packages' own dependencies, for their checks
+    cmds:
+      - cd lint/web && npm ci
+      - cd test/a11y && npm ci
+
+  lint:
+    desc: Scripts, Markdown, the Go sync tool and the repo files
+    cmds:
+      - task: shared:lint:scripts
+      - task: shared:lint:md
+      - task: lint:go
+      - task: shared:repo:check
+
+  lint:go:
+    desc: The golangci sync tool, linted by the template it ships
+    dir: lint/go
+    cmds:
+      - go run . -dir . -check
+      - go vet ./...
+      - golangci-lint run ./...
+
+  release:
+    desc: Make a release (-- 1.1.0) - the version everywhere, the CHANGELOG entry, a commit and a tag
+    cmds:
+      - pwsh -NoProfile -File scripts/New-Release.ps1 {{.CLI_ARGS}}
+
+  check:
+    desc: Everything CI runs
+    cmds:
+      - task: lint
+      - cd lint/web && node --input-type=module -e "for (const m of ['./eslint.js', './eslint-react.js', './prettier.js', './stylelint.js', './stylelint-tailwind.js']) await import(m)"

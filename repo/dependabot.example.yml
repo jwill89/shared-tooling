@@ -1,0 +1,77 @@
+# The Dependabot shape every repo follows, from Kindred Nights' and TarotGen.io's:
+# weekly on Monday, one pull request per ecosystem for minors and patches together, and
+# majors one by one (they can need code changes). Copy the blocks a repo needs into its
+# .github/dependabot.yml and set each `directory`; this file isn't synced, since every
+# repo's folders differ.
+#
+# Dependabot can't read Actions secrets. A repo on the Font Awesome Pro registry adds
+# FONTAWESOME_TOKEN again as a Dependabot secret (Settings, Secrets and variables,
+# Dependabot). shared-tooling is public, so no token is needed for the submodule.
+version: 2
+
+registries:
+  fontawesome:
+    type: npm-registry
+    url: https://npm.fontawesome.com
+    token: ${{ secrets.FONTAWESOME_TOKEN }}
+
+updates:
+  - package-ecosystem: npm
+    directory: /web
+    registries:
+      - fontawesome
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      npm-minor:
+        patterns: ['*']
+        update-types: [minor, patch]
+    ignore:
+      # Held on purpose: TypeScript stays on 6.x until vue-tsc supports TypeScript 7.1.
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      go:
+        patterns: ['*']
+
+  - package-ecosystem: composer
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      composer-minor:
+        patterns: ['*']
+        update-types: [minor, patch]
+
+  - package-ecosystem: nuget
+    directory: /plugins
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      dotnet:
+        patterns: ['*']
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      pip-minor:
+        patterns: ['*']
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday

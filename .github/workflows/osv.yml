@@ -1,0 +1,35 @@
+name: Vulnerabilities
+
+# One OSV-Scanner pass over every lockfile the repo has (npm, Go, Composer, pip,
+# NuGet), through Google's own reusable workflow. Go modules keep govulncheck too
+# (go.yml), since it checks whether the vulnerable code is actually called.
+#
+#   osv:
+#     uses: jwill89/shared-tooling/.github/workflows/osv.yml@v1.0.0
+#     permissions:
+#       contents: read
+#       actions: read
+#       security-events: write
+
+on:
+  workflow_call:
+    inputs:
+      upload-sarif:
+        description: Upload the findings to Security > Code scanning (needs code scanning on the repo).
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  osv:
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.7.0
+    with:
+      upload-sarif: ${{ inputs.upload-sarif }}
+      # The shared-tooling submodule's own lockfiles are its CI's to scan.
+      checkout-submodules: false

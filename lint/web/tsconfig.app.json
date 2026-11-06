@@ -1,0 +1,13 @@
+{
+  // The app's sources: Vue's own DOM base, plus the checks five of the front ends
+  // already turn on. The project adds its `include`, `types` and `paths`:
+  //
+  //   { "extends": "@jwill89/lint-web/tsconfig.app.json", "include": ["src"] }
+  "extends": "@vue/tsconfig/tsconfig.dom.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true
+  }
+}

@@ -1,0 +1,90 @@
+name: PHP
+
+# The PHP job: install, then the composer commands the caller lists, in order (audit,
+# style, Rector, PHPStan, tests). Seeded from TarotGen.io's, the Gallery's and Fantasy
+# Dossier's PHP jobs.
+#
+#   php:
+#     uses: jwill89/shared-tooling/.github/workflows/php.yml@v1.0.0
+#     with:
+#       dir: backend
+#       extensions: pdo, pdo_sqlite, curl, fileinfo, gd, mbstring
+#       before: cp .env.example .env && php artisan key:generate
+#       commands: audit lint rector:check analyse test
+
+on:
+  workflow_call:
+    inputs:
+      dir:
+        description: The folder holding composer.json.
+        type: string
+        default: .
+      php-version:
+        description: The PHP version, as the server runs it.
+        type: string
+        default: '8.5'
+      extensions:
+        description: The ext-* composer.json requires.
+        type: string
+        default: ''
+      coverage:
+        description: The coverage driver (none, or pcov for a floor check).
+        type: string
+        default: none
+      before:
+        description: Shell to run after the install and before the commands (an .env for Laravel, say).
+        type: string
+        default: ''
+      commands:
+        description: composer commands to run, in order, separated by spaces or newlines.
+        type: string
+        default: audit validate lint rector:check stan test
+
+permissions:
+  contents: read
+
+jobs:
+  php:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ${{ inputs.dir }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php-version }}
+          extensions: ${{ inputs.extensions }}
+          coverage: ${{ inputs.coverage }}
+          tools: composer
+
+      - name: Restore Composer packages
+        uses: actions/cache@v6
+        with:
+          path: ${{ inputs.dir }}/vendor
+          key: composer-${{ runner.os }}-${{ inputs.php-version }}-${{ hashFiles(format('{0}/composer.lock', inputs.dir)) }}
+          restore-keys: composer-${{ runner.os }}-${{ inputs.php-version }}-
+
+      - name: Install
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      - name: Prepare
+        if: inputs.before != ''
+        env:
+          BEFORE: ${{ inputs.before }}
+        run: bash -c "$BEFORE"
+
+      # Dev packages included in the audit: they run here and on developer machines too.
+      - name: Commands
+        env:
+          COMMANDS: ${{ inputs.commands }}
+        run: |
+          for command in $COMMANDS; do
+            echo "::group::composer $command"
+            composer "$command"
+            echo "::endgroup::"
+          done

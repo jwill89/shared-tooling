@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    The shared PHPUnit base, from TarotGen.io's: a warning, notice or deprecation fails
+    the run, PHPUnit's own included. PHPUnit has no way to extend another config, so copy
+    this to the project's phpunit.xml and set its suites and <source>. Pest reads the same
+    file.
+
+    Coverage: have PHPUnit write a clover report to .phpunit.cache/clover.xml, then run
+    shared/test/php/coverage-check.php on it for the floor. (An XML comment can't hold
+    the option's double dash; coverage-check.php shows the full command.)
+-->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         colors="true"
+         cacheDirectory=".phpunit.cache"
+         failOnWarning="true"
+         failOnDeprecation="true"
+         failOnNotice="true"
+         failOnPhpunitDeprecation="true"
+         failOnPhpunitNotice="true"
+         failOnPhpunitWarning="true"
+         displayDetailsOnPhpunitDeprecations="true">
+    <testsuites>
+        <testsuite name="unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <!-- The whole app, request in, response out, on a real (in-memory) database. -->
+        <testsuite name="http">
+            <directory>tests/Http</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory>src</directory>
+        </include>
+    </source>
+</phpunit>

@@ -1,0 +1,63 @@
+name: Docs and repo files
+
+# Every repo calls this:
+#   - its Markdown, with the shared markdownlint config (through the repo's
+#     .markdownlint-cli2.jsonc);
+#   - its .editorconfig and .gitattributes, still matching shared-tooling/repo above
+#     their project marker;
+#   - its shared workflow refs, naming the release its submodule holds.
+# Go-only repos need no Node locally for the Markdown: the VS Code extension lints in
+# the editor, and this runs it here.
+#
+#   docs:
+#     uses: jwill89/shared-tooling/.github/workflows/docs.yml@v1.0.0
+
+on:
+  workflow_call:
+    inputs:
+      markdownlint-cli2-version:
+        description: The markdownlint-cli2 release.
+        type: string
+        default: 0.24.0
+      repo-files:
+        description: Check .editorconfig and .gitattributes against shared-tooling/repo.
+        type: boolean
+        default: true
+      shared-path:
+        description: Where shared-tooling is checked out, relative to the repo.
+        type: string
+        default: shared
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+
+      - name: Markdown
+        env:
+          VERSION: ${{ inputs.markdownlint-cli2-version }}
+        run: npx --yes "markdownlint-cli2@$VERSION"
+
+      - name: Repo files are current
+        if: inputs.repo-files
+        shell: pwsh
+        env:
+          SHARED: ${{ inputs.shared-path }}
+        run: '& (Join-Path $env:SHARED "repo/Sync-RepoFiles.ps1") -Path . -Check'
+
+      - name: Shared workflow refs match the submodule
+        shell: pwsh
+        env:
+          SHARED: ${{ inputs.shared-path }}
+        run: '& (Join-Path $env:SHARED "repo/Test-SharedVersion.ps1") -Shared $env:SHARED'

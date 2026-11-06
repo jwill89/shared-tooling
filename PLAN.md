@@ -28,6 +28,27 @@ The standardization work starts from these, so it doesn't reopen them. All were 
 - No hard wrap in Markdown (MD013 off). Markdown sets no line length, and the Gallery's 100 columns came from no standard, so its override goes.
 - Devkit Box is retired, since nothing used it. Its local folder is removed (every file matched GitHub); the `jwill89/devbox` repo still needs archiving.
 
+Decided later the same day, while seeding shared-tooling:
+
+- The React lint uses `eslint-plugin-jsx-a11y-x`, the eslint-community fork of `eslint-plugin-jsx-a11y`, which supports ESLint only up to 9.
+- Every deploy ships one archive: tar on the PC, one upload, untar on the droplet, checked by SHA-256 and file count before anything live changes. Files go up one at a time only where a project can't do otherwise.
+- That keeps a deploy to two SSH connections, under the droplet's `ufw limit ssh` (6 connections in 30 seconds), which is what the scripts' 35-second retry waits out. WinSCP never trips it because it keeps one connection open. If deploys still trip it, the fix belongs on the droplet.
+- A service binary uploads before the service stops; then, in one connection, the service stops, the binary is backed up to `.old`, the database is snapshotted, and the new binary is installed, started, checked and rolled back on failure.
+- A dropped connection is retried once, with a marker in `~/.shared-deploy` on the droplet so a re-run swap knows it already happened.
+- A failed start restores the database snapshot only where a project opts in: Kindred Nights and Home Library do; the Gallery doesn't, since uploads made during the deploy would be lost.
+- A failed smoke check rolls back on its own.
+- What Do I Know, Venue Tools and the résumé site move from writing onto live files to atomic swaps; the résumé site's files move into a folder of their own.
+- Every deploy config names its SSH user; nothing defaults to root.
+- Database snapshots use `sqlite3 .backup` and keep 3; the Gallery keeps `VACUUM INTO` and 5.
+- A plugin's built version must equal its manifest's and be higher than the published one, and `bin/` and `obj/` are deleted before the release build.
+- Pulling the live database for development uses an online `.backup`, keeps 3 local copies, removes the droplet's copy, and skips if the local file is in use.
+- Home Library adopts the shared deploy module fully, so the module handles several units and services and an Apache vhost.
+- Every project gets a Taskfile, and every project that runs on the droplet gets a deploy, run as `task deploy`.
+- Modem Monitor gets no deploy: it is a desktop app for Windows and Linux, so its counterpart is a build that makes each platform's program and installer (`task package:windows`, `task package:linux`), and CI drafts the release from a version tag.
+- A deploy keeps one SSH connection open for the whole run, as WinSCP does: PuTTY's connection sharing (`plink -share`), with uploads streamed through it, and a reconnect if it drops. ufw then sees one connection per deploy.
+- shared-tooling carries one version and releases as exact tags (`v1.0.0`), with no moving `v1`. A project's submodule and its workflow refs name the same tag, `task shared:update` moves them together, and CI fails if they differ. shared-tooling stays public, so CI, Dependabot and the submodule need no token.
+- MirageGO stays outside shared-tooling. It is unlike the other projects in what it does and will need bespoke tooling, so it takes no submodule and no shared configs, and nothing is added to shared-tooling for it.
+
 No questions are open.
 
 ## Project by project
@@ -41,7 +62,7 @@ Every project stays on its current stack except TarotGen.io's backend; the Galle
 | Kindred Nights, Senpan, Home Library | Go + Vue / Vite / TS + SQLite | Keep |
 | Marxbot, Nophica | Go Discord bots | Keep |
 | Modem Monitor | Go + Fyne + AWS | Keep |
-| MirageGO | Go + Vue + Phaser 4 | Keep |
+| MirageGO | Go + Vue + Phaser 4 | Keep; outside shared-tooling (bespoke) |
 | Family Card Game | Go + React 19 / Mantine | Keep it as React |
 | Conlang Translator | Flask + spaCy / NLTK | Keep Python |
 | Fantasy Dossier, Fingerprint Generator | Vue SPA (Dossier has a small PHP endpoint) | Keep |
@@ -151,8 +172,8 @@ The copies have already drifted:
 
 | Where | Purpose | Holds | Used by |
 | --- | --- | --- | --- |
-| shared-tooling `lint/web` | Lint JS, TS, Vue, CSS | ESLint with the accessibility rules, Prettier, Stylelint, base tsconfig, knip, the front-end package list | 9 Vue front ends |
-| shared-tooling `lint/go` | Lint Go | A `.golangci.yml` template, govulncheck, the Go package list | 8 Go modules |
+| shared-tooling `lint/web` | Lint JS, TS, Vue, CSS | ESLint with the accessibility rules, Prettier, Stylelint, base tsconfig, knip, the front-end package list | 8 Vue front ends (not MirageGO) |
+| shared-tooling `lint/go` | Lint Go | A `.golangci.yml` template, govulncheck, the Go package list | 7 Go modules (not MirageGO) |
 | shared-tooling `lint/php` | Lint PHP | phpstan base, php-cs-fixer ruleset, Rector set | Gallery, Fantasy Dossier, résumé site, TarotGen.io until it moves |
 | shared-tooling `lint/dotnet` | Lint C# | Analyzer props and a shared `.globalconfig` | 4 Dalamud plugins |
 | shared-tooling `lint/pwsh` | Lint PowerShell | PSScriptAnalyzer settings (9 copies in 6 versions today) | Every repo with scripts |
@@ -199,14 +220,14 @@ The one cost of a single tooling repo: a change for one stack moves the submodul
 ```yaml
 jobs:
   go:
-    uses: jwill89/shared-tooling/.github/workflows/go.yml@v1
+    uses: jwill89/shared-tooling/.github/workflows/go.yml@v1.0.0
   web:
-    uses: jwill89/shared-tooling/.github/workflows/web.yml@v1
+    uses: jwill89/shared-tooling/.github/workflows/web.yml@v1.0.0
     with:
       dir: web
 ```
 
-Call them by name rather than having CI detect what's there. Kindred already found a Go file shipped inside an npm package, which is exactly what fools detection. Pin a version (`@v1`) so one change can't break eleven repos at once.
+Call them by name rather than having CI detect what's there. Kindred already found a Go file shipped inside an npm package, which is exactly what fools detection. Pin the exact release (`@v1.0.0`), the same one the submodule holds, so one change can't break eleven repos at once (decided 2026-11-05; see "How the pieces connect").
 
 ## Testing standards
 
@@ -225,7 +246,7 @@ Conlang Translator's pytest suite stays as it is; one Python project doesn't nee
 
 **Settled: jsdom and Playwright.** Both lead their fields: about 152 million weekly npm downloads for jsdom against 33 million for happy-dom, and 108 million for `@playwright/test` against 15 million for Puppeteer and 8 million for Cypress. jsdom runs slower, but it behaves more like a real browser: TarotGen.io already runs two specs on jsdom because DOMPurify strips scripts there and not under happy-dom.
 
-No test relies on a happy-dom-only API, so the switch is one config line per project plus a test run. The Gallery, Home Library, TarotGen.io and Kindred's markdown test move over; Senpan already uses jsdom. Tests that touch no DOM, like MirageGO's and Fantasy Dossier's, stay on Vitest's faster `node` environment.
+No test relies on a happy-dom-only API, so the switch is one config line per project plus a test run. The Gallery, Home Library, TarotGen.io and Kindred's markdown test move over; Senpan already uses jsdom. Tests that touch no DOM, like Fantasy Dossier's, stay on Vitest's faster `node` environment.
 
 **The testing standards, in `standards/testing.md`,** set what every project tests and how:
 
@@ -288,7 +309,7 @@ You already get Rust where it pays off most, in your tools: Vite 8's bundler (Ro
 
 Most gaps are missing CI, Dependabot and post-deploy checks. The riskiest are three SQLite apps with no scheduled backup: Senpan and the Gallery snapshot their database only when they deploy, and Marxbot not at all. No secrets are committed: the two tracked `.npmrc` files hold only the registry address, and every deploy config and `.env` file is ignored.
 
-Every repo gets a CLAUDE.md that points at the standards during rollout, so that's left out of the table.
+Every repo gets a CLAUDE.md that points at the standards during rollout, so that's left out of the table. So does a Taskfile with `task deploy`: twelve projects have one that isn't committed yet, and MathDad Landing Page, Zealot Gaming, shared-components-vue and shared-tooling have none.
 
 | Project | Missing | Note |
 | --- | --- | --- |
@@ -301,8 +322,8 @@ Every repo gets a CLAUDE.md that points at the standards during rollout, so that
 | Kindred Nights | End-to-end tests | The pilot |
 | Marxbot Discord Bot | Changelog, scheduled database backup |  |
 | MathDad Landing Page | CI, deploy script | Static page |
-| MirageGO | Changelog | Not deployed yet |
-| Modem Monitor | Changelog | Desktop app; nothing deploys to the droplet |
+| MirageGO | Not tracked here | Outside shared-tooling: its tooling stays bespoke |
+| Modem Monitor | Changelog | Desktop app: no deploy; it builds installers per platform instead |
 | Nophica Discord Bot | CI, Dependabot |  |
 | Senpan App Suite | Dependabot, HTTP smoke check, scheduled database backup, end-to-end tests | Its deploy checks only that the service runs |
 | Simple Image Gallery | Dependabot, scheduled database backup, end-to-end tests |  |
@@ -340,7 +361,7 @@ Do what's urgent first, settle the decisions, build the tooling, and only then m
    4. Home Library's event stream, with its 1.0 work. It's small and touches nothing else.
    5. Vapor, once Vue 3.6 is stable.
 
-**How the pieces connect.** You edit shared-tooling in its own folder, push, and tag a version. Each project holds it as a submodule at `shared/`, pinned to one commit. To take an update, a project runs `git submodule update --remote shared` and commits the new pointer. A fresh clone needs `git submodule update --init` once.
+**How the pieces connect.** You edit shared-tooling in its own folder, note the change in its CHANGELOG, and run `task release -- 1.2.0`, which sets one version across the repo, commits and tags `v1.2.0`; then push. Each project holds it as a submodule at `shared/`, at a release's tag, and calls the shared workflows at that same tag. To take a release, a project runs `task shared:update -- v1.2.0`, which moves both together and re-runs what's built from them, and commits the result. CI fails if the two ever name different releases. A fresh clone needs `git submodule update --init` once.
 
 **Do the work in Claude Code on your PC, opened at `C:\Web Projects`.** From there it sees every repo and uses your own git sign-in, GitHub CLI and toolchains. Point Claude Code at this file and take one step per session, so each lands as reviewable commits.
 
@@ -351,6 +372,7 @@ These came up and aren't worth doing:
 - **Apache → Caddy:** with Cloudflare in front, Caddy's automatic HTTPS adds little, and memory use is about the same. The Family Card Game and MirageGO docs describe Caddy, but both actually run on Apache, so just fix the docs.
 - **Laravel Octane or FrankenPHP:** the Gallery's own measurements show Laravel adds only 3–5 ms, which disappears in the trip through Cloudflare.
 - **Conlang Translator to Go:** Go has nothing like spaCy.
+- **Shared desktop packaging (for now):** Modem Monitor is the only desktop app, so its installers stay its own (decided 2026-11-05). If a second Go and Fyne desktop app comes along, its `packaging/` folder, Taskfile and CI are the seed: the Debian 12 builder, the glibc check and the CI shape carry over, while the Inno Setup script, the nfpm config and the desktop entry become templates.
 
 ## Sources
 

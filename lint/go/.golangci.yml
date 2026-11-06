@@ -1,0 +1,74 @@
+# golangci-lint for every Go module: the standard set (errcheck, govet, ineffassign,
+# staticcheck, unused) and the linters below. Each one off in a place is off below with
+# its reason, or at the line with a nolint that says why.
+#
+# This is the template in shared-tooling/lint/go. A project's .golangci.yml is generated
+# from it by `go run -C shared/lint/go .`, which fills in the module name and merges
+# the project's own .golangci.local.yml on top. Edit that file, not the generated one.
+version: "2"
+
+linters:
+  enable:
+    - bodyclose # a response body left open leaks the connection
+    - copyloopvar
+    - dupword
+    - durationcheck
+    - errname
+    - errorlint # errors compared and wrapped so errors.Is sees through them
+    - exhaustive # a switch on a fixed list names every value or says default
+    - gocritic
+    - gosec
+    - intrange
+    - makezero
+    - misspell
+    - nakedret
+    - nilerr
+    - noctx # every request and query can be cancelled
+    - predeclared
+    - revive
+    - rowserrcheck
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - wastedassign
+    # Not contextcheck: work that outlives a request (a Discord post, a lookup) is handed
+    # a fresh context on purpose, and every one of those would need excusing.
+    # Not sqlclosecheck: rows are closed by hand where the close's error is kept.
+  settings:
+    gosec:
+      excludes:
+        - G104 # unchecked errors are errcheck's, with its own exclusions above
+        - G118 # a goroutine given a fresh context does work that outlives its request
+    revive:
+      # Its own default rules, less the two below.
+      enable-default-rules: true
+      rules:
+        # Exported names get a doc comment only when the name does not already say it.
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+    errcheck:
+      # Writing a response fails only when the client has gone: there is nobody left to tell,
+      # and a log line for every dropped phone connection would bury the ones that matter.
+      # Every other error is handled, or discarded at its line with the reason beside it.
+      exclude-functions:
+        - (net/http.ResponseWriter).Write
+        - github.com/danielgtaylor/huma/v2.WriteErr
+  exclusions:
+    rules:
+      # Tests read every body through a helper and talk to their own servers, and a test's
+      # helper keeps a parameter its callers happen to agree on, for reading at the call.
+      - path: _test\.go
+        linters: [bodyclose, noctx, gosec, unparam]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      # The module's own packages are a group of their own, after everything else. A name
+      # with no dot would otherwise be read as the standard library.
+      local-prefixes:
+        - github.com/jwill89/shared-tooling/lint/go

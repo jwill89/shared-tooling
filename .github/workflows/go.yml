@@ -1,0 +1,139 @@
+name: Go
+
+# The Go job every repo with a Go module calls: the shared golangci config is current,
+# vet, golangci-lint, govulncheck, the tests under the race detector in shuffled order
+# with a coverage floor, and an optional build. Seeded from Kindred Nights', Home
+# Library's and Senpan's Go steps.
+#
+#   go:
+#     needs: web   # when the binary embeds the front end's build
+#     uses: jwill89/shared-tooling/.github/workflows/go.yml@v1.0.0
+#     with:
+#       download-artifact: web-dist
+#       download-path: web/dist
+#       coverage-floor: 62.5
+#       coverage-exclude: /internal/db/
+#       build: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o dist/kindred-linux-amd64 ./cmd/kindred
+
+on:
+  workflow_call:
+    inputs:
+      dir:
+        description: The Go module's folder.
+        type: string
+        default: .
+      golangci-lint-version:
+        description: The golangci-lint release, built from source with the module's toolchain.
+        type: string
+        default: v2.15.0
+      govulncheck-version:
+        description: The govulncheck release.
+        type: string
+        default: v1.1.4
+      race:
+        description: Run the tests under the race detector.
+        type: boolean
+        default: true
+      coverage-floor:
+        description: The lowest statement coverage allowed, in percent. 0 reports without failing.
+        type: number
+        default: 0
+      coverage-exclude:
+        description: Regular expressions, one per line; matching files are left out of the coverage count.
+        type: string
+        default: ''
+      apt-packages:
+        description: Ubuntu packages the build needs (Fyne's window libraries, say).
+        type: string
+        default: ''
+      download-artifact:
+        description: An artifact to download first (the front end's build, for a binary that embeds it).
+        type: string
+        default: ''
+      download-path:
+        description: Where the artifact goes, relative to the repo.
+        type: string
+        default: web/dist
+      build:
+        description: A build command to run last, in the module's folder.
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ${{ inputs.dir }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ inputs.dir }}/go.mod
+          cache-dependency-path: ${{ inputs.dir }}/go.sum
+
+      - name: Download ${{ inputs.download-artifact }}
+        if: inputs.download-artifact != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.download-artifact }}
+          path: ${{ inputs.download-path }}
+
+      - name: Ubuntu packages
+        if: inputs.apt-packages != ''
+        env:
+          PACKAGES: ${{ inputs.apt-packages }}
+        run: |
+          sudo apt-get update
+          # shellcheck disable=SC2086 # the list splits into packages on purpose
+          sudo apt-get install -y --no-install-recommends $PACKAGES
+
+      - name: golangci config is current
+        working-directory: shared/lint/go
+        env:
+          MODULE_DIR: ${{ inputs.dir }}
+        run: go run . -dir "$MODULE_DIR" -check
+
+      - run: go vet ./...
+
+      # Built from source with the module's toolchain: a prebuilt linter binary cannot
+      # read export data from a newer Go than it was compiled with.
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: ${{ inputs.golangci-lint-version }}
+          install-mode: goinstall
+          working-directory: ${{ inputs.dir }}
+
+      - name: govulncheck
+        env:
+          VERSION: ${{ inputs.govulncheck-version }}
+        run: go run "golang.org/x/vuln/cmd/govulncheck@$VERSION" ./...
+
+      - name: Tests
+        env:
+          RACE: ${{ inputs.race && '-race' || '' }}
+        run: |
+          # shellcheck disable=SC2086 # $RACE is a flag or nothing
+          go test $RACE -shuffle=on -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Coverage floor
+        shell: pwsh
+        env:
+          FLOOR: ${{ inputs.coverage-floor }}
+          EXCLUDE: ${{ inputs.coverage-exclude }}
+        run: |
+          $exclude = @($env:EXCLUDE -split "`n" | ForEach-Object Trim | Where-Object { $_ })
+          & "$env:GITHUB_WORKSPACE/shared/test/go/Test-CoverageFloor.ps1" -ProfilePath coverage.out -Floor ([double] $env:FLOOR) -Exclude $exclude
+
+      - name: Build
+        if: inputs.build != ''
+        env:
+          BUILD: ${{ inputs.build }}
+        run: bash -c "$BUILD"

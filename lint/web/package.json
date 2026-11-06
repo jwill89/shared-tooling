@@ -1,0 +1,57 @@
+{
+  "name": "@jwill89/lint-web",
+  "version": "1.0.0",
+  "description": "Shared ESLint, Prettier, Stylelint and tsconfig for jwill89 front ends (Vue 3 + TypeScript, plus a React variant).",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    ".": "./eslint.js",
+    "./react": "./eslint-react.js",
+    "./prettier": "./prettier.js",
+    "./stylelint": "./stylelint.js",
+    "./stylelint/tailwind": "./stylelint-tailwind.js",
+    "./tsconfig.app.json": "./tsconfig.app.json",
+    "./tsconfig.node.json": "./tsconfig.node.json"
+  },
+  "files": [
+    "eslint.js",
+    "eslint-react.js",
+    "prettier.js",
+    "stylelint.js",
+    "stylelint-tailwind.js",
+    "tsconfig.app.json",
+    "tsconfig.node.json"
+  ],
+  "dependencies": {
+    "@eslint/js": "^10.0.1",
+    "@vue/eslint-config-prettier": "^10.2.0",
+    "@vue/eslint-config-typescript": "^14.9.0",
+    "@vue/tsconfig": "^0.9.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-jsx-a11y-x": "^0.2.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-vue": "^10.12.0",
+    "eslint-plugin-vuejs-accessibility": "^2.6.3",
+    "globals": "^17.14.0",
+    "postcss-html": "^2.0.0",
+    "stylelint-config-recommended": "^18.0.0",
+    "stylelint-config-recommended-vue": "^2.0.0",
+    "stylelint-config-standard": "^40.0.0",
+    "typescript-eslint": "^8.72.1"
+  },
+  "peerDependencies": {
+    "eslint": "^10.13.0",
+    "prettier": "^3.9.10",
+    "stylelint": "^17.16.0",
+    "typescript": "~6.0.3"
+  },
+  "peerDependenciesMeta": {
+    "stylelint": {
+      "optional": true
+    }
+  }
+}

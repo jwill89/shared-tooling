@@ -1,0 +1,86 @@
+name: .NET
+
+# The C# job for the Dalamud plugins: Dalamud's published build files, a Release build,
+# `dotnet format` with nothing to change, and the tests where there are any. Seeded from
+# Kindred Nights' and Senpan's plugin jobs.
+#
+#   plugin:
+#     uses: jwill89/shared-tooling/.github/workflows/dotnet.yml@v1.0.0
+#     with:
+#       projects: plugins/KindredCompanion plugins/KindredCompanion.Preview
+#       test-project: plugins/KindredCompanion.Tests
+
+on:
+  workflow_call:
+    inputs:
+      projects:
+        description: Projects (folders or .csproj files) to build and format-check, separated by spaces.
+        type: string
+        required: true
+      test-project:
+        description: A test project to run, if the plugin has one.
+        type: string
+        default: ''
+      dotnet-version:
+        description: The .NET SDK.
+        type: string
+        default: 10.0.x
+      dalamud:
+        description: Fetch the Dalamud files a plugin compiles against, which only XIVLauncher installs.
+        type: boolean
+        default: true
+      warnings-as-errors:
+        description: Fail the build on any warning, the analyzers' and the code style's included.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  dotnet:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      # Tracking `latest` means an upstream Dalamud API bump can turn this red, which is
+      # the cue to raise the plugin's DalamudApiLevel.
+      - name: Dalamud
+        if: inputs.dalamud
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/dalamud.zip" https://goatcorp.github.io/dalamud-distrib/latest.zip
+          unzip -q "$RUNNER_TEMP/dalamud.zip" -d "$RUNNER_TEMP/dalamud"
+          echo "DALAMUD_HOME=$RUNNER_TEMP/dalamud" >> "$GITHUB_ENV"
+
+      - name: Build
+        env:
+          PROJECTS: ${{ inputs.projects }}
+          STRICT: ${{ inputs.warnings-as-errors && '-p:TreatWarningsAsErrors=true' || '' }}
+        run: |
+          for project in $PROJECTS; do
+            # shellcheck disable=SC2086 # $STRICT is a property or nothing
+            dotnet build "$project" -c Release $STRICT
+          done
+
+      - name: Style
+        env:
+          PROJECTS: ${{ inputs.projects }}
+        run: |
+          for project in $PROJECTS; do
+            dotnet format "$project" --verify-no-changes
+          done
+
+      - name: Tests
+        if: inputs.test-project != ''
+        env:
+          TEST_PROJECT: ${{ inputs.test-project }}
+        run: |
+          dotnet test --project "$TEST_PROJECT"
+          dotnet format "$TEST_PROJECT" --verify-no-changes

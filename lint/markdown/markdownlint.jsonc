@@ -1,0 +1,23 @@
+// The shared markdownlint config: markdownlint's defaults but for these, set to how
+// the docs are written. A repo's .markdownlint-cli2.jsonc extends it and adds its own
+// globs and ignores:
+//
+//   { "config": { "extends": "shared/lint/markdown/markdownlint.jsonc" },
+//     "globs": ["**/*.md"], "ignores": ["**/node_modules/**", "shared/**"] }
+//
+// The VS Code markdownlint extension reads the same files, so the editor agrees with CI.
+{
+  "default": true,
+  // No hard wrap: Markdown sets no line length, and a paragraph is one line (decided
+  // 2026-11-05).
+  "MD013": false,
+  // Table pipes needn't line up: aligning them rewrites every row when one cell grows.
+  "MD060": false,
+  // Keep a Changelog repeats "### Added", "### Fixed" under every release; a heading may
+  // repeat, just not beside the same one under one parent.
+  "MD024": { "siblings_only": true },
+  // The few HTML elements Markdown has no syntax for. Anything else written in angle
+  // brackets is reported, which also catches a <placeholder> that would render as
+  // nothing.
+  "MD033": { "allowed_elements": ["br", "details", "summary", "kbd"] }
+}

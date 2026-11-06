@@ -1,0 +1,60 @@
+# The tasks every repo shares, included from its own Taskfile.yml:
+#
+#   includes:
+#     shared: ./shared/repo/Taskfile.yml
+#
+# They run in the including repo's folder, named shared:<task> (`task shared:lint:scripts`),
+# and its own tasks call them (`- task: shared:lint:scripts`). The project keeps its own
+# `deploy`, `lint`, `test`, `check` and the rest; `shared:deploy` is the plain form most
+# of them wrap. The names follow what the projects' Taskfiles already use.
+version: '3'
+
+vars:
+  # This file's folder, so the paths hold wherever the submodule sits.
+  SHARED: '{{.TASKFILE_DIR}}/..'
+
+tasks:
+  lint:scripts:
+    desc: PSScriptAnalyzer, with the shared settings, on every tracked PowerShell file
+    cmds:
+      - pwsh -NoProfile -File "{{.SHARED}}/lint/pwsh/Invoke-ScriptLint.ps1"
+
+  lint:md:
+    desc: markdownlint on the repo's Markdown, through its .markdownlint-cli2.jsonc
+    cmds:
+      - npx --yes markdownlint-cli2@0.24.0
+
+  repo:sync:
+    desc: Copy the shared .editorconfig and .gitattributes in, keeping the repo's own lines
+    cmds:
+      - pwsh -NoProfile -File "{{.SHARED}}/repo/Sync-RepoFiles.ps1" -Path .
+
+  repo:check:
+    desc: Fail if .editorconfig or .gitattributes differ from the shared ones
+    cmds:
+      - pwsh -NoProfile -File "{{.SHARED}}/repo/Sync-RepoFiles.ps1" -Path . -Check
+
+  golangci:sync:
+    desc: Write the Go module's .golangci.yml from the shared template (-- -dir backend for a module in a folder)
+    cmds:
+      - go run -C "{{.SHARED}}/lint/go" . {{.CLI_ARGS}}
+
+  golangci:check:
+    desc: Fail if the Go module's .golangci.yml differs from what the template makes
+    cmds:
+      - go run -C "{{.SHARED}}/lint/go" . -check {{.CLI_ARGS}}
+
+  update:
+    desc: Move to a shared-tooling release (-- v1.1.0) - the submodule, the workflow refs and what's built from them
+    cmds:
+      - pwsh -NoProfile -File "{{.SHARED}}/repo/Update-SharedTooling.ps1" {{.CLI_ARGS}}
+
+  version:check:
+    desc: Fail if the shared workflow refs don't name the release the submodule holds
+    cmds:
+      - pwsh -NoProfile -File "{{.SHARED}}/repo/Test-SharedVersion.ps1"
+
+  deploy:
+    desc: Run scripts/deploy.ps1 (pass its flags after --, e.g. -- -SkipBuild)
+    cmds:
+      - pwsh -NoProfile -File scripts/deploy.ps1 {{.CLI_ARGS}}

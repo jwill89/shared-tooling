@@ -1,0 +1,6 @@
+// markdownlint for this repo's own docs, on the shared config it ships.
+{
+  "config": { "extends": "lint/markdown/markdownlint.jsonc" },
+  "globs": ["**/*.md"],
+  "ignores": ["**/node_modules/**"]
+}

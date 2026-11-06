@@ -1,0 +1,41 @@
+# Editor defaults for every repo: UTF-8, LF, a final newline, no trailing whitespace,
+# two-space indents, which is what Prettier and gofmt already write, so editors agree
+# with the formatters before either runs. Line endings are also held by .gitattributes.
+#
+# Copied in from shared-tooling/repo by Sync-RepoFiles.ps1. Edit only below the
+# project marker; everything above it is rewritten on the next sync.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.go]
+indent_style = tab
+
+# PSScriptAnalyzer checks the scripts at four spaces.
+[*.{ps1,psd1,psm1}]
+indent_size = 4
+
+# PHP is PER Coding Style (php-cs-fixer); composer.json is 4-space JSON, as Composer
+# writes it; PHPStan's and PHPUnit's configs are written at four.
+[{*.php,composer.json,*.neon,phpunit.xml,phpunit.xml.dist}]
+indent_size = 4
+
+# C#, as `dotnet format` writes it. The code-style rules are in
+# shared/lint/dotnet/.globalconfig.
+[*.cs]
+indent_size = 4
+
+# Visual Studio writes solution files with tabs.
+[*.sln]
+indent_style = tab
+
+[*.md]
+trim_trailing_whitespace = false
+
+# ---- project: lines below this one are this repo's own ----

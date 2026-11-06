@@ -1,0 +1,130 @@
+name: Web
+
+# The front-end job every repo with a Vue or React app calls: install (with the Font
+# Awesome Pro registry when the app uses it), audit, then the npm scripts the caller
+# lists, in order. Seeded from Kindred Nights', TarotGen.io's and Fantasy Dossier's
+# front-end jobs.
+#
+#   web:
+#     uses: jwill89/shared-tooling/.github/workflows/web.yml@v1.0.0
+#     with:
+#       dir: web
+#       scripts: lint typecheck format:check test build
+#       fontawesome: true
+#       artifact-path: web/dist
+#     secrets:
+#       FONTAWESOME_TOKEN: ${{ secrets.FONTAWESOME_TOKEN }}
+
+on:
+  workflow_call:
+    inputs:
+      dir:
+        description: The front end's folder.
+        type: string
+        default: web
+      node-version-file:
+        description: The Node version file. Defaults to <dir>/.nvmrc.
+        type: string
+        default: ''
+      scripts:
+        description: npm scripts to run, in order, separated by spaces or newlines.
+        type: string
+        default: lint typecheck format:check test build
+      fontawesome:
+        description: Install from the Font Awesome Pro registry (needs the FONTAWESOME_TOKEN secret).
+        type: boolean
+        default: false
+      audit:
+        description: Fail on a high advisory in the packages that ship to the browser.
+        type: boolean
+        default: true
+      artifact-path:
+        description: A folder to upload once the scripts pass (a build that a Go binary embeds, say).
+        type: string
+        default: ''
+      artifact-name:
+        description: The uploaded artifact's name.
+        type: string
+        default: web-dist
+    secrets:
+      FONTAWESOME_TOKEN:
+        description: The Font Awesome package token.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ${{ inputs.dir }}
+    steps:
+      # The shared-tooling submodule is public, so the default token fetches it. No
+      # credential is left in .git/config for an install script to read.
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: ${{ inputs.node-version-file || format('{0}/.nvmrc', inputs.dir) }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.dir }}/package-lock.json
+
+      # Every Font Awesome kit download counts against the account's allowance, so
+      # node_modules comes back whole while nothing it was built from has changed, and
+      # the install runs only on a miss. The shared packages are copied in at install
+      # (install-links), so their files are part of the key.
+      - name: Restore dependencies
+        id: deps
+        uses: actions/cache@v6
+        with:
+          path: ${{ inputs.dir }}/node_modules
+          key: node-modules-${{ runner.os }}-${{ hashFiles(format('{0}/package-lock.json', inputs.dir), format('{0}/.nvmrc', inputs.dir), 'shared/lint/web/*.js', 'shared/lint/web/*.json', 'shared/test/a11y/*.js', 'shared/test/a11y/*.json') }}
+
+      - name: Font Awesome registry
+        if: inputs.fontawesome && steps.deps.outputs.cache-hit != 'true'
+        env:
+          FONTAWESOME_TOKEN: ${{ secrets.FONTAWESOME_TOKEN }}
+        run: |
+          test -n "$FONTAWESOME_TOKEN" || { echo "::error::The FONTAWESOME_TOKEN secret is not set."; exit 1; }
+          {
+            echo "@awesome.me:registry=https://npm.fontawesome.com/"
+            echo "@fortawesome:registry=https://npm.fontawesome.com/"
+            echo "//npm.fontawesome.com/:_authToken=${FONTAWESOME_TOKEN}"
+          } >> ~/.npmrc
+
+      - name: Install
+        if: steps.deps.outputs.cache-hit != 'true'
+        run: npm ci --prefer-offline
+
+      # Nothing after the install needs the registry, so the token goes before any of
+      # the project's own code runs.
+      - name: Remove the registry token
+        if: inputs.fontawesome
+        run: rm -f ~/.npmrc
+
+      - name: Advisories (packages that ship)
+        if: inputs.audit
+        run: npm audit --audit-level=high --omit=dev
+
+      - name: Scripts
+        env:
+          SCRIPTS: ${{ inputs.scripts }}
+        run: |
+          for script in $SCRIPTS; do
+            echo "::group::npm run $script"
+            npm run "$script"
+            echo "::endgroup::"
+          done
+
+      - name: Upload ${{ inputs.artifact-name }}
+        if: inputs.artifact-path != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.artifact-path }}
+          retention-days: 1
