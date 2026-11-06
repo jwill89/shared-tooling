@@ -8,6 +8,8 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-11-06
+
 ### Changed
 
 - `deploy/pwsh`'s README: connection sharing works against the droplet, tested by Kindred Nights' v0.29.4 deploy, the pilot; the reconnect paths are still tested only against a stand-in plink.
