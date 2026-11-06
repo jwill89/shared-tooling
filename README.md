@@ -48,7 +48,7 @@ And per stack (each folder's README has the detail):
 - **PHP:** `includes: [../shared/lint/php/phpstan.neon]` in `phpstan.neon`; `...require` the php-cs-fixer rules; `->withSets([.../rector-set.php])` in `rector.php`.
 - **C#:** `<Import Project="$(MSBuildThisFileDirectory)..\shared\lint\dotnet\analyzers.props" />` in the plugins' `Directory.Build.props`.
 - **PowerShell:** `-Settings shared/lint/pwsh/PSScriptAnalyzerSettings.psd1`; deploy scripts `Import-Module` `shared/deploy/pwsh/SharedDeploy.psd1`.
-- **Markdown:** `.markdownlint-cli2.jsonc` with `"config": { "extends": "shared/lint/markdown/markdownlint.jsonc" }` and `shared/**` in its ignores.
+- **Markdown:** `.markdownlint-cli2.jsonc` with `"config": { "extends": "shared/lint/markdown/markdownlint.jsonc" }` and `shared/**` in its ignores, plus `<dir>/test-results/**` where an end-to-end suite runs, since a failed run leaves Playwright's notes there as Markdown.
 - **Repo files:** put the project marker at the end of `.editorconfig` and `.gitattributes`, move the project's own lines below it, then `pwsh shared/repo/Sync-RepoFiles.ps1`.
 - **CI:** call the workflows by name, pinned to the exact release the submodule holds, plus the project's own jobs:
 

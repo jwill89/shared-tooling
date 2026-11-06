@@ -6,7 +6,7 @@ Written November 5, 2026, from a review of every project in `C:\Web Projects`. T
 
 No big migration is needed: the current stack is close to what I'd pick for these projects. Go backends, Vue 3 + Vite + TypeScript front ends, SQLite, and hardened systemd units behind Apache and Cloudflare already do well on performance, footprint, reliability and community.
 
-The real gains are in making things consistent across projects, plus moving one backend (TarotGen.io) off Slim. This review covers all 20 folders in Web Projects.
+The real gains are in making things consistent across projects. No backend changes language: TarotGen.io's move from Slim to Go was dropped on November 6 (section 3). This review covers all 20 folders in Web Projects.
 
 Four follow-up questions are answered below. Vue's Vapor mode is still a release candidate and will help these sites only a little. Only Home Library gains from a real-time change, and it's a server-sent event stream, not WebSockets. Two shared repos are worth building: one tooling submodule for every stack's lint, tests, CI and deploys, and the component kit. Rust isn't a fit for any migration.
 
@@ -14,7 +14,7 @@ Four follow-up questions are answered below. Vue's Vapor mode is still a release
 
 The standardization work starts from these, so it doesn't reopen them. All were decided on November 5, 2026.
 
-- TarotGen.io's backend moves from Slim to Go.
+- TarotGen.io's backend moves from Slim to Go. (Reversed on November 6: it stays on PHP, see below.)
 - Two shared repos, both named with "shared": shared-tooling (public, one submodule per project, folders named `<purpose>/<target>`) and shared-components-vue.
 - Stay on ESLint. Markdown lint, the test setup and a `standards/` guide all live in shared-tooling.
 - The component kit's own decisions are in shared-components-vue's `PLAN.md`.
@@ -55,16 +55,19 @@ Decided 2026-11-06, after the Gallery's pilot:
 - Scheduled backups are a timer that the deploy installs and checks, where Kindred's was installed by hand. It runs daily, writes a dated `VACUUM INTO` copy beside the database on the droplet, and keeps 28 days. Kindred's timer keeps running its own `kindred backup`, which is restore-drilled.
 - The copy off the droplet is the live-database pull to the dev machine at each deploy, which every project with a database now does.
 - Each rollout adds a basic end-to-end suite that CI runs: the main pages load, axe passes, and one key flow works. Deeper tests come later.
+- End-to-end suites find elements by role and label (`getByRole`, `getByLabel`), never by a Bulma or PrimeVue class, so they still pass when an app swaps in the component kit. An app adopts the kit only after its rollout, and never in the same pass as a backend change, so the suite checks one side at a time.
+- TarotGen.io stays on PHP and Slim, reversing the port to Go: Go would make no page measurably faster, Slim 4 still ships security releases, and it's a PHP example worth keeping beside the Gallery's Laravel (section 3). If its plugin's share relay returns over WebSockets, that is a small Go service beside the PHP app.
+- After the pilots, the rollout order is Senpan, Marxbot, TarotGen.io, then `standards/` and the rest. Senpan and Marxbot go first because they have no scheduled backup; TarotGen.io no longer waits for a port. The three get their CLAUDE.md pointer to the standards once `standards/` exists.
 
 No questions are open.
 
 ## Project by project
 
-Every project stays on its current stack except TarotGen.io's backend; the Gallery keeps Laravel but drops Bulma.
+Every project stays on its current stack. The Gallery keeps Laravel and TarotGen.io keeps Slim, and both drop Bulma.
 
 | Project | Stack now | Verdict |
 | --- | --- | --- |
-| TarotGen.io | Slim 4 + Vue / Bulma / Reka UI | Migrate the backend (see below) |
+| TarotGen.io | Slim 4 + Vue / Bulma / Reka UI | Keep Slim, drop Bulma (see below) |
 | Simple Image Gallery | Laravel 13 + Vue / Bulma / Reka UI | Keep Laravel, drop Bulma |
 | Kindred Nights, Senpan, Home Library | Go + Vue / Vite / TS + SQLite | Keep |
 | Marxbot, Nophica | Go Discord bots | Keep |
@@ -106,13 +109,23 @@ Switching frameworks wouldn't buy much:
 
 This is the biggest gain for WCAG and reuse. The Vue apps use three approaches today (PrimeVue, Bulma with Reka UI, and hand-written components), so the same dialog, toast and page header exist several times over. A shared library, shared-components-vue, replaces them. Its own `PLAN.md`, in that repo, covers why, what it builds, its design tokens and the order the apps adopt it.
 
-### 3. Move TarotGen.io from Slim to Go
+### 3. Keep TarotGen.io on PHP
 
-Slim has the smallest community of anything on the droplet. Slim 5 has been in development since 2024 with no release date as of the maintainer's last year-end post, and he reports the forum getting quieter.
+November 5's plan moved its backend from Slim to Go, because Slim's community is small and TarotGen.io is built like Kindred Nights. A closer look on November 6 reversed that. Being built like another project is no reason to rewrite it, and the benefits didn't hold up:
 
-- **Why Go:** TarotGen.io is built almost exactly like Kindred Nights (Vue SPA, API, Dalamud plugin, SQLite, passkeys), so the huma, scs, goose and go-webauthn patterns carry over.
-- **The alternative:** Laravel, for a second Laravel portfolio project. On the criteria here, Go wins.
-- **What it won't do:** save droplet memory. PHP-FPM stays as long as the Gallery and Grav need it. The gain is one less backend style to maintain, and more people to ask when something breaks.
+- **No speed to gain.** Page loads measured on the live site take 232–245 ms whether the page runs two queries or none, so the time is the trip through Cloudflare (its `AUDIT.md`). The data is small: 2,044 readings in 1.4 MB. The one heavy job, an admin making WebP card images at about 0.3 s each, runs in libwebp from PHP or Go alike.
+- **No memory saved.** PHP-FPM stays as long as the Gallery and Grav need it.
+- **Slim is maintained.** Slim 4 added PHP 8.5 in November 2025 and shipped security releases in May and August 2026 (4.15.2, 4.15.3); TarotGen.io is on 4.15.3. It uses only Slim's routing, middleware and PSR-7 objects (the data layer is plain PDO, the container PHP-DI), so even an abandoned Slim would mean replacing a router, not a rewrite.
+- **It's the portfolio's PHP-without-a-framework example**, beside the Gallery's Laravel: hand-written repositories, PHP-DI, passkeys, PKCE sign-in for the plugin, CSP nonces, PHPStan and 95% line coverage. Go is already the backend in most of the other projects.
+- **A port would cost** about 18,000 lines of PHP and 19,500 of tests across 116 routes, while players' installed plugins need the API unchanged, and every password hash, passkey and plugin token carried over.
+
+The one place PHP is the wrong tool is the plugin's share relay, which sent a reading straight to another player's plugin. It was removed on 2026-08-19, to come back over WebSockets rather than polling. PHP-FPM can't hold a WebSocket, and an SSE stream ties up one of the 12 workers TarotGen.io shares with the Gallery and Grav. If the relay returns, it's a small Go service beside the PHP app:
+
+- A systemd unit behind Apache, like Kindred's server, deployed with `Install-ServiceBinary` and checked by `go.yml`.
+- The PHP app stays in charge of sign-in: it checks the plugin's token and hands the relay a short-lived signed ticket.
+- It pings every 30–60 s, since Cloudflare drops a connection that's silent for about 100 s.
+
+An async PHP server (Amp or ReactPHP) running as its own service could do it too, but that ecosystem is far smaller.
 
 ### 4. Measure the droplet before migrating anything
 
@@ -149,7 +162,7 @@ The projects that need WebSockets already use them. Only Home Library would gain
 | Senpan App Suite | WebSockets | Keep | Live bingo calls and claims |
 | Kindred Nights | SSE change feed + REST | Keep | Updates flow one way; writes are occasional |
 | Simple Image Gallery | REST | Keep | No live data; Laravel WebSockets need Reverb, another always-on process |
-| TarotGen.io | REST | Keep | Draw, save and share are request and response |
+| TarotGen.io | REST | Keep; a returning plugin relay uses WebSockets from a small Go service | Draw, save and share are request and response; the plugin's share relay, removed in August, is to come back over WebSockets |
 | Conlang Translator | REST | Keep | One request, one translation |
 | Marxbot, Nophica | Discord's WebSocket gateway | Keep | Discord sets it |
 | Fantasy Dossier, Fingerprint Generator, static sites | Static or REST | Keep | Nothing changes while a page is open |
@@ -181,7 +194,7 @@ The copies have already drifted:
 | --- | --- | --- | --- |
 | shared-tooling `lint/web` | Lint JS, TS, Vue, CSS | ESLint with the accessibility rules, Prettier, Stylelint, base tsconfig, knip, the front-end package list | 8 Vue front ends (not MirageGO) |
 | shared-tooling `lint/go` | Lint Go | A `.golangci.yml` template, govulncheck, the Go package list | 7 Go modules (not MirageGO) |
-| shared-tooling `lint/php` | Lint PHP | phpstan base, php-cs-fixer ruleset, Rector set | Gallery, Fantasy Dossier, résumé site, TarotGen.io until it moves |
+| shared-tooling `lint/php` | Lint PHP | phpstan base, php-cs-fixer ruleset, Rector set | Gallery, Fantasy Dossier, résumé site, TarotGen.io |
 | shared-tooling `lint/dotnet` | Lint C# | Analyzer props and a shared `.globalconfig` | 4 Dalamud plugins |
 | shared-tooling `lint/pwsh` | Lint PowerShell | PSScriptAnalyzer settings (9 copies in 6 versions today) | Every repo with scripts |
 | shared-tooling `lint/markdown` | Lint Markdown | One markdownlint config | All repos |
@@ -314,7 +327,7 @@ You already get Rust where it pays off most, in your tools: Vite 8's bundler (Ro
 
 ## Project gaps
 
-Most gaps are missing CI, Dependabot and post-deploy checks. The riskiest are three SQLite apps with no scheduled backup: Senpan and the Gallery snapshot their database only when they deploy, and Marxbot not at all. No secrets are committed: the two tracked `.npmrc` files hold only the registry address, and every deploy config and `.env` file is ignored.
+Most gaps are missing CI, Dependabot and post-deploy checks. The riskiest are the SQLite apps with no scheduled backup: Marxbot has none at all, and Senpan snapshots its database only when it deploys, until its 2026-11-06 changes land. The Gallery was the third, until its own. No secrets are committed: the two tracked `.npmrc` files hold only the registry address, and every deploy config and `.env` file is ignored.
 
 Every repo gets a CLAUDE.md that points at the standards during rollout, so that's left out of the table. So does a Taskfile with `task deploy`: twelve projects have one that isn't committed yet, and MathDad Landing Page, Zealot Gaming, shared-components-vue and shared-tooling have none.
 
@@ -326,22 +339,22 @@ Every repo gets a CLAUDE.md that points at the standards during rollout, so that
 | Fingerprint Generator | CI, Dependabot, tests, accessibility lint, smoke check |  |
 | Home Library | First commit and a remote, changelog | Nothing is committed until 1.0.0 by your choice, so its CI has never run |
 | IDE Résumé Site | CI, Dependabot, changelog | Moves from Puppeteer to Playwright |
-| Kindred Nights | End-to-end tests | The pilot |
+| Kindred Nights | None once its 2026-11-06 changes land | The pilot |
 | Marxbot Discord Bot | Changelog, scheduled database backup |  |
 | MathDad Landing Page | CI, deploy script | Static page |
 | MirageGO | Not tracked here | Outside shared-tooling: its tooling stays bespoke |
 | Modem Monitor | Changelog | Desktop app: no deploy; it builds installers per platform instead |
 | Nophica Discord Bot | CI, Dependabot |  |
-| Senpan App Suite | Dependabot, HTTP smoke check, scheduled database backup, end-to-end tests | Its deploy checks only that the service runs |
-| Simple Image Gallery | Scheduled database backup, end-to-end tests | The second pilot |
-| TarotGen.io | Smoke check |  |
+| Senpan App Suite | None once its 2026-11-06 changes land | Rolled out first after the pilots |
+| Simple Image Gallery | None once its 2026-11-06 changes land | The second pilot |
+| TarotGen.io | Smoke check, migrations its deploy runs | Its schema changes are one-off scripts in `backend/db/`, untracked by git and run by hand on the live site before a deploy |
 | Venue Tools Dalamud Plugin | CI, Dependabot, changelog, tests |  |
 | What Do I Know | CI, changelog | Grav plugin and theme only |
 | Zealot Gaming | CI, deploy script | Static page |
 
 ## Where to start
 
-Do what's urgent first, settle the decisions, build the tooling, and only then migrate. Migrating first would mean writing TarotGen.io's Go backend to today's mixed conventions, then reworking it once the standards exist.
+Do what's urgent first, settle the decisions, build the tooling, and only then migrate. Migrating first would mean writing new code, such as Senpan's huma API, to today's mixed conventions, then reworking it once the standards exist.
 
 1. **Protect money and data first.**
    - Fix the droplet's memory: measure, set `pm = ondemand`, add swap (section 4).
@@ -350,7 +363,7 @@ Do what's urgent first, settle the decisions, build the tooling, and only then m
    - Put Conlang Translator in git; its folder has no repo.
    - Archive `jwill89/devbox` on GitHub, which also stops its Monday image builds and its Dependabot updates. The local Devkit Box folder is already removed.
    - Move `SQL Backups` out of Web Projects. It holds old WordPress tables, users among them, which a Claude Code session opened there would read.
-3. **Gather the standards into `standards/` in this repo** (github.com/jwill89/shared-tooling, public). Claude Code sorts each rule as shared, project-only or conflicting and brings you the conflicts.
+3. **Gather the standards into `standards/` in this repo** (github.com/jwill89/shared-tooling, public). Claude Code sorts each rule as shared, project-only or conflicting and brings you the conflicts. It comes after the rollouts of Senpan, Marxbot and TarotGen.io (decided 2026-11-06), which take their CLAUDE.md pointer then.
 4. **Seed shared-tooling from what you already have; no new rules yet.**
    - The eslint-config becomes `lint/web`, plus a React variant for Family Card Game.
    - Kindred's `.golangci.yml` becomes the `lint/go` template.
@@ -360,14 +373,22 @@ Do what's urgent first, settle the decisions, build the tooling, and only then m
    - The helpers copied into the deploy scripts become the `deploy/pwsh` module.
    - Kindred's backup timer becomes a shared scheduled backup that the deploy installs, where Kindred's was installed by hand.
    - TarotGen.io's coverage floors become the model for `test/web` and `test/php`, and the deploy scripts' existing health checks become the shared smoke step.
-5. **Pilot on Kindred Nights, then the Gallery.** Kindred has Go, Vue, C#, PowerShell, Markdown and CI that runs; the Gallery adds PHP. Home Library has no commits or remote yet, so its CI has never run and it can't show whether the shared workflows work. Kindred's pilot is done (2026-11-05): v0.29.4 deployed on the shared module over one held connection. It found three shared bugs, fixed in v1.1.0 and v1.1.1; its plugin publish on the module is still to be run, at its next plugin release. The Gallery's pilot is done (2026-11-06): 7.0.1 deployed on the shared module, with the smoke check and its rollback, and it gained Dependabot. It found one shared bug, Vite's warning about `test/web/vitest.js`, fixed in v1.1.2. Both are on v1.1.2 with CI passing, the PHP workflow included. Both still take the pieces decided after them: the scheduled backup and a basic end-to-end suite, and the Gallery the database pull too.
-6. **Roll out one repo at a time**, on `main`, with no separate branches. Everything shared-tooling can do lands in one pass: swap in the shared configs, move its deploy script onto the shared module, turn on its scheduled backup and database pull, and add its basic end-to-end suite, together (decided 2026-11-05, after Kindred's pilot did them on two branches; backups added 2026-11-06). Point its CLAUDE.md at the standards, trim what moved there, and close that project's gaps (see Project gaps). Small fixes ride along: the SQLite switch in Senpan and Modem Monitor, jsdom, and Playwright for the résumé site.
+5. **Pilot on Kindred Nights, then the Gallery.** Kindred has Go, Vue, C#, PowerShell, Markdown and CI that runs; the Gallery adds PHP. Home Library has no commits or remote yet, so its CI has never run and it can't show whether the shared workflows work. Kindred's pilot is done (2026-11-05): v0.29.4 deployed on the shared module over one held connection. It found three shared bugs, fixed in v1.1.0 and v1.1.1; its plugin publish on the module is still to be run, at its next plugin release. The Gallery's pilot is done (2026-11-06): 7.0.1 deployed on the shared module, with the smoke check and its rollback, and it gained Dependabot. It found one shared bug, Vite's warning about `test/web/vitest.js`, fixed in v1.1.2. Both are on v1.1.2 with CI passing, the PHP workflow included. Both moved to v1.2.0 on 2026-11-06 and took the pieces decided after them:
+   - Each deploy installs and checks the scheduled backup: Kindred's timer runs its own `kindred backup`, and the Gallery's runs the shared job into `db/backups/`. The Gallery's deploy now pulls the live database too.
+   - Each has a basic end-to-end suite in CI: 9 tests on the Gallery and 11 on Kindred, each on a throwaway database.
+   - Axe found real problems in both, and the apps fixed them. The Gallery lacked a `main` landmark and names on three icon-only buttons, its sign-in and sign-up pages had no `h1`, and its muted text was under 4.5:1. Kindred's front and not-found pages had no `h1`.
+   - Both deployed with them on 2026-11-06, the Gallery from `02a8ba8` and Kindred as v0.30.0. The droplet ran both kinds of backup timer: the shared job (the Gallery) and a project's own command (Kindred). Both database pulls came down. Both suites passed in CI, the shared `e2e.yml`'s first runs: the Gallery's with PHP, Kindred's with Go and Font Awesome Pro.
+6. **Roll out one repo at a time**, on `main`, with no separate branches. Everything shared-tooling can do lands in one pass: swap in the shared configs, move its deploy script onto the shared module, turn on its scheduled backup and database pull, and add its basic end-to-end suite, together (decided 2026-11-05, after Kindred's pilot did them on two branches; backups added 2026-11-06). Point its CLAUDE.md at the standards, trim what moved there, and close that project's gaps (see Project gaps). Small fixes ride along: the SQLite switch in Senpan and Modem Monitor, jsdom, and Playwright for the résumé site. After the pilots, the order is Senpan, Marxbot, TarotGen.io, then the rest (decided 2026-11-06).
+   - **Senpan** (prepared 2026-11-06, not yet committed):
+     - Everything shared-tooling can do, in one pass: the shared configs and CI, Dependabot, the deploy on SharedDeploy with an HTTP smoke check and rollback, the daily backup, the database pull, and a basic end-to-end suite of 10 tests.
+     - The SQLite driver moved to modernc. modernc returns `DATETIME` columns as `time.Time` where ncruces returned the stored text, so every read now casts to text, and a test guards it.
+     - Roslynator went, since the shared analyzers cover it.
+     - Its API types, which tygo generates from the Go models, are now committed and checked by a small job of Senpan's own, as Kindred's are. So the shared web job needs no Go, and Senpan stays on v1.2.0. The move to huma comes next, on its own (decided 2026-11-06); it changes only the generator.
 7. **Then the migrations, in this order:**
-   1. TarotGen.io to Go, the first codebase built under the standards from its first commit.
-   2. Senpan's API to huma, replacing its hand-written spec and kin-openapi.
-   3. The component kit, following its own plan in shared-components-vue.
-   4. Home Library's event stream, with its 1.0 work. It's small and touches nothing else.
-   5. Vapor, once Vue 3.6 is stable.
+   1. Senpan's API to huma, replacing its hand-written spec and kin-openapi.
+   2. The component kit, following its own plan in shared-components-vue.
+   3. Home Library's event stream, with its 1.0 work. It's small and touches nothing else.
+   4. Vapor, once Vue 3.6 is stable.
 
 **How the pieces connect.** You edit shared-tooling in its own folder, note the change in its CHANGELOG, and run `task release -- 1.2.0`, which sets one version across the repo, commits and tags `v1.2.0`; then push. Each project holds it as a submodule at `shared/`, at a release's tag, and calls the shared workflows at that same tag. To take a release, a project runs `task shared:update -- v1.2.0`, which moves both together and re-runs what's built from them, and commits the result. CI fails if the two ever name different releases. A fresh clone needs `git submodule update --init` once.
 
@@ -392,6 +413,10 @@ Project facts come from each repo's manifests, deploy files and docs in Web Proj
 - [Stackmaven: Vue 3.6 Vapor Mode](https://stackmaven.io/news/vue-vapor-mode/)
 - [InfoQ: State of JS 2025 survey](https://www.infoq.com/news/2026/03/state-of-js-survey-2025)
 - [odan: The year in review 2025 (Slim maintainer)](https://odan.github.io/2025/12/12/recap-2025.html)
+- [Slim 4.15.1 released (PHP 8.5)](https://www.slimframework.com/2025/11/21/slim-4.15.1-release.html)
+- [Slim 4.15.3 released](https://www.slimframework.com/2026/08/31/slim-4.15.3-release.html) and its [security advisory](https://www.slimframework.com/2026/08/31/slim-security-advisory.html)
+- [SSE and PHP-FPM don't play well together](https://dev.to/ohugonnot/sse-and-php-fpm-dont-play-well-together-bjl)
+- [WebSockets and SSE behind Cloudflare](https://stackharbor.com/en/knowledge-base/cffix-websockets-sse-behind-cloudflare/)
 - [Grav 2 stable released](https://getgrav.org/blog/grav-2-stable-released)
 - [Oxc: framework compatibility](https://oxc.rs/compatibility.html)
 - [Announcing Vite 8](https://vite.dev/blog/announcing-vite8.html)

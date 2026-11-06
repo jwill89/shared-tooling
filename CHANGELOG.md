@@ -8,6 +8,16 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+### Changed
+
+- The README says to add `<dir>/test-results/**` to a project's markdownlint ignores where an end-to-end suite runs: a failed run leaves Playwright's notes there as Markdown, which failed the Gallery's `task lint` locally.
+- PLAN.md: TarotGen.io stays on PHP and Slim (decided 2026-11-06), and the rollout order after the pilots is Senpan, Marxbot, TarotGen.io, then `standards/` and the rest.
+
+### Fixed
+
+- `lint/pwsh/Invoke-ScriptLint.ps1` skips a tracked script deleted in the working tree and not yet committed. It linted every file `git ls-files` named, so Senpan's removed `PSScriptAnalyzerSettings.psd1` failed the lint until the deletion was committed.
+- A stray space in `lint/dotnet/.globalconfig`'s comment on doc comments.
+
 ## [1.2.0] - 2026-11-06
 
 Everything a rollout brings, so a project takes it in one pass (decided 2026-11-06): the scheduled backup and end-to-end tests join the configs and the deploy.

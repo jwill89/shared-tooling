@@ -10,7 +10,8 @@
     The one way every repo lints its scripts: `task shared:lint:scripts` locally and the
     shared pwsh.yml workflow in CI both run this, so the two can't drift. Tracked files
     only, so an ignored deploy.config.ps1 is never read, and the shared-tooling
-    submodule's own files are left to its CI.
+    submodule's own files are left to its CI. A tracked file deleted in the working tree
+    and not yet committed is skipped.
 
     PSScriptAnalyzer 1.25.0, the newest release, races with itself on a large file when
     it starts cold: it throws a NullReferenceException, or "more than one dynamic module
@@ -38,7 +39,8 @@ if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
 
 Push-Location -LiteralPath $Path
 try {
-    $files = @(git ls-files '*.ps1' '*.psm1' '*.psd1')
+    # A tracked file deleted but not yet committed is still listed; there is nothing to lint.
+    $files = @(git ls-files '*.ps1' '*.psm1' '*.psd1' | Where-Object { Test-Path -LiteralPath $_ })
     $findings = foreach ($file in $files) {
         for ($try = 1; ; $try++) {
             try {

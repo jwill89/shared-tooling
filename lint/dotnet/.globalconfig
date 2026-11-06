@@ -49,7 +49,7 @@ dotnet_naming_style.pascal_case.capitalization = pascal_case
 # The naming rules above reach the build only with their diagnostic's severity set;
 # without it they show in the editor and nowhere else.
 dotnet_diagnostic.IDE1006.severity = warning
-# A doc comment is written where the name does not already say it , so one
+# A doc comment is written where the name does not already say it, so one
 # that documents some parameters need not document all.
 dotnet_diagnostic.CS1573.severity = none
 dotnet_diagnostic.CS1591.severity = none
