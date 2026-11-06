@@ -8,6 +8,8 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-05
+
 ### Fixed
 
 - `lint/pwsh/Invoke-ScriptLint.ps1` retries PSScriptAnalyzer's own crash up to six times instead of three. On a cold start it can crash on a large file several times in a row before it passes (GitHub's Linux runner did so three times on `SharedDeploy.psm1`, failing v1.0.0's own CI). A finding is still never retried.
