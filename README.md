@@ -15,11 +15,11 @@ Folders are named `<purpose>/<target>`. A project uses only the folders for the 
 | [`deploy/pwsh`](deploy/pwsh/README.md) | `SharedDeploy`, the PowerShell module the deploy scripts share: every deploy as one archive and two SSH connections | Every deploy script |
 | `test/web` | `vitest.js`: the Vitest settings, on jsdom, with a coverage floor | Every Vue front end |
 | `test/a11y` | `@jwill89/test-a11y`: axe checks for Playwright at WCAG 2.2 AA | Every site with a UI |
-| `test/e2e` | `playwright.js`: the Playwright settings | Sites with end-to-end tests |
+| `test/e2e` | `playwright.js`: the Playwright settings, run in CI by `e2e.yml` | Every site with a UI: each rollout adds a basic suite |
 | `test/go` | `Test-CoverageFloor.ps1`, the floor for a Go coverage profile | Every Go module |
 | `test/php` | `coverage-check.php` (the floor for a clover report) and a base `phpunit.xml.dist` | The PHP projects |
 | `repo` | `editorconfig` and `gitattributes`, copied in by `Sync-RepoFiles.ps1`; `Taskfile.yml`, the tasks every repo includes; `Update-SharedTooling.ps1` and `Test-SharedVersion.ps1`, which move a project to a release and check it stayed there; `dependabot.example.yml` | Every repo |
-| `.github/workflows` | Reusable workflows: `web.yml`, `go.yml`, `php.yml`, `dotnet.yml`, `pwsh.yml`, `docs.yml`, `osv.yml` | Every repo's CI |
+| `.github/workflows` | Reusable workflows: `web.yml`, `e2e.yml`, `go.yml`, `php.yml`, `dotnet.yml`, `pwsh.yml`, `docs.yml`, `osv.yml` | Every repo's CI |
 
 ## Adding it to a project
 

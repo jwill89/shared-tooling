@@ -1,0 +1,160 @@
+name: E2E
+
+# The end-to-end job: the caller's Playwright suite against the app as it runs, in the
+# runner's own Chrome (test/e2e's settings), so no browser is downloaded. The caller's
+# playwright.config starts the app through its webServer; this job installs what that
+# needs first: the front end always, Go or PHP when asked, then the caller's setup.
+# The front end's install comes back from the cache web.yml fills (the same key), so
+# calling this with `needs: [web]` costs no second Font Awesome download.
+#
+#   e2e:
+#     needs: [web]
+#     uses: jwill89/shared-tooling/.github/workflows/e2e.yml@v1.2.0
+#     with:
+#       dir: web
+#       go-version-file: go.mod
+#       fontawesome: true
+#     secrets:
+#       FONTAWESOME_TOKEN: ${{ secrets.FONTAWESOME_TOKEN }}
+
+on:
+  workflow_call:
+    inputs:
+      dir:
+        description: The front end's folder, which holds playwright.config.
+        type: string
+        default: web
+      node-version-file:
+        description: The Node version file. Defaults to <dir>/.nvmrc.
+        type: string
+        default: ''
+      script:
+        description: The npm script that runs the suite.
+        type: string
+        default: test:e2e
+      fontawesome:
+        description: Install from the Font Awesome Pro registry (needs the FONTAWESOME_TOKEN secret).
+        type: boolean
+        default: false
+      go-version-file:
+        description: A go.mod whose Go version to set up, for a Go server the suite starts.
+        type: string
+        default: ''
+      php-version:
+        description: The PHP version to set up, for a PHP server the suite starts.
+        type: string
+        default: ''
+      php-extensions:
+        description: The ext-* composer.json requires.
+        type: string
+        default: ''
+      composer-dir:
+        description: The folder whose Composer packages to install, with php-version.
+        type: string
+        default: ''
+      setup:
+        description: Shell run from the repo root once everything is installed (an .env and a migrated, seeded database, say).
+        type: string
+        default: ''
+    secrets:
+      FONTAWESOME_TOKEN:
+        description: The Font Awesome package token.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: ${{ inputs.node-version-file || format('{0}/.nvmrc', inputs.dir) }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.dir }}/package-lock.json
+
+      # The same key as web.yml's, so a run after the web job restores its install.
+      - name: Restore dependencies
+        id: deps
+        uses: actions/cache@v6
+        with:
+          path: ${{ inputs.dir }}/node_modules
+          key: node-modules-${{ runner.os }}-${{ hashFiles(format('{0}/package-lock.json', inputs.dir), format('{0}/.nvmrc', inputs.dir), 'shared/lint/web/*.js', 'shared/lint/web/*.json', 'shared/test/a11y/*.js', 'shared/test/a11y/*.json') }}
+
+      - name: Font Awesome registry
+        if: inputs.fontawesome && steps.deps.outputs.cache-hit != 'true'
+        env:
+          FONTAWESOME_TOKEN: ${{ secrets.FONTAWESOME_TOKEN }}
+        run: |
+          test -n "$FONTAWESOME_TOKEN" || { echo "::error::The FONTAWESOME_TOKEN secret is not set."; exit 1; }
+          {
+            echo "@awesome.me:registry=https://npm.fontawesome.com/"
+            echo "@fortawesome:registry=https://npm.fontawesome.com/"
+            echo "//npm.fontawesome.com/:_authToken=${FONTAWESOME_TOKEN}"
+          } >> ~/.npmrc
+
+      - name: Install
+        if: steps.deps.outputs.cache-hit != 'true'
+        working-directory: ${{ inputs.dir }}
+        run: npm ci --prefer-offline
+
+      # Nothing after the install needs the registry, so the token goes before any of
+      # the project's own code runs.
+      - name: Remove the registry token
+        if: inputs.fontawesome
+        run: rm -f ~/.npmrc
+
+      - uses: actions/setup-go@v7
+        if: inputs.go-version-file != ''
+        with:
+          go-version-file: ${{ inputs.go-version-file }}
+          cache-dependency-path: '**/go.sum'
+
+      - uses: shivammathur/setup-php@v2
+        if: inputs.php-version != ''
+        with:
+          php-version: ${{ inputs.php-version }}
+          extensions: ${{ inputs.php-extensions }}
+          coverage: none
+          tools: composer
+
+      - name: Restore Composer packages
+        if: inputs.php-version != '' && inputs.composer-dir != ''
+        uses: actions/cache@v6
+        with:
+          path: ${{ inputs.composer-dir }}/vendor
+          key: composer-${{ runner.os }}-${{ inputs.php-version }}-${{ hashFiles(format('{0}/composer.lock', inputs.composer-dir)) }}
+          restore-keys: composer-${{ runner.os }}-${{ inputs.php-version }}-
+
+      - name: Composer install
+        if: inputs.php-version != '' && inputs.composer-dir != ''
+        working-directory: ${{ inputs.composer-dir }}
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      - name: Setup
+        if: inputs.setup != ''
+        env:
+          SETUP: ${{ inputs.setup }}
+        run: bash -euo pipefail -c "$SETUP"
+
+      - name: Suite
+        working-directory: ${{ inputs.dir }}
+        env:
+          SCRIPT: ${{ inputs.script }}
+        run: npm run "$SCRIPT"
+
+      # The traces Playwright keeps for a failed test (test/e2e: retain-on-failure).
+      - name: Upload the failures' traces
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-traces
+          path: ${{ inputs.dir }}/test-results
+          retention-days: 7
+          if-no-files-found: ignore

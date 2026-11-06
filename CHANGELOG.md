@@ -8,6 +8,17 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+Everything a rollout brings, so a project takes it in one pass (decided 2026-11-06): the scheduled backup and end-to-end tests join the configs and the deploy.
+
+### Added
+
+- `deploy/pwsh`'s `Install-BackupTimer`: a project's daily database backup, installed and checked by its deploy, where Kindred Nights' was installed by hand. It renders a systemd timer and oneshot service with Kindred's hardening, installs them only where they differ from the live copies, runs the service once to check them, and puts the previous copies back if that run fails. The shared job writes a `VACUUM INTO` copy of the live SQLite database, checks it with `PRAGMA integrity_check`, names it `<prefix>YYYY-MM-DD<suffix>` and keeps 28 days. `-Command` runs a project's own job instead.
+- `e2e.yml`: the reusable end-to-end job. It installs the front end (from web.yml's cache), Go or PHP when asked, then runs the caller's setup and its Playwright suite in the runner's Chrome, and keeps the traces of a failed run.
+
+### Fixed
+
+- `test/e2e/playwright.js` is marked as an ES module by a `package.json` of its own, as `test/web/vitest.js` was in 1.1.2, so Node never reads it as CommonJS.
+
 ## [1.1.2] - 2026-11-06
 
 ### Changed

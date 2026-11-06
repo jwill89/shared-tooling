@@ -41,6 +41,7 @@
         'Restore-RemoteItemSet'
         'Export-PluginRepository'
         'Publish-PluginRepository'
+        'Install-BackupTimer'
         'Copy-LiveDatabase'
         'Invoke-SmokeCheck'
     )

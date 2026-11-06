@@ -49,6 +49,13 @@ Decided later the same day, while seeding shared-tooling:
 - shared-tooling carries one version and releases as exact tags (`v1.0.0`), with no moving `v1`. A project's submodule and its workflow refs name the same tag, `task shared:update` moves them together, and CI fails if they differ. shared-tooling stays public, so CI, Dependabot and the submodule need no token.
 - MirageGO stays outside shared-tooling. It is unlike the other projects in what it does and will need bespoke tooling, so it takes no submodule and no shared configs, and nothing is added to shared-tooling for it.
 
+Decided 2026-11-06, after the Gallery's pilot:
+
+- A rollout brings everything shared-tooling can do, in one pass: configs, CI, the deploy, the scheduled backup, the database pull and end-to-end tests.
+- Scheduled backups are a timer that the deploy installs and checks, where Kindred's was installed by hand. It runs daily, writes a dated `VACUUM INTO` copy beside the database on the droplet, and keeps 28 days. Kindred's timer keeps running its own `kindred backup`, which is restore-drilled.
+- The copy off the droplet is the live-database pull to the dev machine at each deploy, which every project with a database now does.
+- Each rollout adds a basic end-to-end suite that CI runs: the main pages load, axe passes, and one key flow works. Deeper tests come later.
+
 No questions are open.
 
 ## Project by project
@@ -326,7 +333,7 @@ Every repo gets a CLAUDE.md that points at the standards during rollout, so that
 | Modem Monitor | Changelog | Desktop app: no deploy; it builds installers per platform instead |
 | Nophica Discord Bot | CI, Dependabot |  |
 | Senpan App Suite | Dependabot, HTTP smoke check, scheduled database backup, end-to-end tests | Its deploy checks only that the service runs |
-| Simple Image Gallery | Dependabot, scheduled database backup, end-to-end tests |  |
+| Simple Image Gallery | Scheduled database backup, end-to-end tests | The second pilot |
 | TarotGen.io | Smoke check |  |
 | Venue Tools Dalamud Plugin | CI, Dependabot, changelog, tests |  |
 | What Do I Know | CI, changelog | Grav plugin and theme only |
@@ -338,7 +345,7 @@ Do what's urgent first, settle the decisions, build the tooling, and only then m
 
 1. **Protect money and data first.**
    - Fix the droplet's memory: measure, set `pm = ondemand`, add swap (section 4).
-   - Add scheduled database backups to Senpan, the Gallery and Marxbot by copying Kindred's backup timer.
+   - Scheduled database backups for Senpan, the Gallery and Marxbot: they become a shared piece, from Kindred's backup timer, and land with each project's rollout in step 6, the Gallery's first (decided 2026-11-06).
 2. **Get every project into a known state.**
    - Put Conlang Translator in git; its folder has no repo.
    - Archive `jwill89/devbox` on GitHub, which also stops its Monday image builds and its Dependabot updates. The local Devkit Box folder is already removed.
@@ -351,9 +358,10 @@ Do what's urgent first, settle the decisions, build the tooling, and only then m
    - Kindred's plugin `Directory.Build.props` becomes `lint/dotnet`.
    - The Markdown config above becomes `lint/markdown`.
    - The helpers copied into the deploy scripts become the `deploy/pwsh` module.
+   - Kindred's backup timer becomes a shared scheduled backup that the deploy installs, where Kindred's was installed by hand.
    - TarotGen.io's coverage floors become the model for `test/web` and `test/php`, and the deploy scripts' existing health checks become the shared smoke step.
-5. **Pilot on Kindred Nights, then the Gallery.** Kindred has Go, Vue, C#, PowerShell, Markdown and CI that runs; the Gallery adds PHP. Home Library has no commits or remote yet, so its CI has never run and it can't show whether the shared workflows work. Kindred's pilot is done (2026-11-05): its tooling is on shared-tooling v1.1.1 with CI passing, and v0.29.4 deployed on the shared module over one held connection. It found three shared bugs, fixed in v1.1.0 and v1.1.1; its plugin publish on the module is still to be run, at its next plugin release.
-6. **Roll out one repo at a time**, on `main`, with no separate branches: swap in the shared configs and move its deploy script onto the shared module together (decided 2026-11-05, after Kindred's pilot did them on two branches), point its CLAUDE.md at the standards, trim what moved there, and close that project's gaps (see Project gaps). Small fixes ride along: the SQLite switch in Senpan and Modem Monitor, jsdom, and Playwright for the résumé site.
+5. **Pilot on Kindred Nights, then the Gallery.** Kindred has Go, Vue, C#, PowerShell, Markdown and CI that runs; the Gallery adds PHP. Home Library has no commits or remote yet, so its CI has never run and it can't show whether the shared workflows work. Kindred's pilot is done (2026-11-05): v0.29.4 deployed on the shared module over one held connection. It found three shared bugs, fixed in v1.1.0 and v1.1.1; its plugin publish on the module is still to be run, at its next plugin release. The Gallery's pilot is done (2026-11-06): 7.0.1 deployed on the shared module, with the smoke check and its rollback, and it gained Dependabot. It found one shared bug, Vite's warning about `test/web/vitest.js`, fixed in v1.1.2. Both are on v1.1.2 with CI passing, the PHP workflow included. Both still take the pieces decided after them: the scheduled backup and a basic end-to-end suite, and the Gallery the database pull too.
+6. **Roll out one repo at a time**, on `main`, with no separate branches. Everything shared-tooling can do lands in one pass: swap in the shared configs, move its deploy script onto the shared module, turn on its scheduled backup and database pull, and add its basic end-to-end suite, together (decided 2026-11-05, after Kindred's pilot did them on two branches; backups added 2026-11-06). Point its CLAUDE.md at the standards, trim what moved there, and close that project's gaps (see Project gaps). Small fixes ride along: the SQLite switch in Senpan and Modem Monitor, jsdom, and Playwright for the résumé site.
 7. **Then the migrations, in this order:**
    1. TarotGen.io to Go, the first codebase built under the standards from its first commit.
    2. Senpan's API to huma, replacing its hand-written spec and kin-openapi.

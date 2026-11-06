@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "description": "Marks playwright.js as an ES module. Projects import it by path (../shared/test/e2e/playwright.js), never install it; without this, Node reads it as CommonJS.",
+  "type": "module"
+}

@@ -3380,6 +3380,353 @@ echo "Publishing $version (published now: ${published:-none})."
 
 #endregion
 
+#region Scheduled backup
+
+function Assert-UnitPath {
+    <#
+    .SYNOPSIS
+    Throws unless a path can go into a systemd unit unquoted: absolute, one line, no spaces, quotes, backslashes or % (a systemd specifier).
+    #>
+    param([string]$Value, [string]$What)
+    if (-not $Value -or $Value -notmatch '^/[^\s''"\\%]*$' -or $Value.TrimEnd('/') -eq '') {
+        throw "$What '$Value' must be an absolute path with no spaces, quotes, backslashes or %, and not the filesystem root."
+    }
+}
+
+function Install-BackupTimer {
+    <#
+    .SYNOPSIS
+    Installs or updates a project's daily database backup, a systemd timer and its oneshot service, and checks it with a first run whenever it changes.
+
+    .DESCRIPTION
+    Kindred Nights' backup timer, made general and installed by the deploy instead of by
+    hand (decided 2026-11-06). In one remote run on the held connection:
+      - the units, and the shared job's script unless -Command names the project's own, are
+        written here and compared with the live copies (cmp); if all match, nothing changes;
+      - if any differs or is new, the previous copies are kept aside, the new ones
+        installed, systemd reloaded, and the service run once, waited for. If that run
+        fails, its journal is printed, the previous copies come back (or the new ones are
+        removed), and this throws;
+      - the timer is enabled and started, re-armed if it changed, and its next run printed.
+
+    The shared job copies the live SQLite database with VACUUM INTO, which reads it
+    consistently while the app keeps writing, WAL included. The copy is checked with PRAGMA
+    integrity_check before it takes the day's name, <Prefix>YYYY-MM-DD<Suffix> (UTC), in
+    -Directory; a second run the same day replaces that day's copy. Dated copies older than
+    -Keep days are removed and nothing else in the folder is touched, so a deploy's own
+    snapshots may share it as long as their names never take that dated form.
+
+    Call it after the smoke check, so a deploy that rolls back changes no backup. The
+    service carries Kindred Nights' hardening (ProtectSystem=strict, UMask=0077 and the
+    rest) and writes only to -ReadWritePath. The copies stay on the droplet; the copy off
+    it is the database pull at each deploy (Copy-LiveDatabase).
+
+    .PARAMETER Name
+    The project's short name: the units are <Name>-backup.service and <Name>-backup.timer,
+    and the shared job is /usr/local/libexec/shared-deploy/<Name>-backup.
+
+    .PARAMETER Database
+    The live SQLite database on the host, for the shared job.
+
+    .PARAMETER Directory
+    Where the shared job writes its copies; by default a backups folder beside the
+    database. It is created if missing and given to -Owner, since the job runs as that user.
+
+    .PARAMETER Prefix
+    What the copies' names start with; by default <Name>-.
+
+    .PARAMETER Suffix
+    What the copies' names end with; by default the database's own extension, such as .sqlite.
+
+    .PARAMETER Keep
+    Days of copies kept: 28 unless set, as in Kindred Nights.
+
+    .PARAMETER Command
+    The project's own backup command, run instead of the shared job (Kindred Nights'
+    `kindred backup`), which then keeps its own copies and pruning.
+
+    .PARAMETER EnvironmentFile
+    An env file the service reads, optional at run time (EnvironmentFile=-), for -Command.
+
+    .PARAMETER WorkingDirectory
+    The service's working directory, for -Command.
+
+    .PARAMETER ReadWritePath
+    The paths the service may write under ProtectSystem=strict. For the shared job, by
+    default the database's folder (SQLite writes its -shm there) and -Directory.
+
+    .PARAMETER Owner
+    user or user:group the service runs as: the app's own user (www-data for a PHP site),
+    which can read the database. A bare user also names the group.
+
+    .PARAMETER OnCalendar
+    When it runs: 10:00 UTC every day unless set, after any evening has closed. A missed
+    run happens at the next boot (Persistent=true).
+
+    .PARAMETER RandomizedDelay
+    The spread after -OnCalendar, so the projects' backups don't all start at once.
+
+    .PARAMETER Description
+    The units' description; by default "<Name> daily database backup".
+
+    .PARAMETER AsScript
+    Return the remote script instead of running it.
+
+    .PARAMETER Connection
+    The connection to use; by default the one Open-DeployConnection stored.
+
+    .PARAMETER NoRetry
+    Never retry, even after a dropped connection.
+
+    .EXAMPLE
+    Install-BackupTimer -Name 'example' -Database '/var/www/example.com/db/example.db' -Owner 'www-data'
+
+    .EXAMPLE
+    Install-BackupTimer -Name 'example' -Command '/opt/example/example backup' -Owner 'example' `
+        -EnvironmentFile '/etc/example/example.env' -WorkingDirectory '/opt/example' -ReadWritePath '/opt/example'
+    #>
+    [CmdletBinding(DefaultParameterSetName = 'Shared')]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidatePattern('^[a-z0-9][a-z0-9-]*$', Options = 'None')]
+        [string]$Name,
+
+        [Parameter(Mandatory, ParameterSetName = 'Shared')]
+        [string]$Database,
+
+        [Parameter(ParameterSetName = 'Shared')]
+        [string]$Directory,
+
+        [Parameter(ParameterSetName = 'Shared')]
+        [ValidatePattern('^[A-Za-z0-9._@-]*$')]
+        [string]$Prefix,
+
+        [Parameter(ParameterSetName = 'Shared')]
+        [ValidatePattern('^[A-Za-z0-9._@-]*$')]
+        [string]$Suffix,
+
+        [Parameter(ParameterSetName = 'Shared')]
+        [ValidateRange(1, 3650)]
+        [int]$Keep = 28,
+
+        [Parameter(Mandatory, ParameterSetName = 'Command')]
+        [ValidatePattern('^/[^\r\n%]+$')]
+        [string]$Command,
+
+        [Parameter(ParameterSetName = 'Command')]
+        [string]$EnvironmentFile,
+
+        [Parameter(ParameterSetName = 'Command')]
+        [string]$WorkingDirectory,
+
+        [Parameter(ParameterSetName = 'Shared')]
+        [Parameter(Mandatory, ParameterSetName = 'Command')]
+        [string[]]$ReadWritePath,
+
+        [Parameter(Mandatory)]
+        [string]$Owner,
+
+        [ValidatePattern('^[A-Za-z0-9 *:,./~-]+$')]
+        [string]$OnCalendar = '*-*-* 10:00:00 UTC',
+
+        [ValidatePattern('^[0-9]+(ms|s|min|h)?$')]
+        [string]$RandomizedDelay = '15min',
+
+        [ValidatePattern('^[^\r\n%]+$')]
+        [string]$Description,
+
+        [switch]$AsScript,
+
+        [object]$Connection,
+
+        [switch]$NoRetry
+    )
+    $user, $group = Split-Owner -Owner $Owner
+    if (-not $Description) { $Description = "$Name daily database backup" }
+    $unit = "$Name-backup"
+    $job = ''
+    $jobText = ''
+    if ($PSCmdlet.ParameterSetName -eq 'Shared') {
+        Assert-UnitPath -Value $Database -What 'Database'
+        $dbFolder = $Database -replace '/[^/]*$', ''
+        if (-not $dbFolder) { throw "Database '$Database' must name a file inside a folder." }
+        if (-not $Directory) { $Directory = "$dbFolder/backups" }
+        Assert-UnitPath -Value $Directory -What 'Directory'
+        $Directory = $Directory.TrimEnd('/')
+        if (-not $PSBoundParameters.ContainsKey('Prefix')) { $Prefix = "$Name-" }
+        if (-not $PSBoundParameters.ContainsKey('Suffix')) {
+            $leaf = Split-Path -Path $Database -Leaf
+            $Suffix = if ($leaf -match '(\.[A-Za-z0-9]+)$') { $Matches[1] } else { '.sqlite' }
+        }
+        if (-not $ReadWritePath) {
+            $ReadWritePath = if ($Directory.StartsWith("$dbFolder/")) { @($dbFolder) } else { @($dbFolder, $Directory) }
+        }
+        $job = "/usr/local/libexec/shared-deploy/$unit"
+        $jobVariable = [ordered]@{
+            db     = $Database
+            dir    = $Directory
+            prefix = $Prefix
+            suffix = $Suffix
+            keep   = "$Keep"
+        }
+        $jobBody = @'
+if [ ! -f "$db" ]; then echo "No database at $db." >&2; exit 1; fi
+if ! command -v sqlite3 >/dev/null; then echo 'sqlite3 is not installed on the host.' >&2; exit 1; fi
+day=$(date -u +%Y-%m-%d)
+dest="$dir/$prefix$day$suffix"
+part="$dest.partial"
+mkdir -p "$dir"
+rm -f "$part"
+trap 'rm -f "$part"' EXIT
+# VACUUM INTO reads the live database consistently while the app keeps writing, WAL included.
+sqlite3 "$db" "VACUUM INTO '$part'"
+verdict=$(sqlite3 "$part" 'PRAGMA integrity_check;')
+if [ "$verdict" != ok ]; then echo "The copy failed its integrity check, so the earlier copies stay as they are: $verdict" >&2; exit 1; fi
+mv -f "$part" "$dest"
+trap - EXIT
+cutoff=$(date -u -d "$keep days ago" +%Y-%m-%d)
+pruned=0
+for f in "$dir/$prefix"[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]"$suffix"; do
+  [ -e "$f" ] || continue
+  d=${f#"$dir/$prefix"}
+  d=${d%"$suffix"}
+  if [[ "$d" < "$cutoff" ]]; then rm -f -- "$f"; pruned=$((pruned + 1)); fi
+done
+echo "Backup: $dest ($(du -h "$dest" | cut -f1)); $pruned older removed."
+'@
+        $jobLines = [System.Collections.Generic.List[string]]::new()
+        $jobLines.Add('#!/bin/bash')
+        $jobLines.Add("# $Description, written by SharedDeploy's Install-BackupTimer at each deploy.")
+        $jobLines.Add("# Change the project's deploy script, not this file: the next deploy rewrites it.")
+        $jobLines.Add('set -euo pipefail')
+        foreach ($key in $jobVariable.Keys) { $jobLines.Add("$key=$(ConvertTo-ShellLiteral -Value $jobVariable[$key])") }
+        $jobLines.Add($jobBody)
+        $jobText = ($jobLines -join "`n") -replace "`r", ''
+        if ("$Directory/$Prefix$Suffix" -match "'") { throw 'The backup path cannot hold a single quote (it goes into VACUUM INTO).' }
+        $execStart = $job
+        $EnvironmentFile = ''
+        $WorkingDirectory = ''
+    } else {
+        $execStart = $Command
+        if ($EnvironmentFile) { Assert-UnitPath -Value $EnvironmentFile -What 'EnvironmentFile' }
+        if ($WorkingDirectory) { Assert-UnitPath -Value $WorkingDirectory -What 'WorkingDirectory' }
+        $Directory = ''
+    }
+    foreach ($path in $ReadWritePath) { Assert-UnitPath -Value $path -What 'ReadWritePath' }
+    $ReadWritePath = @($ReadWritePath | ForEach-Object { $_.TrimEnd('/') } | Select-Object -Unique)
+
+    $service = [System.Collections.Generic.List[string]]::new()
+    $service.Add("# Written by SharedDeploy's Install-BackupTimer at each deploy; the project's deploy")
+    $service.Add('# script holds its settings, so change them there.')
+    $service.Add('')
+    $service.Add('[Unit]')
+    $service.Add("Description=$Description")
+    $service.Add('')
+    $service.Add('[Service]')
+    $service.Add('Type=oneshot')
+    $service.Add("User=$user")
+    $service.Add("Group=$group")
+    if ($WorkingDirectory) { $service.Add("WorkingDirectory=$WorkingDirectory") }
+    if ($EnvironmentFile) { $service.Add("EnvironmentFile=-$EnvironmentFile") }
+    $service.Add("ExecStart=$execStart")
+    $service.Add('Nice=10')
+    $service.Add('TimeoutStartSec=30min')
+    $service.Add('')
+    $service.Add('# The same hardening as Kindred Nights'' backup.')
+    $service.Add('NoNewPrivileges=yes')
+    $service.Add('ProtectSystem=strict')
+    $service.Add("ReadWritePaths=$($ReadWritePath -join ' ')")
+    foreach ($line in @(
+            'ProtectHome=yes', 'PrivateTmp=yes', 'PrivateDevices=yes', 'ProtectKernelTunables=yes',
+            'ProtectKernelModules=yes', 'ProtectKernelLogs=yes', 'ProtectControlGroups=yes', 'ProtectClock=yes',
+            'ProtectHostname=yes', 'RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX', 'RestrictNamespaces=yes',
+            'RestrictRealtime=yes', 'RestrictSUIDSGID=yes', 'LockPersonality=yes', 'SystemCallFilter=@system-service',
+            'SystemCallArchitectures=native', 'MemoryDenyWriteExecute=yes', 'CapabilityBoundingSet=', 'UMask=0077',
+            '', 'StandardOutput=journal', 'StandardError=journal', "SyslogIdentifier=$unit"
+        )) { $service.Add($line) }
+    $timer = @(
+        "# Written by SharedDeploy's Install-BackupTimer at each deploy; a missed run happens at the next boot."
+        ''
+        '[Unit]'
+        "Description=$Description"
+        ''
+        '[Timer]'
+        "OnCalendar=$OnCalendar"
+        "RandomizedDelaySec=$RandomizedDelay"
+        'Persistent=true'
+        ''
+        '[Install]'
+        'WantedBy=timers.target'
+    )
+
+    $variable = [ordered]@{
+        unit         = $unit
+        service_text = ($service -join "`n")
+        timer_text   = ($timer -join "`n")
+        job          = $job
+        job_text     = $jobText
+        dir          = $Directory
+        owner        = $user
+        group        = $group
+    }
+    $body = @'
+service="/etc/systemd/system/$unit.service"
+timer="/etc/systemd/system/$unit.timer"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+printf '%s\n' "$service_text" > "$work/service"
+printf '%s\n' "$timer_text" > "$work/timer"
+targets="$service $timer"
+if [ -n "$job" ]; then printf '%s\n' "$job_text" > "$work/job"; targets="$targets $job"; fi
+if [ -n "$dir" ]; then
+  if [ -d "$dir" ]; then chown "$owner:$group" "$dir"; else install -d -m 700 -o "$owner" -g "$group" "$dir"; fi
+fi
+changed=
+cmp -s "$work/service" "$service" || changed=1
+cmp -s "$work/timer" "$timer" || changed=1
+if [ -n "$job" ]; then cmp -s "$work/job" "$job" || changed=1; fi
+state=unchanged
+if [ -n "$changed" ]; then
+  had=
+  if [ -f "$service" ]; then had=1; fi
+  for f in $targets; do
+    if [ -f "$f" ]; then cp -p "$f" "$work/old.$(basename "$f")"; fi
+  done
+  install -m 644 -o root -g root "$work/service" "$service"
+  install -m 644 -o root -g root "$work/timer" "$timer"
+  if [ -n "$job" ]; then
+    install -d -m 755 "$(dirname "$job")"
+    install -m 755 -o root -g root "$work/job" "$job"
+  fi
+  systemctl daemon-reload
+  echo "Running $unit once to check it..."
+  if ! systemctl start "$unit.service"; then
+    journalctl -u "$unit.service" -n 20 --no-pager >&2 || true
+    for f in $targets; do
+      if [ -f "$work/old.$(basename "$f")" ]; then cp -p "$work/old.$(basename "$f")" "$f"; else rm -f "$f"; fi
+    done
+    systemctl daemon-reload
+    if [ -n "$had" ]; then echo "$unit failed its first run, so the previous timer is back." >&2; else echo "$unit failed its first run, so no timer was installed." >&2; fi
+    exit 1
+  fi
+  journalctl -u "$unit.service" -n 1 -o cat --no-pager || true
+  if [ -n "$had" ]; then state=updated; else state=installed; fi
+  systemctl enable --quiet "$unit.timer"
+  systemctl restart "$unit.timer"
+else
+  systemctl enable --quiet --now "$unit.timer"
+fi
+next=$(systemctl show "$unit.timer" -p NextElapseUSecRealtime --value 2>/dev/null || true)
+echo "Backup timer $unit: $state; next run ${next:-not scheduled}."
+'@
+    $remote = Join-ShellScript -Variable $variable -Body @($body)
+    if ($AsScript) { return $remote }
+    Invoke-RemoteFlow -Connection $Connection -Script $remote -NoRetry:$NoRetry -FailureMessage "The backup timer $unit was not installed"
+}
+
+#endregion
+
 #region Development database
 
 function Copy-LiveDatabase {
@@ -3688,6 +4035,7 @@ Export-ModuleMember -Alias 'Fail' -Function @(
     'Restore-RemoteItemSet'
     'Export-PluginRepository'
     'Publish-PluginRepository'
+    'Install-BackupTimer'
     'Copy-LiveDatabase'
     'Invoke-SmokeCheck'
 )

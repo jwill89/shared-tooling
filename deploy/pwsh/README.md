@@ -15,7 +15,8 @@ Everything a deploy needs goes into ONE archive: the binary, systemd units, env 
 3. `Invoke-Upload` streams it to the host.
 4. One remote run unpacks it to a staging folder, checks the SHA-256 and file count, and only then runs the steps: `Install-ServiceBinary`, `Switch-RemoteDirectory`, `Switch-RemoteItemSet` or `Publish-PluginRepository` on their own, or several of them as `-AsStep` blocks of one `Invoke-DeployBundle`.
 5. `Invoke-SmokeCheck` fetches the site and, if it fails, runs the rollback.
-6. `Close-DeployConnection` in a `finally` block.
+6. For a project with a database: `Install-BackupTimer` keeps its daily backup installed and checked, and `Copy-LiveDatabase` pulls a copy to the dev machine, the one copy that leaves the droplet.
+7. `Close-DeployConnection` in a `finally` block.
 
 The droplet runs `ufw limit ssh`, which refuses an address after six connections in 30 seconds. This shape opens one: every command, upload and download rides the held connection, so a deploy with several targets (Senpan's backend, frontend and plugin) is one connection and one remote run, with no pauses between targets.
 
@@ -114,6 +115,10 @@ Plugins:
 
 - `Export-PluginRepository`: lays out a Dalamud repository folder locally, refuses a built version that differs from the index's, and cache-busts the download links with `?v=<version>`.
 - `Publish-PluginRepository`: on the host, refuses a version that is not higher than the published one, then swaps the repository folder in.
+
+Scheduled backup:
+
+- `Install-BackupTimer`: a daily systemd timer and its oneshot service, with Kindred Nights' hardening. It renders the units and the shared job, installs them only where they differ from the live copies (`cmp`), runs the service once to check them, and puts the previous copies back if that run fails. The shared job writes a `VACUUM INTO` copy of the live database, checks it with `PRAGMA integrity_check`, names it `<prefix>YYYY-MM-DD<suffix>` (UTC) and keeps 28 days, leaving every other file in its folder alone. `-Command` runs a project's own job instead (Kindred Nights' `kindred backup`). Call it after the smoke check.
 
 Development database:
 
@@ -297,6 +302,16 @@ The dev-database pull after a deploy, on the same connection:
 
 ```powershell
 if (-not $NoDbPull) { $null = Copy-LiveDatabase -Database '/opt/example/data/example.sqlite' -Destination (Join-Path $repoRoot 'devdata\example.sqlite') }
+```
+
+The daily backup and the dev-database pull, after the smoke check passes. The timer changes only when its settings do, so most deploys print "unchanged" and run nothing:
+
+```powershell
+Install-BackupTimer -Name 'example' -Database '/var/www/example.com/db/example.db' -Owner 'www-data'
+# A project with a backup command of its own:
+Install-BackupTimer -Name 'example' -Command '/opt/example/example backup' -Owner 'example' `
+    -EnvironmentFile '/etc/example/example.env' -WorkingDirectory '/opt/example' -ReadWritePath '/opt/example'
+if (-not $NoDbPull) { $null = Copy-LiveDatabase -Database '/var/www/example.com/db/example.db' -Destination (Join-Path $repoRoot 'devdata/example.db') }
 ```
 
 ## Checking the module
