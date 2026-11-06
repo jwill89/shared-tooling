@@ -36,7 +36,7 @@ Before each remote step the holder is checked; if it has exited, a new one start
 
 Nothing leaves a plink holding the connection: `Close-DeployConnection` stops it, `Fail` closes it before it exits, PowerShell's exit stops it, and the holder runs in a Windows job object that ends it with the PowerShell process, even one that was killed.
 
-Connection sharing is tested here against a stand-in plink only; it is untested against a real server until the pilot deploy.
+Connection sharing works against the droplet: Kindred Nights' v0.29.4 deploy (2026-11-05, the pilot) ran on one held connection, from the upload through the smoke check and the dev-database pull. The reconnect paths are still tested only against a stand-in plink.
 
 ## Importing it
 

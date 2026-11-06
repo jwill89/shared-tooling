@@ -352,8 +352,8 @@ Do what's urgent first, settle the decisions, build the tooling, and only then m
    - The Markdown config above becomes `lint/markdown`.
    - The helpers copied into the deploy scripts become the `deploy/pwsh` module.
    - TarotGen.io's coverage floors become the model for `test/web` and `test/php`, and the deploy scripts' existing health checks become the shared smoke step.
-5. **Pilot on Kindred Nights, then the Gallery.** Kindred has Go, Vue, C#, PowerShell, Markdown and CI that runs; the Gallery adds PHP. Home Library has no commits or remote yet, so its CI has never run and it can't show whether the shared workflows work.
-6. **Roll out one repo at a time**, one commit each: swap in the shared configs, point its CLAUDE.md at the standards, trim what moved there, and close that project's gaps (see Project gaps). Small fixes ride along: the SQLite switch in Senpan and Modem Monitor, jsdom, and Playwright for the résumé site.
+5. **Pilot on Kindred Nights, then the Gallery.** Kindred has Go, Vue, C#, PowerShell, Markdown and CI that runs; the Gallery adds PHP. Home Library has no commits or remote yet, so its CI has never run and it can't show whether the shared workflows work. Kindred's pilot is done (2026-11-05): its tooling is on shared-tooling v1.1.1 with CI passing, and v0.29.4 deployed on the shared module over one held connection. It found three shared bugs, fixed in v1.1.0 and v1.1.1; its plugin publish on the module is still to be run, at its next plugin release.
+6. **Roll out one repo at a time**, on `main`, with no separate branches: swap in the shared configs and move its deploy script onto the shared module together (decided 2026-11-05, after Kindred's pilot did them on two branches), point its CLAUDE.md at the standards, trim what moved there, and close that project's gaps (see Project gaps). Small fixes ride along: the SQLite switch in Senpan and Modem Monitor, jsdom, and Playwright for the résumé site.
 7. **Then the migrations, in this order:**
    1. TarotGen.io to Go, the first codebase built under the standards from its first commit.
    2. Senpan's API to huma, replacing its hand-written spec and kin-openapi.
