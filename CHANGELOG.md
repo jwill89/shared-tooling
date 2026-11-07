@@ -8,6 +8,8 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+## [2.1.3] - 2026-11-07
+
 ### Changed
 
 - `standards/performance.md` and `components.md`: a service worker never caches an API answer or anything per viewer, may cache content-hashed build files and media thumbnails (the Gallery's cache is the model), and leaves the app shell to the network, except an installable app that precaches it through Workbox's versioned precache with auto-update (Senpan's). The two files had disagreed: one said the worker caches nothing of the app.
