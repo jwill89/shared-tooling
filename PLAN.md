@@ -426,11 +426,11 @@ Do what's urgent first, settle the decisions, build the tooling, and only then m
      - Kindred's own `kindred backup` writes its daily copy compressed.
      - The Gallery's and TarotGen.io's deploy snapshots are the module's `Backup-RemoteDatabase`, and TarotGen.io's pull runs as www-data (`Copy-LiveDatabase -Owner`).
      - v2.0.0 also moved every project to Stylelint 18; TarotGen.io dropped `stylelint-config-recommended-scss` for `postcss-scss`.
-   - **Fantasy Dossier** (prepared 2026-11-07 on v2.1.1, not yet committed), the first rollout to take the standards from the start:
-     - The shared configs in place of the private `eslint-config` submodule, which is removed: with it gone no project uses `jwill89/eslint-config`, so the repo can be archived and its `ESLINT_CONFIG_TOKEN` secrets deleted.
+   - **Fantasy Dossier** (prepared 2026-11-07 on v2.1.4, not yet committed), the first rollout to take the standards from the start:
+     - The shared configs in place of the private `eslint-config` submodule, which is removed. With it gone no project uses `jwill89/eslint-config`: the owner archived the repo and deleted every `ESLINT_CONFIG_TOKEN` secret (2026-11-07), the last in Family Card Game.
      - CI on the shared workflows, with a release job; the deploy on SharedDeploy (a swap of `dist` and `.htaccess`, a smoke check through Cloudflare, rollback); a basic end-to-end suite with axe. It has no database, so no backup timer or pull.
      - Vitest specs moved to `src/__tests__/`, with the config in `vite.config.ts`; `noUncheckedIndexedAccess` found 29 places, now handled.
-     - Font Awesome stays on the per-style packages: the owner's kit carries only the regular and brand styles, and the site draws in solid.
+     - Font Awesome moved from the per-style Pro packages to the site's own kit, `@awesome.me/kit-4f2bd9b614` (classic solid and brands), made for it on 2026-11-07.
    - **Next:** the standards pass is done in the five rolled-out projects (2026-11-07): each has a CLAUDE.md importing `@AGENTS.md` and the guide, an AGENTS.md trimmed to what is its own, and a "Where this project departs from the standards" section listing what its code still does the old way. The remaining rollouts follow the standards from the start.
 7. **Then the migrations, in this order:**
    1. Senpan's API to huma, replacing its hand-written spec and kin-openapi.
