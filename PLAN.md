@@ -64,6 +64,7 @@ Decided 2026-11-06, after the Gallery's pilot:
 
 Decided 2026-11-07, where the projects' own docs disagreed (55 questions, now rules in `standards/`):
 
+- **Accessibility:** the target is WCAG 2.2 AAA, as Kindred Nights, Home Library and Senpan's themes already state it, falling back to AA only where AAA can't be met, with each such place a dated line in the project's decision log. axe in the end-to-end suites enforces the AA floor; AAA contrast is held by each project's own contrast test. (Corrected 2026-11-07: v2.1.0's guide named AA as the target.)
 - **First principle:** where a current, accepted RFC covers something (standards-track or a Best Current Practice, not obsoleted), every project follows it, since it is guidance the whole web already knows. A project that departs says why in its AGENTS.md. Timestamps are stored as RFC 3339 text in UTC, to the second (`2026-11-07T09:18:09Z`), in `DATETIME` columns with a `strftime` default and a CHECK that refuses any other form, and leave every API in that form. Date-only columns are `DATE`, holding `2026-11-07`; since the Go driver reads a `DATE` as midnight UTC, each Go project reads them through a small `Date` type that keeps the day, writes it back as text and documents it to huma as `format: date`. A missing date is `NULL`, not `''`. Tested on SQLite 3.54.1 and through modernc v1.61.1 and huma v2.40.0: the date functions read these forms, an index serves range queries, a `DATETIME` column reads into a `time.Time` that JSON writes back unchanged, a `DATE` column round-trips through the `Date` type as `2026-11-07`, and a `time.Time` passed as a parameter is refused by the CHECK. Kindred Nights' `business_date` and `sold_on` and Home Library's ten `*_on` columns (which use `''` for no date) move at their standards passes. Each project's existing timestamp columns move at its standards pass.
 
 - **API:** every Go service generates its OpenAPI spec with huma, and the PHP sites generate theirs from code and follow the same conventions. Errors are RFC 9457 problem details, in PHP too where possible; a failed validation answers 422; `PUT` replaces the whole resource and `PATCH` changes part of it; JSON fields and query parameters are camelCase; trailing slashes are accepted. Feeds and infinite scroll page by cursor, paged tables by limit and offset. Front-end API types come from the spec with openapi-typescript. Live events come from an in-process hub; a WebSocket event carries the new state and an SSE event names what changed. Cache headers are each project's call from a preferred baseline, with a stated reason to differ.
@@ -212,7 +213,7 @@ The copies have already drifted:
 | shared-tooling `lint/pwsh` | Lint PowerShell | PSScriptAnalyzer settings (9 copies in 6 versions today) | Every repo with scripts |
 | shared-tooling `lint/markdown` | Lint Markdown | One markdownlint config | All repos |
 | shared-tooling `deploy/pwsh` | Deploys | One PowerShell module for upload, atomic swap, health check and rollback | 14 deploy scripts |
-| shared-tooling `test/a11y` | Accessibility tests | axe checks for Playwright on every route; a WCAG 2.2 AA checklist | Every site with a UI |
+| shared-tooling `test/a11y` | Accessibility tests | axe checks for Playwright on every route, enforcing WCAG 2.2 AA, the floor under the AAA target | Every site with a UI |
 | shared-tooling `.github/workflows` | CI | Reusable workflows, one per stack, plus OSV-Scanner | All repos |
 | shared-tooling `repo` | Repo files | editorconfig, gitattributes, Dependabot, copied in by a sync task | All repos |
 | shared-components-vue (own repo) | UI components | Shared Vue components; see that repo's `PLAN.md` | Every Vue front end |
@@ -308,7 +309,7 @@ The material exists but is scattered: about 8,600 lines across 24 files, includi
 | `database.md` | SQLite settings, migrations, backups |
 | `api-and-realtime.md` | REST and OpenAPI conventions, and when to use SSE or WebSockets |
 | `security.md` | Headers and CSP, passkey sign-in, rate limits, client addresses behind Cloudflare, keeping secrets out of repos |
-| `accessibility.md` | The WCAG 2.2 AA rules behind the lint rules and the checklist |
+| `accessibility.md` | WCAG 2.2 AAA as the target and AA as the floor: the rules behind the lint rules, axe and the contrast tests |
 | `testing.md` | The testing standards described above |
 | `packages.md` | The Use / Don't use list per stack |
 | `deploy-and-ops.md` | Atomic swaps, smoke checks, systemd hardening, scheduled backups |

@@ -38,7 +38,7 @@ Every rule ends with how it is checked:
 | Mark | Meaning |
 | --- | --- |
 | [lint: tool rule] | A shared linter config fails the build: ESLint, Stylelint, golangci-lint, PHPStan, PHP CS Fixer, the .NET analyzers, PSScriptAnalyzer or markdownlint |
-| [axe] | Each site's end-to-end suite runs axe at WCAG 2.2 AA (`test/a11y`) |
+| [axe] | Each site's end-to-end suite runs axe (`test/a11y`), which enforces WCAG 2.2 AA, the floor under the AAA target |
 | [test] | A project's own tests hold it |
 | [CI] | A shared workflow checks it on every push |
 | [module] | The shared deploy module (`deploy/pwsh`) does it for every deploy |
@@ -61,7 +61,7 @@ A rule a tool can check belongs in the tool's config as well, which keeps this g
 | [packages.md](packages.md) | Adding or replacing a dependency |
 | [css.md](css.md) | Styles: tokens and colour, units, class naming, layout, motion, themes |
 | [components.md](components.md) | Building UI: reaching for the component kit, dialogs, lists, states |
-| [accessibility.md](accessibility.md) | Anything a person sees or operates: WCAG 2.2 AA in practice |
+| [accessibility.md](accessibility.md) | Anything a person sees or operates: WCAG 2.2 AAA as the target, AA as the floor |
 | [docs-and-agents.md](docs-and-agents.md) | README, CHANGELOG, PLAN and decision logs, versions and releases, commits, and the rules for coding agents |
 
 ## Changing a rule

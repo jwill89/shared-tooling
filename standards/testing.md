@@ -73,7 +73,7 @@ What every project tests, how it tests it, and where each stack keeps and runs i
 ## End-to-end (Playwright)
 
 - Each site's basic suite opens every main page by its address and checks that it shows its data. [test]
-- Every main page passes axe at WCAG 2.2 AA (`axeViolations` from `test/a11y`), with no page error and no CSP refusal. [axe]
+- Every main page passes axe at WCAG 2.2 AA, the floor under the AAA target (`axeViolations` from `test/a11y`), with no page error and no CSP refusal; [accessibility.md](accessibility.md) says how AAA is checked. [axe]
 - One more spec runs the key user flow. [review]
 - CI runs the suite through `e2e.yml`, after the backend and front-end jobs pass (the caller's `needs:`). [CI]
 - Specs find elements by role and label (`getByRole`, `getByLabel`), never by a Bulma, PrimeVue or Tailwind class, so they still pass when an app swaps in the component kit. [review]

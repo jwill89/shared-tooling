@@ -4,12 +4,14 @@ The accessibility rules every site with a UI meets, and how each is checked.
 
 ## Target and checks
 
-- The target is WCAG 2.2 AA on every site with a UI. [axe]
-- Every rolled-out project's end-to-end suite runs axe on its main pages through shared `test/a11y` (`axeViolations` with `WCAG_22_AA`, which adds axe's best practices) and expects no findings. [axe]
+- The target is WCAG 2.2 AAA on every site with a UI, in every colour scheme it has. [review]
+- Where a AAA criterion can't be met (a brand colour that can't reach it, a third-party widget, a criterion that doesn't fit the content), AA is the floor, and nothing falls below it. [axe]
+- Each place that meets only AA is a dated line in the project's decision log with its reason, never left silent (see [docs-and-agents.md](docs-and-agents.md)). [review]
+- AA is enforced: every rolled-out project's end-to-end suite runs axe on its main pages through shared `test/a11y` (`axeViolations` with `WCAG_22_AA`, which adds axe's best practices) and expects no findings. [axe]
 - The suite checks the app's own theme, in every colour scheme it has. [axe]
-- A project may aim higher by passing its own tags (`[...WCAG_22_AA, 'wcag2aaa']`), never lower. [axe]
+- AAA is checked where it can be: a project's own test computes every colour pair's contrast and level (see Colour and contrast), and the rest is review, since axe can't check every AAA criterion. [test]
+- A project whose pages meet AAA throughout adds axe's AAA rules to its run (`[...WCAG_22_AA, 'wcag2aaa']`), so a regression fails CI. [axe]
 - An element left out of an axe run (`exclude`) carries its reason at the call. [review]
-- A shortfall from the target that can't be helped is a dated line in the project's decision log, never left silent (see [docs-and-agents.md](docs-and-agents.md)). [review]
 - `lint/web` runs the recommended rules of `eslint-plugin-vuejs-accessibility` on Vue templates and of `eslint-plugin-jsx-a11y-x` on JSX, plus `vue/html-button-has-type`: alt text, labels, interactive roles, key events beside mouse events, an action as a `<button>` and never an `<a>` without `href`, a `type` on every button, and no `autofocus` without an exception. [lint: eslint vuejs-accessibility, jsx-a11y-x]
 - In React, an `<input>` with no label is caught by axe, since the `jsx-a11y-x` recommended set doesn't report it. [axe]
 - A fix is also checked in the browser (every rendered control has a name, no `for` points at nothing, clicking a label focuses its field), because the linter can't see a bug that spans components. [axe]
@@ -53,15 +55,16 @@ The accessibility rules every site with a UI meets, and how each is checked.
 
 ## Touch targets
 
-- The minimum touch target is 44 by 44 CSS px, larger than the 24 by 24 that WCAG 2.2 AA itself asks for and axe checks. [review]
+- The minimum touch target is 44 by 44 CSS px, WCAG 2.2's AAA criterion (2.5.5); the 24 by 24 that AA asks for, and axe checks, is the floor. [review]
 
 ## Colour and contrast
 
-- Text has at least 4.5:1 contrast against every surface it sits on, hover states and every colour scheme included. [axe]
+- Text reaches AAA contrast against every surface it sits on, hover states and every colour scheme included: 7:1 for body text, 4.5:1 for large text (24 px, or 18.66 px bold). [test]
+- Where the palette can't reach AAA, text never falls below AA, 4.5:1 for body text and 3:1 for large text, and the pair is a recorded exception. [axe]
 - Where a framework's default falls short, a token overrides it. [axe]
-- Control boundaries, focus rings and meaningful icons reach 3:1 against what is next to them. [review]
+- Control boundaries, focus rings and meaningful icons reach 3:1 against what is next to them; WCAG sets no AAA level for these, and a project may hold them higher. [review]
 - A colour that reaches only 3:1 is for borders and accents, never for text. [review]
-- A test computes the contrast of every token pair from the live theme, and each new pair is added to it; Home Library's `contrast.test.ts` is the model. [test]
+- A test computes the contrast and level of every token pair from the live theme, and fails a pair below AAA unless it is a recorded exception; each new pair is added to it. Home Library's `contrast.test.ts`, Senpan's `themetool check` for its themes, and Kindred's style guide page are the models. [test]
 - Colour is never the only cue: wherever colour marks a difference, a name or a symbol marks it too. [review]
 - The current page in the navigation is underlined as well as lit. [review]
 - Severity is shown by the background wash and the icon; an alert's text stays in the body text colour. [review]
@@ -71,7 +74,7 @@ How colours and tints are written is in [css.md](css.md).
 ## Text, motion and sound
 
 - Text follows the OS text size, since sizes are in `rem` (see [css.md](css.md)). [review]
-- Every animation and transition honours `prefers-reduced-motion` itself, not through one global rule; how is in [css.md](css.md). [review]
+- Every animation and transition honours `prefers-reduced-motion` itself, not through one global rule (WCAG 2.2's AAA criterion 2.3.3); how is in [css.md](css.md). [review]
 - Sound is an extra: audio has a mute toggle, and starts only after a first tap or key press. [review]
 - Nothing depends on vibration, which iOS Safari lacks. [review]
 

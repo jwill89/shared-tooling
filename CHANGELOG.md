@@ -8,6 +8,10 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+### Fixed
+
+- `standards/accessibility.md` named WCAG 2.2 AA as the target; the target is AAA, as Kindred Nights, Home Library and Senpan's themes already state it, with AA as the floor wherever AAA can't be met, and each such place recorded in the project's decision log. Text contrast is 7:1 for body text and 4.5:1 for large text, held by each project's own contrast test, with AA's 4.5:1 and 3:1 as the floor; touch targets of 44 px are AAA's 2.5.5. axe in `test/a11y` still enforces AA, the floor, and a project that meets AAA throughout adds axe's `wcag2aaa` rules. The guide's README and testing.md say the same.
+
 ## [2.1.0] - 2026-11-07
 
 ### Added
