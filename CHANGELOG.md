@@ -8,6 +8,8 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-11-07
+
 ### Changed
 
 - `lint/web`'s README says how a project with a template-only component (a `.vue` file with no `<script lang="ts">`) turns `tsStylistic` off for it: the set sits outside the base's Vue wrapper, so its type-aware rules fail to load on such a file. Found in Fantasy Dossier's rollout.
