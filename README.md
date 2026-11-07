@@ -42,6 +42,17 @@ tasks:
       - task: shared:deploy
 ```
 
+`task deploy` always deploys everything the project has, in order: the backend, then the front end, then a Dalamud plugin, which it publishes only when its version is new. A project whose parts ship separately adds one task per part for deploying it alone, and no `deploy:both` or `deploy:all` (`standards/deploy-and-ops.md`):
+
+```yaml
+  deploy:
+    desc: Deploy everything - the backend, then the frontend, then the plugin if its version is new
+    cmds:
+      - pwsh -NoProfile -File scripts/deploy.ps1 -Target main {{.CLI_ARGS}}
+      - pwsh -NoProfile -File scripts/deploy.ps1 -Target plugin -IfNewer {{.CLI_ARGS}}
+  deploy:backend:   # and deploy:frontend, deploy:plugin, each running one -Target
+```
+
 And per stack (each folder's README has the detail):
 
 - **Front end:** add `install-links=true` to its tracked `.npmrc`, `npm install -D ../shared/lint/web`, and point `eslint.config.ts`, `prettier.config.js`, `stylelint.config.js` and `tsconfig.app.json` at the package.

@@ -7,6 +7,12 @@
 # and its own tasks call them (`- task: shared:lint:scripts`). The project keeps its own
 # `deploy`, `lint`, `test`, `check` and the rest; `shared:deploy` is the plain form most
 # of them wrap. The names follow what the projects' Taskfiles already use.
+#
+# A project's `task deploy` deploys everything it has, in order: the backend, then the
+# front end, then the plugin (only when its version is new, the script's -IfNewer). A
+# project whose parts ship separately adds `deploy:backend`, `deploy:frontend` and
+# `deploy:plugin` for one part each, and has no `deploy:both` or `deploy:all`
+# (standards/deploy-and-ops.md). One whose parts ship in one archive keeps `deploy` alone.
 version: '3'
 
 vars:

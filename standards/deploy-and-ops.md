@@ -7,6 +7,8 @@ The shared deploy module (SharedDeploy, in `deploy/pwsh`) does most of a deploy.
 ## Running a deploy
 
 - A deploy runs from the owner's PC as `task deploy`, through the project's `scripts/deploy.ps1` on the module. [review]
+- `task deploy` deploys everything the project has, in order: the backend, then the front end (a new front end may call API the old backend lacks), then the plugin. Where the parts ship separately, each also deploys alone as `task deploy:backend`, `task deploy:frontend` and `task deploy:plugin`; there is no `deploy:both` or `deploy:all`. A project whose parts ship in one archive, or whose front end is inside its binary, has no `deploy:frontend`. [review]
+- The plugin step of `task deploy` publishes only a new version: one already published is skipped with a note (the script's `-IfNewer`), so a deploy that didn't raise the plugin's version still succeeds. `task deploy:plugin` refuses a version that isn't higher, since Dalamud updates to nothing else. [review]
 - CI builds and checks, but never deploys. [review]
 - The deploy machine has what the module's README lists under Requirements: PowerShell 7.4 or later, Windows' `tar.exe`, PuTTY's `plink` 0.85 or later, and a passphrase-protected key loaded in Pageant. [module]
 - Every host-specific setting (host, SSH user, key, paths, service name) comes from a parameter, then `$env:DEPLOY_*`, then the git-ignored `scripts/deploy.config.ps1`, copied from a tracked `deploy.config.example.ps1` (`Resolve-DeploySetting`). [module]

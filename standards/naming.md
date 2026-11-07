@@ -74,7 +74,7 @@ The full CSS rules, tokens included, are in [css.md](css.md).
 ## Tasks and releases
 
 - Taskfile tasks are lowercase, with `:` between a group and its task (`shared:update`, `package:windows`). [review]
-- Every project that deploys runs it as `task deploy`. [review]
+- Every project that deploys runs it as `task deploy`, which deploys everything; a part that deploys alone is `deploy:backend`, `deploy:frontend` or `deploy:plugin` (see [deploy-and-ops.md](deploy-and-ops.md)). [review]
 - A release is tagged `v` and its exact version (`v2.0.0`). No tag moves, so there is never a `v2`. [review]
 
 Versions, releases and the changelog are in [docs-and-agents.md](docs-and-agents.md).
