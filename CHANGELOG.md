@@ -8,6 +8,11 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+### Changed
+
+- `standards/components.md` has an Icons section: every icon is a `<font-awesome-icon>` (`icon="fa-solid fa-house"`, or `:icon` for one code holds), never an `<i class="fa-…">` element, a kit script or `dom.watch()`; only what Vue doesn't render draws an icon another way, as inline SVG; and an app's one icon register is checked by a test (the Gallery's `icons.spec.ts`, the Dossier's `integrity.spec.ts`).
+- `standards/packages.md`: a Font Awesome kit holds only the styles its sites import from, since every style adds about 10 MB to each download and downloads count against the account's monthly bandwidth (Senpan's all-styles kit was 201 MB, 42 MB once cut to its four). The owner assigns each site its kit, and several sites may share one: Fantasy Dossier, the Gallery and Home Library share `kit-4f2bd9b614`. Pro files are never committed, so a public repo may install a kit.
+
 ## [2.1.5] - 2026-11-07
 
 ### Fixed
