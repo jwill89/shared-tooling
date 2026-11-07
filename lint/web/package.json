@@ -1,6 +1,6 @@
 {
   "name": "@jwill89/lint-web",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Shared ESLint, Prettier, Stylelint and tsconfig for jwill89 front ends (Vue 3 + TypeScript, plus a React variant).",
   "type": "module",
   "license": "MIT",

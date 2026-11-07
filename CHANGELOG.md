@@ -8,6 +8,8 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-06
+
 ### Changed
 
 - The README says to add `<dir>/test-results/**` to a project's markdownlint ignores where an end-to-end suite runs: a failed run leaves Playwright's notes there as Markdown, which failed the Gallery's `task lint` locally.
