@@ -1,6 +1,6 @@
 {
   "name": "@jwill89/test-a11y",
-  "version": "2.1.3",
+  "version": "2.1.4",
   "description": "axe accessibility checks for Playwright tests, at WCAG 2.2 AA.",
   "type": "module",
   "license": "MIT",
