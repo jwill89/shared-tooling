@@ -8,6 +8,8 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+## [2.1.7] - 2026-11-07
+
 ### Changed
 
 - `task deploy` deploys everything a project has, in order: the backend, then the front end, then a Dalamud plugin, which it publishes only when its version is new (the deploy script's `-IfNewer`, so a deploy that didn't raise the plugin's version still succeeds). Where the parts ship separately, `deploy:backend`, `deploy:frontend` and `deploy:plugin` deploy one each, and `deploy:both` and `deploy:all` are gone. `standards/deploy-and-ops.md` and `naming.md`, `repo/Taskfile.yml`'s header and README.md say so. Senpan, TarotGen.io and Kindred Nights moved to it; `task deploy` used to deploy only Senpan's and TarotGen.io's front end.
