@@ -63,8 +63,10 @@ export default defineConfigWithVueTs(
         },
       ],
       // Types, interfaces and enums are PascalCase. Not applied to variables or
-      // object properties: API models are snake_case (media_id, tag_name) and mirror
-      // the JSON, so constraining those would be noise.
+      // object properties: API fields are camelCase by the standards
+      // (standards/naming.md), but the generated API types mirror each API's JSON, and
+      // older APIs keep snake_case fields until they move, so constraining those would
+      // fail them.
       '@typescript-eslint/naming-convention': [
         'error',
         { selector: 'typeLike', format: ['PascalCase'] },

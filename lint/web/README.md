@@ -17,7 +17,7 @@
 | `@jwill89/lint-web/tsconfig.app.json` | `@vue/tsconfig`'s DOM base with unused locals and parameters and switch fallthrough checked. |
 | `@jwill89/lint-web/tsconfig.node.json` | The Node-side files: Vite, Vitest and Playwright configs. |
 
-The curated rules: `prefer-const`, `no-param-reassign`, `eqeqeq` (smart), `curly` (all), `object-shorthand`, `no-console` (warn and error allowed), `consistent-type-imports`, `no-unused-vars` (a leading `_` opts out), `naming-convention` (PascalCase for types and enum members only, so snake_case API models stay as the JSON has them), `restrict-template-expressions` (numbers and booleans allowed), `no-confusing-void-expression` (arrow shorthand allowed), and `label-has-for` satisfied by nesting or by `for`/`id`.
+The curated rules: `prefer-const`, `no-param-reassign`, `eqeqeq` (smart), `curly` (all), `object-shorthand`, `no-console` (warn and error allowed), `consistent-type-imports`, `no-unused-vars` (a leading `_` opts out), `naming-convention` (PascalCase for types and enum members only, so API types stay as each API's JSON has them: camelCase by the standards, snake_case in older APIs until they move), `restrict-template-expressions` (numbers and booleans allowed), `no-confusing-void-expression` (arrow shorthand allowed), and `label-has-for` satisfied by nesting or by `for`/`id`.
 
 `curly` comes back on after Prettier's conflict list. In the old eslint-config, Prettier's list was last and switched it off, so it never ran; expect new findings when a project moves over (`eslint --fix` adds the braces).
 
@@ -67,7 +67,7 @@ The project holds shared-tooling as a submodule at `shared/`, so from a front en
 
    export default {
      extends: ['@jwill89/lint-web/stylelint'],
-     rules: paletteRules('Use a tokens.css colour: var(--x), or rgb(var(--x-rgb) / a) for a tint'),
+     rules: paletteRules('Use a tokens.css colour: var(--x), or color-mix(in srgb, var(--x) N%, transparent) for a tint'),
      overrides: [{ files: ['src/assets/tokens.css'], rules: { 'color-no-hex': null } }],
    }
    ```

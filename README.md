@@ -20,6 +20,7 @@ Folders are named `<purpose>/<target>`. A project uses only the folders for the 
 | `test/php` | `coverage-check.php` (the floor for a clover report) and a base `phpunit.xml.dist` | The PHP projects |
 | `repo` | `editorconfig` and `gitattributes`, copied in by `Sync-RepoFiles.ps1`; `Taskfile.yml`, the tasks every repo includes; `Update-SharedTooling.ps1` and `Test-SharedVersion.ps1`, which move a project to a release and check it stayed there; `dependabot.example.yml` | Every repo |
 | `.github/workflows` | Reusable workflows: `web.yml`, `e2e.yml`, `go.yml`, `php.yml`, `dotnet.yml`, `pwsh.yml`, `docs.yml`, `osv.yml` | Every repo's CI |
+| [`standards`](standards/README.md) | The rules every project follows, by area, each marked with how it is checked; `README.md` is the index | Every repo's `CLAUDE.md` imports `@shared/standards/README.md` |
 
 ## Adding it to a project
 

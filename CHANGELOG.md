@@ -8,8 +8,13 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+### Added
+
+- `standards/`: the rules every project follows, for the owner and for coding agents, in 13 files by area (code style, naming, API and realtime, security, performance, database, deploy and operations, testing, packages, CSS, components, accessibility, docs and agents), with `standards/README.md` as the index. They were gathered from every project's own AGENTS.md, CLAUDE.md, CONTRIBUTING.md, plans and decision logs, and the 55 places where those disagreed were decided by the owner (2026-11-07; PLAN.md lists them). Each rule says how it is checked: a linter, axe, a test, CI, the deploy module, or review. A project's `CLAUDE.md` imports `@shared/standards/README.md`, and its own docs keep only what is specific to it. Above every area sits one principle: where a current, accepted RFC (standards-track or a Best Current Practice, not obsoleted) covers something, the projects follow it, and a project that departs says why. So timestamps are stored as RFC 3339 text in UTC (`DATETIME` columns, a `strftime` default and a CHECK that refuses any other form; date-only columns are `DATE`, read in Go through a small `Date` type), which SQLite's date functions read, its indexes sort in time order, Go reads as a `time.Time`, and the API sends in the same form.
+
 ### Changed
 
+- `lint/web`'s comments and README follow the standards: API fields are camelCase (older APIs keep snake_case until they move, which is why `naming-convention` still leaves properties alone), and a tint is written `color-mix()`; the palette rule still accepts the older `rgb(var(--x-rgb) / a)` form. No rule changed.
 - `repo/dependabot.example.yml` skips vue-tsc 3.3.14, which writes a `//` in a static template attribute as broken virtual code and stops checking the rest of that template (vuejs/language-tools#6322): it reported four false errors in Kindred Nights and could hide real ones. Each Vue project pins vue-tsc at 3.3.13 until the fix ships (2026-11-07).
 - `repo/dependabot.example.yml` says to give the Font Awesome registry no `scope:`. With one, Dependabot writes its own `.npmrc` in place of the project's, which loses `install-links=true`, so its lockfile records `lint/web` and `test/a11y` as links and `npm ci` fails: TarotGen.io's npm pull request #12.
 
