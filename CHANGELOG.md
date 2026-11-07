@@ -8,6 +8,8 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+## [2.1.5] - 2026-11-07
+
 ### Fixed
 
 - `web.yml` and `e2e.yml` no longer fetch every Font Awesome package again whenever the lockfile changes. A changed lockfile (a bumped package, a shared-tooling release, a Dependabot branch) used to miss both caches, since setup-node's npm cache matches only its exact key, so each run downloaded the kit afresh: 50 Font Awesome installs across four repos in the first week of November. npm's download cache is now its own cache that falls back to the newest earlier copy, and `npm ci --prefer-offline` fetches only the packages that changed, so a Font Awesome package is downloaded again only when its own version changes.

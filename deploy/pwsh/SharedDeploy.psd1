@@ -1,6 +1,6 @@
 @{
     RootModule           = 'SharedDeploy.psm1'
-    ModuleVersion        = '2.1.4'
+    ModuleVersion        = '2.1.5'
     GUID                 = 'b0ff08a1-40b7-4d93-9ce6-4b21fc3f3eb1'
     Author               = 'James Will'
     Copyright            = '(c) 2026 James Will'
