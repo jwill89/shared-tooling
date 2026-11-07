@@ -57,6 +57,8 @@ Decided 2026-11-06, after the Gallery's pilot:
 - Each rollout adds a basic end-to-end suite that CI runs: the main pages load, axe passes, and one key flow works. Deeper tests come later.
 - End-to-end suites find elements by role and label (`getByRole`, `getByLabel`), never by a Bulma or PrimeVue class, so they still pass when an app swaps in the component kit. An app adopts the kit only after its rollout, and never in the same pass as a backend change, so the suite checks one side at a time.
 - TarotGen.io stays on PHP and Slim, reversing the port to Go: Go would make no page measurably faster, Slim 4 still ships security releases, and it's a PHP example worth keeping beside the Gallery's Laravel (section 3). If its plugin's share relay returns over WebSockets, that is a small Go service beside the PHP app.
+- Every backup kept on the droplet is compressed: the daily copies and the deploys' pre-deploy snapshots, as gzip, each checked (`PRAGMA integrity_check`, then `gzip -t`) before it takes its place; every restore decompresses. The module does it from v1.3.0. Two copies outside the module follow: the Gallery's own deploy snapshots, and Kindred's `kindred backup`.
+- TarotGen.io's schema changes move from untracked one-off scripts to Phinx migrations its deploy runs, starting from a baseline of today's schema. It is the more public, heavily used site, where the Gallery stays on Laravel's own migrations.
 - After the pilots, the rollout order is Senpan, Marxbot, TarotGen.io, then `standards/` and the rest. Senpan and Marxbot go first because they have no scheduled backup; TarotGen.io no longer waits for a port. The three get their CLAUDE.md pointer to the standards once `standards/` exists.
 
 No questions are open.
@@ -327,7 +329,7 @@ You already get Rust where it pays off most, in your tools: Vite 8's bundler (Ro
 
 ## Project gaps
 
-Most gaps are missing CI, Dependabot and post-deploy checks. The riskiest are the SQLite apps with no scheduled backup: Marxbot has none at all, and Senpan snapshots its database only when it deploys, until its 2026-11-06 changes land. The Gallery was the third, until its own. No secrets are committed: the two tracked `.npmrc` files hold only the registry address, and every deploy config and `.env` file is ignored.
+Most gaps are missing CI, Dependabot and post-deploy checks. The riskiest were the three SQLite apps with no scheduled backup, the Gallery, Senpan and Marxbot, until their 2026-11-06 changes: each deploy now installs a daily backup. No secrets are committed: the two tracked `.npmrc` files hold only the registry address, and every deploy config and `.env` file is ignored.
 
 Every repo gets a CLAUDE.md that points at the standards during rollout, so that's left out of the table. So does a Taskfile with `task deploy`: twelve projects have one that isn't committed yet, and MathDad Landing Page, Zealot Gaming, shared-components-vue and shared-tooling have none.
 
@@ -340,7 +342,7 @@ Every repo gets a CLAUDE.md that points at the standards during rollout, so that
 | Home Library | First commit and a remote, changelog | Nothing is committed until 1.0.0 by your choice, so its CI has never run |
 | IDE Résumé Site | CI, Dependabot, changelog | Moves from Puppeteer to Playwright |
 | Kindred Nights | None once its 2026-11-06 changes land | The pilot |
-| Marxbot Discord Bot | Changelog, scheduled database backup |  |
+| Marxbot Discord Bot | None once its 2026-11-06 changes land |  |
 | MathDad Landing Page | CI, deploy script | Static page |
 | MirageGO | Not tracked here | Outside shared-tooling: its tooling stays bespoke |
 | Modem Monitor | Changelog | Desktop app: no deploy; it builds installers per platform instead |
@@ -357,12 +359,12 @@ Every repo gets a CLAUDE.md that points at the standards during rollout, so that
 Do what's urgent first, settle the decisions, build the tooling, and only then migrate. Migrating first would mean writing new code, such as Senpan's huma API, to today's mixed conventions, then reworking it once the standards exist.
 
 1. **Protect money and data first.**
-   - Fix the droplet's memory: measure, set `pm = ondemand`, add swap (section 4).
+   - Fix the droplet's memory: measure, set `pm = ondemand`, add swap (section 4). The owner found it fine on 2026-11-06, so `pm` stays as it is until memory tightens: `ondemand` saves idle memory at the cost of a cold start on the first PHP request after a quiet spell.
    - Scheduled database backups for Senpan, the Gallery and Marxbot: they become a shared piece, from Kindred's backup timer, and land with each project's rollout in step 6, the Gallery's first (decided 2026-11-06).
 2. **Get every project into a known state.**
-   - Put Conlang Translator in git; its folder has no repo.
-   - Archive `jwill89/devbox` on GitHub, which also stops its Monday image builds and its Dependabot updates. The local Devkit Box folder is already removed.
-   - Move `SQL Backups` out of Web Projects. It holds old WordPress tables, users among them, which a Claude Code session opened there would read.
+   - Put Conlang Translator in git; its folder has no repo. Not yet, by the owner's choice (2026-11-06): its memory work comes first, moving the most-used lookups into SQLite so WordNet needn't stay loaded, and that shapes the repo.
+   - Archive `jwill89/devbox` on GitHub. Done: the owner removed it (2026-11-06).
+   - Move `SQL Backups` out of Web Projects. Done (2026-11-06).
 3. **Gather the standards into `standards/` in this repo** (github.com/jwill89/shared-tooling, public). Claude Code sorts each rule as shared, project-only or conflicting and brings you the conflicts. It comes after the rollouts of Senpan, Marxbot and TarotGen.io (decided 2026-11-06), which take their CLAUDE.md pointer then.
 4. **Seed shared-tooling from what you already have; no new rules yet.**
    - The eslint-config becomes `lint/web`, plus a React variant for Family Card Game.
@@ -379,11 +381,16 @@ Do what's urgent first, settle the decisions, build the tooling, and only then m
    - Axe found real problems in both, and the apps fixed them. The Gallery lacked a `main` landmark and names on three icon-only buttons, its sign-in and sign-up pages had no `h1`, and its muted text was under 4.5:1. Kindred's front and not-found pages had no `h1`.
    - Both deployed with them on 2026-11-06, the Gallery from `02a8ba8` and Kindred as v0.30.0. The droplet ran both kinds of backup timer: the shared job (the Gallery) and a project's own command (Kindred). Both database pulls came down. Both suites passed in CI, the shared `e2e.yml`'s first runs: the Gallery's with PHP, Kindred's with Go and Font Awesome Pro.
 6. **Roll out one repo at a time**, on `main`, with no separate branches. Everything shared-tooling can do lands in one pass: swap in the shared configs, move its deploy script onto the shared module, turn on its scheduled backup and database pull, and add its basic end-to-end suite, together (decided 2026-11-05, after Kindred's pilot did them on two branches; backups added 2026-11-06). Point its CLAUDE.md at the standards, trim what moved there, and close that project's gaps (see Project gaps). Small fixes ride along: the SQLite switch in Senpan and Modem Monitor, jsdom, and Playwright for the résumé site. After the pilots, the order is Senpan, Marxbot, TarotGen.io, then the rest (decided 2026-11-06).
-   - **Senpan** (prepared 2026-11-06, not yet committed):
+   - **Senpan** (done 2026-11-06, `20605df`, CI green with every shared job and its end-to-end suite; not yet deployed on the module):
      - Everything shared-tooling can do, in one pass: the shared configs and CI, Dependabot, the deploy on SharedDeploy with an HTTP smoke check and rollback, the daily backup, the database pull, and a basic end-to-end suite of 10 tests.
      - The SQLite driver moved to modernc. modernc returns `DATETIME` columns as `time.Time` where ncruces returned the stored text, so every read now casts to text, and a test guards it.
      - Roslynator went, since the shared analyzers cover it.
      - Its API types, which tygo generates from the Go models, are now committed and checked by a small job of Senpan's own, as Kindred's are. So the shared web job needs no Go, and Senpan stays on v1.2.0. The move to huma comes next, on its own (decided 2026-11-06); it changes only the generator.
+     - Its pre-push hook, which ran the whole gate before every push, is gone: CI is the gate, as in the other projects (decided 2026-11-06).
+   - **Marxbot** (done and deployed 2026-11-06, `ac94cf5`: running as `marxbot`, with its backup timer and the database pull):
+     - The shared configs and CI, the deploy on SharedDeploy, the daily backup, the database pull, and a changelog. With no UI, it has no end-to-end suite. With no HTTP endpoint, the check after a start is that the bot is still running ten seconds later.
+     - It runs as a fixed `marxbot` user instead of `DynamicUser=yes`, so the backup can run as it (decided 2026-11-06). The owner mirrors the unit's edits into the untracked `deploy/marxbot.service`, which holds the token, then deploys once with `-InstallService`.
+     - The SQLite pragmas moved into the connection string: a connection reopened after a timed-out query had lost its busy timeout.
 7. **Then the migrations, in this order:**
    1. Senpan's API to huma, replacing its hand-written spec and kin-openapi.
    2. The component kit, following its own plan in shared-components-vue.

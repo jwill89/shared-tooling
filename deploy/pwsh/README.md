@@ -27,7 +27,7 @@ Single-file uploads (`Send-File`, `Send-FileVerified`) stay for the rare case th
 - PowerShell 7.4 or later (`CompatiblePSEditions = 'Core'`), on Windows.
 - PuTTY's `plink` 0.85 or later (connection sharing), on PATH or in `C:\Program Files\PuTTY`, with the key loaded in Pageant if it has a passphrase. pscp is not used.
 - Windows' own `tar.exe` for `Compress-DeployArchive`.
-- On the host: bash, systemd, GNU coreutils (`sha256sum`, `sort -V`), `sqlite3` for database snapshots, `curl` for `-HealthUrl`, and `apachectl` for a vhost.
+- On the host: bash, systemd, GNU coreutils (`sha256sum`, `sort -V`, `stat`), `sqlite3` and `gzip` for database snapshots and backups, `curl` for `-HealthUrl`, and `apachectl` for a vhost.
 
 ## The one connection
 
@@ -101,8 +101,8 @@ The remote run:
 
 Service binaries:
 
-- `Install-ServiceBinary`: for one service or a set: checks first (the binary and units are in the upload, the health URL can be built, a changed vhost passes `apachectl configtest`), then stops them, keeps `<binary>.old`, snapshots the database with `sqlite3 .backup` (newest three kept), installs the units that differ (compared with `cmp`) and the binary, restarts, checks (every service active, or `-HealthUrl` answers, with parts read from the env file), and rolls everything back together on failure.
-- `Restore-ServiceBinary`: puts the previous binary, units, vhost and optionally the newest database snapshot back after a failed smoke check.
+- `Install-ServiceBinary`: for one service or a set: checks first (the binary and units are in the upload, the health URL can be built, a changed vhost passes `apachectl configtest`), then stops them, keeps `<binary>.old`, snapshots the database with `sqlite3 .backup`, checked and compressed with gzip before anything is installed (newest three kept), installs the units that differ (compared with `cmp`) and the binary, restarts, checks (every service active, or `-HealthUrl` answers, with parts read from the env file), and rolls everything back together on failure.
+- `Restore-ServiceBinary`: puts the previous binary, units, vhost and optionally the newest database snapshot back after a failed smoke check, compressed or, from before 2026-11-06, not.
 
 Folder swaps:
 
@@ -118,15 +118,39 @@ Plugins:
 
 Scheduled backup:
 
-- `Install-BackupTimer`: a daily systemd timer and its oneshot service, with Kindred Nights' hardening. It renders the units and the shared job, installs them only where they differ from the live copies (`cmp`), runs the service once to check them, and puts the previous copies back if that run fails. The shared job writes a `VACUUM INTO` copy of the live database, checks it with `PRAGMA integrity_check`, names it `<prefix>YYYY-MM-DD<suffix>` (UTC) and keeps 28 days, leaving every other file in its folder alone. `-Command` runs a project's own job instead (Kindred Nights' `kindred backup`). Call it after the smoke check.
+- `Install-BackupTimer`: a daily systemd timer and its oneshot service, with Kindred Nights' hardening. It renders the units and the shared job, installs them only where they differ from the live copies (`cmp`), runs the service once to check them, and puts the previous copies back if that run fails. The shared job writes a `VACUUM INTO` copy of the live database, checks it with `PRAGMA integrity_check`, compresses it with gzip and checks that (`gzip -t`), names it `<prefix>YYYY-MM-DD<suffix>.gz` (UTC) and keeps 28 days, leaving every other file in its folder alone. `-Command` runs a project's own job instead (Kindred Nights' `kindred backup`). Call it after the smoke check.
 
 Development database:
 
-- `Copy-LiveDatabase`: an online `sqlite3 .backup` on the host, a checked download, three timestamped local copies kept, the host's copy removed; warns and skips if the local database is in use.
+- `Copy-LiveDatabase`: an online `sqlite3 .backup` on the host, a checked download, three timestamped local copies kept, the host's copy removed; warns and skips if the local database is in use. The host's copy lives only for the pull, so it is not compressed.
 
 Smoke check:
 
 - `Invoke-SmokeCheck`: fetches each URL from this machine, checks its status (200 unless given) and optional text, tries each up to `-Attempts` times; on a failure runs `-Rollback` and throws. It needs `-Rollback`, or `-NoRollback` for a deploy with nothing to undo.
+
+## Backups on the droplet
+
+Every backup the module keeps on the droplet is compressed with gzip (decided 2026-11-06). Each is written to a `.partial` file, checked with `PRAGMA integrity_check`, compressed to another `.partial`, checked with `gzip -t`, and only then renamed into place, with no uncompressed copy left behind.
+
+| What | Name before 2026-11-06 | Name now | Kept |
+| --- | --- | --- | --- |
+| `Install-ServiceBinary -Database`'s snapshot, taken after the stop | `<SnapshotPrefix><yyyyMMdd-HHmmss><SnapshotSuffix>` | the same, then `.gz` | the newest three, across both forms |
+| `Install-BackupTimer`'s shared job, daily | `<Prefix>YYYY-MM-DD<Suffix>` | the same, then `.gz` | 28 days, both forms pruned by date |
+
+The prefix defaults are `<Database>.pre-` and `<Name>-`. Only names of exactly these forms are pruned, compressed or restored; nothing else in the folders is touched, apart from a run's own `.partial` files.
+
+Older copies need nothing done by hand. The daily job's first run after the change, which the next deploy triggers since the job changed, compresses every uncompressed dated copy and keeps its time. Old snapshots stay as they are: a restore takes the newest snapshot of either form, and they age out over the next three deploys.
+
+To put one back by hand, stop the service, remove the database's `-wal` and `-shm`, and decompress into the database file in place, which keeps its owner and mode:
+
+```sh
+systemctl stop example
+rm -f /opt/example/data/example.sqlite-wal /opt/example/data/example.sqlite-shm
+gunzip -c /opt/example/data/backups/example-2026-11-06.sqlite.gz > /opt/example/data/example.sqlite
+systemctl start example
+```
+
+`Install-ServiceBinary` prints these commands, with its snapshot's paths, after a rollback in a project that has not opted into `-RestoreDatabaseOnRollback`, and the shared job's script on the host carries them, with its paths, in its header. A project's own backup command (`-Command`) keeps its own copies, so compressing them is up to that command.
 
 ## Before and after
 

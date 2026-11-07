@@ -611,6 +611,40 @@ function ConvertTo-HealthScript {
     $lines -join "`n"
 }
 
+function Get-SnapshotShell {
+    <#
+    .SYNOPSIS
+    Shell functions for the pre-deploy database snapshots, shared by Install-ServiceBinary and Restore-ServiceBinary: list them newest first, and put one back.
+    #>
+    @'
+# The snapshots in $snap_prefix<yyyyMMdd-HHmmss>$snap_suffix form, newest written first:
+# .gz since 2026-11-06, uncompressed before. Only names of exactly that form count, so a
+# .partial or anything else beside them is never taken for one.
+snapshots() {
+  for f in "$snap_prefix"[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]"$snap_suffix" \
+    "$snap_prefix"[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]"$snap_suffix.gz"; do
+    if [ -f "$f" ]; then printf '%s %s\n' "$(stat -c %Y "$f")" "$f"; fi
+  done | sort -k 1,1nr | cut -d ' ' -f 2-
+}
+# Puts snapshot $1 back as the live database $db, written into the file in place so its
+# owner and mode stay, once the stale -wal and -shm are gone. A .gz is tested whole first.
+restore_snapshot() {
+  case "$1" in
+    *.gz)
+      if ! command -v gzip >/dev/null; then echo "gzip is not installed on the host, so $1 cannot be put back." >&2; return 1; fi
+      if ! gzip -t "$1" 2>/dev/null; then echo "$1 is damaged (gzip -t failed), so it was not put back." >&2; return 1; fi
+      rm -f "$db-wal" "$db-shm"
+      gunzip -c "$1" > "$db"
+      ;;
+    *)
+      rm -f "$db-wal" "$db-shm"
+      cat "$1" > "$db"
+      ;;
+  esac
+}
+'@
+}
+
 function Get-DirectorySwapStep {
     <#
     .SYNOPSIS
@@ -2051,13 +2085,14 @@ function Install-ServiceBinary {
     and Home Library each write, with the most careful step of each, for one service or a
     set of them. The binary, units and vhost travel in the deploy's one archive, uploaded
     before anything stops (decided 2026-11-05). In order:
-      - checks before anything stops: the binary and units are in the upload; the health
-        URL can be built; the vhost, where it differs, is installed and must pass
-        apachectl configtest, or it is put back and the deploy stops with nothing else changed;
+      - checks before anything stops: the binary and units are in the upload; with
+        -Database, sqlite3 and gzip are installed; the health URL can be built; the vhost,
+        where it differs, is installed and must pass apachectl configtest, or it is put
+        back and the deploy stops with nothing else changed;
       - every listed service stops (a missing one is tolerated), and from here to the start
         a trap brings them back up on what is in place if a step fails;
-      - <Binary>.old keeps the current binary; with -Database, sqlite3 .backup takes a
-        snapshot and the newest three are kept (decided 2026-11-05);
+      - <Binary>.old keeps the current binary; with -Database, the database is snapshotted
+        (below) and the newest three snapshots are kept (decided 2026-11-05);
       - each unit that differs from the live one (compared with cmp) is installed, the
         previous kept as <name>.old (mode kept, so 600 stays 600), and systemd reloaded;
         a new unit's service is enabled, and the first service whenever its own unit changed;
@@ -2072,8 +2107,20 @@ function Install-ServiceBinary {
       - on success, Apache reloads if the vhost changed, changed units that are not services
         (timers) get try-restart, and -NoBackup removes the .old copies.
 
+    The snapshot is <SnapshotPrefix><yyyyMMdd-HHmmss><SnapshotSuffix>.gz, compressed like
+    every backup kept on the droplet (decided 2026-11-06). sqlite3 .backup writes it whole
+    to <snapshot without .gz>.partial, PRAGMA integrity_check must pass, gzip writes
+    <snapshot>.partial, gzip -t must pass, and only then is it renamed into place and the
+    uncompressed copy removed, all before anything is installed; if any of it fails, the
+    services come back up on what is in place and nothing is installed. The newest three
+    are kept across both forms: the .gz ones and the uncompressed ones deploys took before
+    2026-11-06, which age out over the next three deploys. Nothing else matching the prefix
+    is touched. A restore writes the database in place (gunzip -c, or cat for an
+    uncompressed one), after removing its -wal and -shm. By hand, with the service stopped:
+      rm -f <Database>-wal <Database>-shm && gunzip -c <snapshot> > <Database>
+
     Hooks run under set -e with these shell variables set: services, main, bin, old, bundle,
-    db, snap, health. A hook may set health.
+    db, snap (the snapshot's .gz path), health. A hook may set health.
 
     .PARAMETER ServiceName
     The systemd services, restarted and rolled back together. The first is the binary's
@@ -2134,19 +2181,20 @@ function Install-ServiceBinary {
     The umask for the whole step, so snapshots and copies are for root alone (Home Library: 077).
 
     .PARAMETER Database
-    The live SQLite database on the host, snapshotted with sqlite3 .backup after the stop.
+    The live SQLite database on the host, snapshotted with sqlite3 .backup after the stop
+    and compressed with gzip.
 
     .PARAMETER SnapshotPrefix
     The snapshot's path up to its time stamp, such as /opt/example/backups/example-pre-.
     By default <Database>.pre- (Senpan).
 
     .PARAMETER SnapshotSuffix
-    What follows the time stamp, such as .sqlite.
+    What follows the time stamp, such as .sqlite; .gz follows it.
 
     .PARAMETER RestoreDatabaseOnRollback
     Put the snapshot back on a rollback, since the new binary may have migrated the schema
     before it fell over (Kindred Nights, Home Library). Opt-in per project (decided
-    2026-11-05); without it, the command to do so is printed (Senpan).
+    2026-11-05); without it, the command to do so (gunzip -c) is printed (Marxbot).
 
     .PARAMETER AfterStop
     Shell run just after the stop, before the backup and snapshot.
@@ -2305,7 +2353,8 @@ function Install-ServiceBinary {
         if (-not $SnapshotPrefix) { $SnapshotPrefix = "$Database.pre-" }
         if ("$SnapshotPrefix$SnapshotSuffix" -match "'") { throw 'The snapshot path cannot hold a single quote (it goes into sqlite3 .backup).' }
     }
-    $snapshot = if ($Database) { $SnapshotPrefix + (Get-Date -Format 'yyyyMMdd-HHmmss') + $SnapshotSuffix } else { '' }
+    $snapshot = if ($Database) { $SnapshotPrefix + (Get-Date -Format 'yyyyMMdd-HHmmss') + $SnapshotSuffix + '.gz' } else { '' }
+    $snapshotShell = if ($Database) { Get-SnapshotShell } else { '' }
 
     $variable = [ordered]@{
         services    = $ServiceName -join ' '
@@ -2341,6 +2390,11 @@ if [ ! -f "$bundle/$src" ]; then echo "The upload has no $src." >&2; exit 3; fi
 for u in $units; do
   if [ ! -f "$bundle/$u" ]; then echo "The upload has no $u." >&2; exit 3; fi
 done
+if [ -n "$db" ] && [ -f "$db" ]; then
+  for t in sqlite3 gzip; do
+    if ! command -v "$t" >/dev/null; then echo "$t is not installed on the host, so the database cannot be snapshotted; nothing was changed." >&2; exit 3; fi
+  done
+fi
 rev=
 service_units=
 for s in $services; do rev="$s $rev"; service_units="$service_units $s.service"; done
@@ -2363,8 +2417,9 @@ if [ -n "$vhost" ]; then
 fi
 for s in $rev; do systemctl stop "$s" 2>/dev/null || true; done
 # Whatever fails from here to the start, the services come back up on what is in place,
-# and a vhost Apache has not loaded yet goes back.
+# a vhost Apache has not loaded yet goes back, and a snapshot cut short is removed.
 abort_restart() {
+  if [ -n "${snap_raw:-}" ]; then rm -f "$snap_raw" "$snap_part"; fi
   if [ -n "$vhost_changed" ]; then
     if [ -f "$vhost_live.old" ]; then cp -p "$vhost_live.old" "$vhost_live"; else rm -f "$vhost_live"; fi
   fi
@@ -2377,10 +2432,20 @@ trap abort_restart EXIT
     $install = @'
 if [ -f "$bin" ]; then cp -p "$bin" "$old"; fi
 if [ -n "$db" ] && [ -f "$db" ]; then
+  # Whole and checked, then compressed and checked, before anything is installed.
   mkdir -p "$(dirname "$snap")"
-  sqlite3 "$db" ".backup '$snap'"
-  ls -1t "$snap_prefix"*"$snap_suffix" 2>/dev/null | tail -n +4 | xargs -r -d '\n' rm -f --
-  echo "Database snapshot: $snap"
+  snap_raw="${snap%.gz}.partial"
+  snap_part="$snap.partial"
+  rm -f "$snap_raw" "$snap_part"
+  sqlite3 "$db" ".backup '$snap_raw'"
+  verdict=$(sqlite3 "$snap_raw" 'PRAGMA integrity_check;')
+  if [ "$verdict" != ok ]; then echo "The database snapshot failed its integrity check, so nothing was installed: $verdict" >&2; exit 4; fi
+  gzip -c "$snap_raw" > "$snap_part"
+  gzip -t "$snap_part"
+  mv -f "$snap_part" "$snap"
+  rm -f "$snap_raw"
+  snapshots | tail -n +4 | xargs -r -d '\n' rm -f --
+  echo "Database snapshot: $snap ($(du -h "$snap" | cut -f1))"
 fi
 mkdir -p "$(dirname "$bin")" "$unit_dir"
 changed_units=
@@ -2445,11 +2510,13 @@ if [ -n "$failed" ]; then
   fi
   if [ -n "$snap" ] && [ -f "$snap" ]; then
     if [ -n "$restore_db" ]; then
-      rm -f "$db-wal" "$db-shm"
-      cat "$snap" > "$db"
-      echo 'The database is back as the snapshot before the deploy left it.' >&2
+      if restore_snapshot "$snap"; then
+        echo 'The database is back as the snapshot before the deploy left it.' >&2
+      else
+        echo "The database could not be put back from $snap; check it before the services run on it." >&2
+      fi
     else
-      echo "If the previous binary refuses the database the new one migrated, put the snapshot back: systemctl stop $main && rm -f $db-wal $db-shm && cat $snap > $db && systemctl start $main" >&2
+      echo "If the previous binary refuses the database the new one migrated, put the snapshot back: systemctl stop $main && rm -f $db-wal $db-shm && gunzip -c $snap > $db && systemctl start $main" >&2
     fi
   fi
 '@
@@ -2472,7 +2539,7 @@ if [ -n "$no_backup" ]; then
 fi
 echo "Active:$started"
 '@
-    $step = Join-ShellScript -Variable $variable -Body @($health, $check, $AfterStop, $install, $BeforeStart, $start, $OnRollback, $restart, $AfterSuccess, $finish)
+    $step = Join-ShellScript -Variable $variable -Body @($health, $snapshotShell, $check, $AfterStop, $install, $BeforeStart, $start, $OnRollback, $restart, $AfterSuccess, $finish)
     if ($AsStep) { return $step }
     Invoke-DeployBundle -Archive $Archive -Sha256 $Sha256 -ExpectedFileCount $ExpectedFileCount -Step $step -AsScript:$AsScript -Connection $Connection -NoRetry:$NoRetry
 }
@@ -2490,6 +2557,13 @@ function Restore-ServiceBinary {
     the services and checks they are active. The scripts that kept a .old binary printed
     this as the manual rollback (Family Card Game, Marxbot, Nophica, Senpan). Needs the .old
     file, so it does nothing useful after Install-ServiceBinary -NoBackup. One connection.
+
+    The newest snapshot is the one written last of those Install-ServiceBinary names
+    <SnapshotPrefix><yyyyMMdd-HHmmss><SnapshotSuffix>.gz and, from deploys before
+    2026-11-06, the same names without .gz; nothing else matching the prefix is taken for
+    one. A .gz must pass gzip -t, then is decompressed into the database file in place (an
+    uncompressed one is copied in), after the database's -wal and -shm are removed. If it
+    cannot be put back, the services still start on the previous binary and this fails.
 
     .PARAMETER ServiceName
     The systemd services, as given to Install-ServiceBinary.
@@ -2524,7 +2598,7 @@ function Restore-ServiceBinary {
     The snapshots' path up to the time stamp; by default <Database>.pre-.
 
     .PARAMETER SnapshotSuffix
-    What follows the time stamp.
+    What follows the time stamp (and comes before .gz), as given to Install-ServiceBinary.
 
     .PARAMETER SettleSeconds
     How long to wait before the is-active check.
@@ -2625,14 +2699,15 @@ if [ -n "$vhost_live" ] && [ -f "$vhost_live.old" ]; then
   cp -p "$vhost_live.old" "$vhost_live"
   systemctl reload "$reload_svc" || echo "$reload_svc did not reload after the vhost went back." >&2
 fi
+db_failed=
 if [ -n "$db" ]; then
-  snap=$(ls -1t "$snap_prefix"*"$snap_suffix" 2>/dev/null | head -n 1)
-  if [ -n "$snap" ]; then
-    rm -f "$db-wal" "$db-shm"
-    cat "$snap" > "$db"
+  snap=$(snapshots | head -n 1)
+  if [ -z "$snap" ]; then
+    echo "No snapshot matches $snap_prefix<time>$snap_suffix(.gz); the database is left as it is." >&2
+  elif restore_snapshot "$snap"; then
     echo "Database restored from $snap"
   else
-    echo "No snapshot matches $snap_prefix*$snap_suffix; the database is left as it is." >&2
+    db_failed=1
   fi
 fi
 '@
@@ -2648,9 +2723,11 @@ for s in $started; do
   if ! systemctl is-active --quiet "$s"; then down="$down $s"; journalctl -u "$s" -n 30 --no-pager >&2 || true; fi
 done
 if [ -n "$down" ]; then echo "Did not come back up on the previous binary:$down" >&2; exit 1; fi
+if [ -n "$db_failed" ]; then echo "Back on the previous binary:$started, but the database was not put back from $snap." >&2; exit 1; fi
 echo "Back on the previous binary:$started"
 '@
-    $script = Join-ShellScript -Variable $variable -Body @($restore, $OnRollback, $start)
+    $snapshotShell = if ($Database) { Get-SnapshotShell } else { '' }
+    $script = Join-ShellScript -Variable $variable -Body @($snapshotShell, $restore, $OnRollback, $start)
     if ($AsScript) { return $script }
     Invoke-RemoteFlow -Connection $Connection -Script $script -NoRetry:$NoRetry -FailureMessage "Rolling $($ServiceName -join ', ') back failed on the host"
 }
@@ -3410,11 +3487,26 @@ function Install-BackupTimer {
       - the timer is enabled and started, re-armed if it changed, and its next run printed.
 
     The shared job copies the live SQLite database with VACUUM INTO, which reads it
-    consistently while the app keeps writing, WAL included. The copy is checked with PRAGMA
-    integrity_check before it takes the day's name, <Prefix>YYYY-MM-DD<Suffix> (UTC), in
-    -Directory; a second run the same day replaces that day's copy. Dated copies older than
-    -Keep days are removed and nothing else in the folder is touched, so a deploy's own
-    snapshots may share it as long as their names never take that dated form.
+    consistently while the app keeps writing, WAL included, to <copy>.partial. The copy is
+    checked with PRAGMA integrity_check, then compressed with gzip, like every backup kept
+    on the droplet (decided 2026-11-06): gzip writes <copy>.gz.partial, gzip -t checks it,
+    and only then does it take the day's name, <Prefix>YYYY-MM-DD<Suffix>.gz (UTC), in
+    -Directory, with no uncompressed copy left behind. A second run the same day replaces
+    that day's copy. If the copy fails its check, or sqlite3 or gzip is missing, the run
+    fails and the earlier copies stay as they are.
+
+    Then, dated copies older than -Keep days are removed, compressed or not, and each dated
+    copy still uncompressed (the job wrote them so before 2026-11-06) is compressed the same
+    way, keeping its time, so the first run after this change converts them all. Nothing
+    else in the folder is touched, so a deploy's own snapshots may share it as long as their
+    names never take that dated form. The run's log line gives the day's copy, its size
+    compressed and not, and how many copies were removed and converted.
+
+    To put a copy back, stop the app's service, remove the database's -wal and -shm, and
+    decompress the copy into the database file in place, which keeps its owner and mode:
+      rm -f <Database>-wal <Database>-shm && gunzip -c <copy>.gz > <Database>
+    then start the service again. The job's own header on the host gives the line with
+    its paths.
 
     Call it after the smoke check, so a deploy that rolls back changes no backup. The
     service carries Kindred Nights' hardening (ProtectSystem=strict, UMask=0077 and the
@@ -3436,14 +3528,15 @@ function Install-BackupTimer {
     What the copies' names start with; by default <Name>-.
 
     .PARAMETER Suffix
-    What the copies' names end with; by default the database's own extension, such as .sqlite.
+    What follows the date in the copies' names, before .gz; by default the database's own
+    extension, such as .sqlite.
 
     .PARAMETER Keep
     Days of copies kept: 28 unless set, as in Kindred Nights.
 
     .PARAMETER Command
     The project's own backup command, run instead of the shared job (Kindred Nights'
-    `kindred backup`), which then keeps its own copies and pruning.
+    `kindred backup`), which then keeps its own copies, pruning and compression.
 
     .PARAMETER EnvironmentFile
     An env file the service reads, optional at run time (EnvironmentFile=-), for -Command.
@@ -3573,32 +3666,64 @@ function Install-BackupTimer {
         $jobBody = @'
 if [ ! -f "$db" ]; then echo "No database at $db." >&2; exit 1; fi
 if ! command -v sqlite3 >/dev/null; then echo 'sqlite3 is not installed on the host.' >&2; exit 1; fi
+if ! command -v gzip >/dev/null; then echo 'gzip is not installed on the host.' >&2; exit 1; fi
 day=$(date -u +%Y-%m-%d)
-dest="$dir/$prefix$day$suffix"
+copy="$dir/$prefix$day$suffix"
+dest="$copy.gz"
+raw="$copy.partial"
 part="$dest.partial"
+conv=
 mkdir -p "$dir"
-rm -f "$part"
-trap 'rm -f "$part"' EXIT
+rm -f "$raw" "$part"
+trap 'rm -f "$raw" "$part" ${conv:+"$conv"}' EXIT
 # VACUUM INTO reads the live database consistently while the app keeps writing, WAL included.
-sqlite3 "$db" "VACUUM INTO '$part'"
-verdict=$(sqlite3 "$part" 'PRAGMA integrity_check;')
+sqlite3 "$db" "VACUUM INTO '$raw'"
+verdict=$(sqlite3 "$raw" 'PRAGMA integrity_check;')
 if [ "$verdict" != ok ]; then echo "The copy failed its integrity check, so the earlier copies stay as they are: $verdict" >&2; exit 1; fi
+size=$(du -h "$raw" | cut -f1)
+gzip -c "$raw" > "$part"
+gzip -t "$part"
 mv -f "$part" "$dest"
-trap - EXIT
+# The day's copy is now the .gz alone, replacing one an earlier run wrote uncompressed.
+rm -f "$raw" "$copy"
+# Dated copies older than $keep days go, in either form. Nothing else in the folder is touched.
 cutoff=$(date -u -d "$keep days ago" +%Y-%m-%d)
 pruned=0
-for f in "$dir/$prefix"[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]"$suffix"; do
-  [ -e "$f" ] || continue
-  d=${f#"$dir/$prefix"}
-  d=${d%"$suffix"}
-  if [[ "$d" < "$cutoff" ]]; then rm -f -- "$f"; pruned=$((pruned + 1)); fi
+for ending in "$suffix" "$suffix.gz"; do
+  for f in "$dir/$prefix"[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]"$ending"; do
+    [ -e "$f" ] || continue
+    d=${f#"$dir/$prefix"}
+    d=${d%"$ending"}
+    if [[ "$d" < "$cutoff" ]]; then rm -f -- "$f"; pruned=$((pruned + 1)); fi
+  done
 done
-echo "Backup: $dest ($(du -h "$dest" | cut -f1)); $pruned older removed."
+# Copies written uncompressed, before 2026-11-06, are compressed the same way, keeping their
+# time; one whose .gz is already whole (a run cut off before the rm) just loses the original.
+converted=0
+for f in "$dir/$prefix"[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]"$suffix"; do
+  [ -f "$f" ] || continue
+  if [ ! -f "$f.gz" ] || ! gzip -t "$f.gz" 2>/dev/null; then
+    conv="$f.gz.partial"
+    gzip -c "$f" > "$conv"
+    gzip -t "$conv"
+    touch -r "$f" "$conv"
+    mv -f "$conv" "$f.gz"
+    conv=
+    converted=$((converted + 1))
+  fi
+  rm -f -- "$f"
+done
+note=
+if [ "$converted" -gt 0 ]; then note="; $converted earlier copies compressed"; fi
+echo "Backup: $dest ($(du -h "$dest" | cut -f1) compressed, $size uncompressed); $pruned older removed$note."
 '@
         $jobLines = [System.Collections.Generic.List[string]]::new()
         $jobLines.Add('#!/bin/bash')
         $jobLines.Add("# $Description, written by SharedDeploy's Install-BackupTimer at each deploy.")
         $jobLines.Add("# Change the project's deploy script, not this file: the next deploy rewrites it.")
+        $jobLines.Add("# Each day's copy is $Directory/$Prefix<YYYY-MM-DD>$Suffix.gz (UTC), $Keep days kept. To put")
+        $jobLines.Add("# one back, stop the app's service, run this line, then start the service again:")
+        $jobLines.Add("#   rm -f $Database-wal $Database-shm && gunzip -c $Directory/$Prefix<YYYY-MM-DD>$Suffix.gz > $Database")
         $jobLines.Add('set -euo pipefail')
         foreach ($key in $jobVariable.Keys) { $jobLines.Add("$key=$(ConvertTo-ShellLiteral -Value $jobVariable[$key])") }
         $jobLines.Add($jobBody)

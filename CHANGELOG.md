@@ -12,6 +12,12 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 - The README says to add `<dir>/test-results/**` to a project's markdownlint ignores where an end-to-end suite runs: a failed run leaves Playwright's notes there as Markdown, which failed the Gallery's `task lint` locally.
 - PLAN.md: TarotGen.io stays on PHP and Slim (decided 2026-11-06), and the rollout order after the pilots is Senpan, Marxbot, TarotGen.io, then `standards/` and the rest.
+- `deploy/pwsh`: every database backup the module keeps on the droplet is compressed with gzip (decided 2026-11-06). Each is checked with `PRAGMA integrity_check`, compressed to a `.partial`, checked with `gzip -t`, then renamed into place, with no uncompressed copy left.
+  - `Install-BackupTimer`'s shared job writes `<prefix>YYYY-MM-DD<suffix>.gz`, and fails clearly if gzip is missing. Each run prunes both forms by date and compresses any dated copy still uncompressed, keeping its time; nothing else in the folder is touched. The log line gives the sizes compressed and not. The job's header on the host says how to put a copy back with `gunzip -c`. The units are unchanged, but the job is not, so each project's next deploy runs it once, which converts the old copies.
+  - `Install-ServiceBinary -Database` writes `<SnapshotPrefix><time><SnapshotSuffix>.gz`, checked before anything is installed; a failed check brings the services back up with nothing installed. It also checks that `sqlite3` and `gzip` are on the host before anything stops. The newest three are kept across both forms, so the old uncompressed snapshots age out over three deploys.
+  - Every restore (`-RestoreDatabaseOnRollback`, `Restore-ServiceBinary -Database`) takes the newest snapshot of either form, by when it was written, tests a `.gz` with `gzip -t`, then decompresses it into the database file in place. The command printed for a project without `-RestoreDatabaseOnRollback` uses `gunzip -c`. `Restore-ServiceBinary` now fails, after starting the services, if the snapshot could not be put back.
+  - Snapshots are matched by their exact time-stamped name, so a `.partial`, or a `.gz` when the suffix is empty, is never taken for one.
+  - No project needs to change its calls. `Copy-LiveDatabase` is unchanged: its host copy is removed after each pull.
 
 ### Fixed
 
