@@ -8,6 +8,8 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-06
+
 This is a major: every project's own Stylelint moves to 18 when it takes it.
 
 ### Added
