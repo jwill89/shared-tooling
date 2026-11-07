@@ -11,6 +11,11 @@ Every change to shared-tooling, by release. A project takes a release with `task
 ### Added
 
 - `LICENSE`: the MIT license, which `lint/web`'s and `test/a11y`'s `package.json` already declared. It covers this repo only; the projects that hold it as a submodule keep their own.
+- Dependabot for this repo (`.github/dependabot.yml`): weekly updates for the GitHub Actions the reusable workflows pin, `lint/web`'s and `test/a11y`'s npm packages, and `lint/go`'s Go modules, which no project can update through its submodule. They reach the projects with the next release.
+
+### Changed
+
+- `repo/dependabot.example.yml` ignores the majors of ESLint, Prettier and Stylelint, and of `eslint-*` and `stylelint-*` packages, besides TypeScript's. A major of a tool `lint/web` owns moves once, in shared-tooling, with its plugins and configs; it failed in each project on its own: Stylelint 18 against `lint/web`'s Stylelint 17 configs, in TarotGen.io and Senpan.
 
 ## [1.3.0] - 2026-11-06
 

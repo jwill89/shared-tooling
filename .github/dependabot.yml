@@ -1,0 +1,44 @@
+# Weekly updates for what shared-tooling pins for every project: the GitHub Actions its
+# reusable workflows use, lint/web's and test/a11y's npm packages, and lint/go's Go
+# modules. Projects can't update these themselves, since they reach them through the
+# shared/ submodule; a merged update reaches them with the next release (`task release`,
+# then `task shared:update` in each). Minors and patches come grouped, one pull request
+# per ecosystem; majors one by one.
+#
+# A tool lint/web declares as a peer (ESLint, Prettier, Stylelint, TypeScript) moves
+# here, never in a project (projects ignore its majors). Dependabot doesn't update peer
+# ranges, so its next major shows up as its plugins' and configs' majors, such as a
+# stylelint-config-standard that needs Stylelint 18; that change raises the peer range
+# in lint/web/package.json with them.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions-minor:
+        patterns: ['*']
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directories:
+      - /lint/web
+      - /test/a11y
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      npm-minor:
+        patterns: ['*']
+        update-types: [minor, patch]
+
+  - package-ecosystem: gomod
+    directory: /lint/go
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      go:
+        patterns: ['*']
