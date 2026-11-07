@@ -8,6 +8,8 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+## [2.1.6] - 2026-11-07
+
 ### Changed
 
 - `standards/components.md` has an Icons section: every icon is a `<font-awesome-icon>` (`icon="fa-solid fa-house"`, or `:icon` for one code holds), never an `<i class="fa-…">` element, a kit script or `dom.watch()`; only what Vue doesn't render draws an icon another way, as inline SVG; and an app's one icon register is checked by a test (the Gallery's `icons.spec.ts`, the Dossier's `integrity.spec.ts`).
