@@ -76,16 +76,25 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version-file: ${{ inputs.node-version-file || format('{0}/.nvmrc', inputs.dir) }}
-          cache: npm
-          cache-dependency-path: ${{ inputs.dir }}/package-lock.json
 
-      # The same key as web.yml's, so a run after the web job restores its install.
+      # The same keys as web.yml's, so a run after the web job restores its install, and
+      # on a miss npm's download cache comes back from the newest earlier run, so only
+      # changed packages are fetched (see web.yml).
       - name: Restore dependencies
         id: deps
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: ${{ inputs.dir }}/node_modules
           key: node-modules-${{ runner.os }}-${{ hashFiles(format('{0}/package-lock.json', inputs.dir), format('{0}/.nvmrc', inputs.dir), 'shared/lint/web/*.js', 'shared/lint/web/*.json', 'shared/test/a11y/*.js', 'shared/test/a11y/*.json') }}
+
+      - name: Restore the npm cache
+        id: npm-cache
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles(format('{0}/package-lock.json', inputs.dir)) }}
+          restore-keys: npm-${{ runner.os }}-
 
       - name: Font Awesome registry
         if: inputs.fontawesome && steps.deps.outputs.cache-hit != 'true'
@@ -103,6 +112,21 @@ jobs:
         if: steps.deps.outputs.cache-hit != 'true'
         working-directory: ${{ inputs.dir }}
         run: npm ci --prefer-offline
+
+      # Saved at once, so a failing suite doesn't throw the download away.
+      - name: Save dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ inputs.dir }}/node_modules
+          key: ${{ steps.deps.outputs.cache-primary-key }}
+
+      - name: Save the npm cache
+        if: steps.deps.outputs.cache-hit != 'true' && steps.npm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.npm
+          key: ${{ steps.npm-cache.outputs.cache-primary-key }}
 
       # Nothing after the install needs the registry, so the token goes before any of
       # the project's own code runs.

@@ -71,19 +71,31 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version-file: ${{ inputs.node-version-file || format('{0}/.nvmrc', inputs.dir) }}
-          cache: npm
-          cache-dependency-path: ${{ inputs.dir }}/package-lock.json
 
-      # Every Font Awesome kit download counts against the account's allowance, so
-      # node_modules comes back whole while nothing it was built from has changed, and
-      # the install runs only on a miss. The shared packages are copied in at install
-      # (install-links), so their files are part of the key.
+      # Every Font Awesome download counts against the account's monthly bandwidth, so a
+      # package is fetched from the registry once, not once per run. node_modules comes
+      # back whole while nothing it was built from has changed; the shared packages are
+      # copied in at install (install-links), so their files are part of its key.
       - name: Restore dependencies
         id: deps
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: ${{ inputs.dir }}/node_modules
           key: node-modules-${{ runner.os }}-${{ hashFiles(format('{0}/package-lock.json', inputs.dir), format('{0}/.nvmrc', inputs.dir), 'shared/lint/web/*.js', 'shared/lint/web/*.json', 'shared/test/a11y/*.js', 'shared/test/a11y/*.json') }}
+
+      # When something has changed (a bumped package, a shared-tooling release, a
+      # Dependabot branch), npm's download cache comes back from the newest earlier run,
+      # this branch's or the default branch's, and `npm ci --prefer-offline` takes every
+      # package it already holds from there. Only what changed is fetched, so a Font
+      # Awesome package is downloaded again only when its own version changes.
+      - name: Restore the npm cache
+        id: npm-cache
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles(format('{0}/package-lock.json', inputs.dir)) }}
+          restore-keys: npm-${{ runner.os }}-
 
       - name: Font Awesome registry
         if: inputs.fontawesome && steps.deps.outputs.cache-hit != 'true'
@@ -100,6 +112,22 @@ jobs:
       - name: Install
         if: steps.deps.outputs.cache-hit != 'true'
         run: npm ci --prefer-offline
+
+      # Saved as soon as the install is done, not when the job ends, so a step that fails
+      # later doesn't throw the download away and send the next run back to the registry.
+      - name: Save dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ inputs.dir }}/node_modules
+          key: ${{ steps.deps.outputs.cache-primary-key }}
+
+      - name: Save the npm cache
+        if: steps.deps.outputs.cache-hit != 'true' && steps.npm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.npm
+          key: ${{ steps.npm-cache.outputs.cache-primary-key }}
 
       # Nothing after the install needs the registry, so the token goes before any of
       # the project's own code runs.
