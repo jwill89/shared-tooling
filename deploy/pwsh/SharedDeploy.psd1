@@ -39,6 +39,7 @@
         'Restore-RemoteDirectory'
         'Switch-RemoteItemSet'
         'Restore-RemoteItemSet'
+        'Backup-RemoteDatabase'
         'Export-PluginRepository'
         'Publish-PluginRepository'
         'Install-BackupTimer'

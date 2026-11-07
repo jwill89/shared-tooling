@@ -107,9 +107,12 @@ It checks out the tag in `shared/`, then hands over to that release's own copy o
 - points every shared workflow ref at the tag;
 - re-syncs `.editorconfig` and `.gitattributes`, if the project has adopted them;
 - rewrites each `.golangci.yml` the template made;
-- re-installs `@jwill89/lint-web` and `@jwill89/test-a11y` wherever they're used.
+- wherever `@jwill89/lint-web` or `@jwill89/test-a11y` is used, first raises the project's own copy of any of their peers (ESLint, Prettier, Stylelint and TypeScript for `lint/web`, Playwright for `test/a11y`) that falls outside the range the release declares, with `npm install -D <tool>@<range>`;
+- then re-installs the packages.
 
-Review the diff and commit it as one change. `-- v1.2.0 -SkipInstall` leaves npm and the Go configs alone. `task shared:version:check` runs the same check CI does.
+A release that raises a peer's range, as v2.0.0 raises Stylelint to 18, would otherwise leave the project uninstallable: npm refuses the new package beside the old tool. Raised first, the tool only overrides the old package's peer, with an `ERESOLVE overriding peer dependency` warning, until the next install replaces that package. Only a tool the project lists in its own `devDependencies` is raised, and only when the version its lockfile holds is outside the range; one pinned to an exact version stays pinned (`--save-exact`), and the script names each one it raises. A project's own plugin that still needs the old tool (TarotGen.io's `stylelint-config-recommended-scss`, on Stylelint 17) fails that first install until the project drops or replaces it; the CHANGELOG says so for that release.
+
+Review the diff and commit it as one change. `-- v1.2.0 -SkipInstall` leaves npm, the peers included, and the Go configs alone. `task shared:version:check` runs the same check CI does.
 
 A release for one stack moves the submodule for every project that takes it, but a project that doesn't use that folder sees nothing different.
 

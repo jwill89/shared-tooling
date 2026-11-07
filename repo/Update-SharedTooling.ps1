@@ -16,8 +16,18 @@
       - points every shared workflow ref in .github/workflows at that tag;
       - re-syncs .editorconfig and .gitattributes, when they carry the project marker;
       - rewrites each .golangci.yml the shared template made;
-      - re-installs @jwill89/lint-web and @jwill89/test-a11y where a package.json uses
-        them, so npm takes the new copy.
+      - where a package.json uses @jwill89/lint-web or @jwill89/test-a11y, first raises
+        the project's own copy of any of their peers (lint/web's ESLint, Prettier,
+        Stylelint and TypeScript, test/a11y's Playwright) that falls outside the range
+        the release declares, with `npm install -D <tool>@<range>`;
+      - then re-installs the packages, so npm takes the new copy.
+
+    A release that raises a peer, such as v2.0.0's Stylelint 18, would otherwise leave
+    the project uninstallable: npm refuses the new package beside the old tool. Raised
+    first, the tool only overrides the old package's peer, with a warning, until the
+    next install replaces that package. Only a peer the project lists in its own
+    devDependencies is raised, and only when the version its lockfile holds is outside
+    the range; one pinned to an exact version stays pinned.
 
     It commits nothing: review `git diff`, then commit it as one change.
 
@@ -25,8 +35,8 @@
     The release to move to, such as v1.1.0 (the v is optional).
 
 .PARAMETER SkipInstall
-    Leave npm and the Go configs alone; move only the submodule, the refs and the repo
-    files.
+    Leave npm and the Go configs alone, peers included; move only the submodule, the
+    refs and the repo files.
 
 .EXAMPLE
     task shared:update -- v1.1.0
@@ -44,6 +54,123 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Whether a version, such as 17.16.0, is in an npm range, such as ^18.0.0, ~6.0.3,
+# >=1.2 <2, 1.x or `a || b`. A prerelease is ordered as SemVer orders it, without npm's
+# extra rule that keeps prereleases out of most ranges.
+function Test-VersionRange {
+    param([string] $Version, [string] $Range)
+
+    $have = [semver] ($Version -replace '^[v=]')
+    foreach ($set in $Range -split '\|\|') {
+        # `1.2 - 2` is `>=1.2 <=2`, and `>= 1.2` is `>=1.2`.
+        $set = $set.Trim() -replace '^(\S+)\s+-\s+(\S+)$', '>=$1 <=$2' -replace '(<=|>=|<|>|=|\^|~>?)\s+', '$1'
+        $unmet = @($set -split '\s+' | Where-Object { $_ -and -not (Test-VersionComparator -Have $have -Comparator $_) })
+        if ($unmet.Count -eq 0) {
+            return $true
+        }
+    }
+    $false
+}
+
+# One comparator of a range: ^1.2.3, ~1.2, >1, <=2.0, 1.x, 1.2.3 or *.
+function Test-VersionComparator {
+    param([semver] $Have, [string] $Comparator)
+
+    if ($Comparator -notmatch '^(?<op><=|>=|<|>|=|\^|~>?)?v?(?<ver>(?:\d+|[xX*])(?:\.(?:\d+|[xX*])){0,2}(?<pre>[-+][\w.+-]+)?)?$') {
+        throw "Can't read '$Comparator' as a version range."
+    }
+    $op = [string] $Matches.op
+    $pre = [string] $Matches.pre
+    # The numbers given, up to the first x or the end: 1.2.x gives 1 and 2.
+    $parts = @()
+    foreach ($part in ([string] $Matches.ver -replace '[-+].*') -split '\.') {
+        if ($part -notmatch '^\d+$') {
+            break
+        }
+        $parts += [int] $part
+    }
+    if ($parts.Count -eq 0) {
+        # *, x or a bare operator.
+        return $op -notin '<', '>'
+    }
+    $major = $parts[0]
+    $minor = $parts.Count -gt 1 ? $parts[1] : 0
+    $patch = $parts.Count -gt 2 ? $parts[2] : 0
+    $low = [semver] ("$major.$minor.$patch" + ($parts.Count -eq 3 ? $pre : ''))
+    # Where a partial version ends: 1.2 before 1.3.0, 1 before 2.0.0.
+    $past = switch ($parts.Count) {
+        1 { [semver] "$($major + 1).0.0" }
+        2 { [semver] "$major.$($minor + 1).0" }
+    }
+    switch -Regex ($op) {
+        '^>$' { return $past ? $Have -ge $past : $Have -gt $low }
+        '^>=$' { return $Have -ge $low }
+        '^<$' { return $Have -lt $low }
+        '^<=$' { return $past ? $Have -lt $past : $Have -le $low }
+        '^\^$' {
+            $past = if ($major -gt 0 -or $parts.Count -eq 1) {
+                "$($major + 1).0.0"
+            } elseif ($minor -gt 0 -or $parts.Count -eq 2) {
+                "0.$($minor + 1).0"
+            } else {
+                "0.0.$($patch + 1)"
+            }
+        }
+        '^~' { $past = $parts.Count -eq 1 ? "$($major + 1).0.0" : "$major.$($minor + 1).0" }
+        '^=?$' {
+            if (-not $past) {
+                return $Have -eq $low
+            }
+        }
+    }
+    $Have -ge $low -and $Have -lt [semver] $past
+}
+
+# The `<tool>@<range>` specs that bring a project's own copies of the shared packages'
+# peers into the ranges this release declares: a peer the project lists in its
+# devDependencies, at a version outside the range. The version is the lockfile's, else
+# the installed copy's, else the lowest the project's package.json allows. Exact says
+# the project pins the tool to one version (Kindred Nights does), so it stays pinned.
+function Get-PeerSpec {
+    param([string] $Directory, [string[]] $Package)
+
+    $own = (Get-Content -Raw -LiteralPath (Join-Path $Directory 'package.json') | ConvertFrom-Json -AsHashtable).devDependencies
+    if (-not $own) {
+        return
+    }
+    $lockFile = Join-Path $Directory 'package-lock.json'
+    $locked = if (Test-Path -LiteralPath $lockFile) {
+        (Get-Content -Raw -LiteralPath $lockFile | ConvertFrom-Json -AsHashtable).packages
+    }
+    foreach ($folder in $Package) {
+        $shipped = Get-Content -Raw -LiteralPath (Join-Path $folder 'package.json') | ConvertFrom-Json -AsHashtable
+        $peers = $shipped.peerDependencies
+        if (-not $peers) {
+            continue
+        }
+        foreach ($tool in $peers.Keys) {
+            if (-not $own.Contains($tool)) {
+                continue
+            }
+            $installed = Join-Path -Path $Directory -ChildPath 'node_modules' -AdditionalChildPath $tool, 'package.json'
+            $version = if ($locked -and $locked["node_modules/$tool"]) {
+                $locked["node_modules/$tool"].version
+            } elseif (Test-Path -LiteralPath $installed) {
+                (Get-Content -Raw -LiteralPath $installed | ConvertFrom-Json).version
+            } elseif ($own[$tool] -match '^\s*[\^~>=v]*\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?') {
+                '{0}.{1}.{2}' -f $Matches[1], [int] $Matches[2], [int] $Matches[3]
+            }
+            if ($version -and -not (Test-VersionRange -Version $version -Range $peers[$tool])) {
+                Write-Host "    $tool $version is outside $($shipped.name)'s peer range $($peers[$tool]): raising it"
+                [pscustomobject]@{
+                    Spec  = "$tool@$($peers[$tool])"
+                    Exact = $own[$tool] -match '^\d+\.\d+\.\d+$'
+                }
+            }
+        }
+    }
+}
 
 $tag = 'v' + $Version.TrimStart('v')
 if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
@@ -118,24 +245,45 @@ if (-not $SkipInstall) {
             }
         }
 
-        # The front-end packages, re-installed so npm copies the new release in.
+        # The front-end packages, re-installed so npm copies the new release in. The
+        # project's own copies of their peers go first, raised into the release's ranges
+        # where they fall outside them: npm refuses the new package beside the old tool,
+        # and installing both at once can fail the same way (Stylelint 18 did).
         $packages = @{ '@jwill89/lint-web' = 'lint/web'; '@jwill89/test-a11y' = 'test/a11y' }
         foreach ($manifest in $tracked | Where-Object { $_ -match '(^|/)package\.json$' -and $_ -notmatch "^$([regex]::Escape($sharedRel))/" }) {
             $dir = Split-Path -Parent (Join-Path $root $manifest)
             $text = Get-Content -Raw -LiteralPath (Join-Path $root $manifest)
-            # Always an array: splatting a lone string hands npm one character per argument.
-            $paths = @(foreach ($name in $packages.Keys) {
+            # Always arrays: splatting a lone string hands npm one character per argument.
+            $folders = @(foreach ($name in $packages.Keys) {
                     if ($text.Contains("`"$name`"")) {
-                        [IO.Path]::GetRelativePath($dir, (Join-Path $shared $packages[$name])) -replace '\\', '/'
+                        Join-Path $shared $packages[$name]
                     }
                 })
-            if ($paths) {
+            if ($folders) {
+                $paths = @(foreach ($folder in $folders) {
+                        [IO.Path]::GetRelativePath($dir, $folder) -replace '\\', '/'
+                    })
                 Write-Host "  npm install in $(Split-Path -Parent $manifest): $($paths -join ', ')"
+                $peers = @(Get-PeerSpec -Directory $dir -Package $folders)
+                # npm.cmd runs through cmd.exe, which drops a ^ and reads < and > as
+                # redirects unless the argument is quoted; npm.exe, npm.ps1 and npm on
+                # Linux and macOS take the range as it is.
+                $viaCmd = (Get-Command npm | Select-Object -First 1).Source -match '\.(cmd|bat)$'
                 Push-Location -LiteralPath $dir
                 try {
+                    # A pinned tool is raised pinned, the rest as the range.
+                    foreach ($group in $peers | Group-Object -Property Exact) {
+                        $specs = @($group.Group.Spec | ForEach-Object { $viaCmd ? "`"$_`"" : $_ })
+                        $exact = @(if ($group.Name -eq 'True') { '--save-exact' })
+                        npm install --save-dev --no-audit --no-fund @exact @specs
+                        if ($LASTEXITCODE) {
+                            throw "npm couldn't raise $($group.Group.Spec -join ', ') in $dir."
+                        }
+                    }
                     npm install --save-dev --no-audit --no-fund @paths
                     if ($LASTEXITCODE) {
-                        throw "npm install failed in $dir."
+                        $raised = $peers ? " after raising $($peers.Spec -join ', '); a package of the project's own may still need the old version (npm names it above)" : ''
+                        throw "npm install failed in $dir$raised."
                     }
                 } finally {
                     Pop-Location

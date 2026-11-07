@@ -614,31 +614,81 @@ function ConvertTo-HealthScript {
 function Get-SnapshotShell {
     <#
     .SYNOPSIS
-    Shell functions for the pre-deploy database snapshots, shared by Install-ServiceBinary and Restore-ServiceBinary: list them newest first, and put one back.
+    Shell functions for the database snapshots, shared by Install-ServiceBinary, Restore-ServiceBinary, Backup-RemoteDatabase and Copy-LiveDatabase: run as the database's owner, take one to the standard, list them newest first, and put one back.
     #>
     @'
-# The snapshots in $snap_prefix<yyyyMMdd-HHmmss>$snap_suffix form, newest written first:
-# .gz since 2026-11-06, uncompressed before. Only names of exactly that form count, so a
-# .partial or anything else beside them is never taken for one.
-snapshots() {
-  for f in "$snap_prefix"[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]"$snap_suffix" \
-    "$snap_prefix"[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]"$snap_suffix.gz"; do
+# Runs a command as $snapshot_user (with group $snapshot_group, when set) through runuser,
+# unless that is who runs this, keeping the umask in force, so what it writes is theirs.
+snapshot_as() {
+  if [ -n "${snapshot_user:-}" ] && [ "$(id -un)" != "$snapshot_user" ]; then
+    runuser -u "$snapshot_user" ${snapshot_group:+-g "$snapshot_group"} -- sh -c 'umask "$1"; shift; exec "$@"' sh "$(umask)" "$@"
+  else
+    "$@"
+  fi
+}
+# snapshot_list <prefix> <suffix>: the snapshots in <prefix><yyyyMMdd-HHmmss><suffix> form,
+# newest written first: .gz since 2026-11-06, uncompressed before. Only names of exactly that
+# form count, so a .partial or anything else beside them is never taken for one.
+snapshot_list() {
+  for f in "$1"[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]"$2" \
+    "$1"[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]"$2.gz"; do
     if [ -f "$f" ]; then printf '%s %s\n' "$(stat -c %Y "$f")" "$f"; fi
   done | sort -k 1,1nr | cut -d ' ' -f 2-
 }
-# Puts snapshot $1 back as the live database $db, written into the file in place so its
-# owner and mode stay, once the stale -wal and -shm are gone. A .gz is tested whole first.
-restore_snapshot() {
+# snapshot_take <database> <snapshot.gz> <prefix> <suffix> <keep> <what a failure means>:
+# sqlite3 .backup writes the database whole to <snapshot without .gz>.partial, PRAGMA
+# integrity_check must pass, gzip writes <snapshot>.partial, gzip -t must pass, and only then
+# is it renamed into place and the uncompressed copy removed; then the newest <keep> of
+# snapshot_list stay. Whatever it writes goes through snapshot_as. A failure removes its
+# partial files, leaves the earlier snapshots alone, says why, and returns 4 for a failed
+# check or else the failing command's own code.
+snapshot_take() {
+  snapshot_raw="${2%.gz}.partial"
+  snapshot_part="$2.partial"
+  snapshot_as mkdir -p "$(dirname "$2")" || return
+  rm -f "$snapshot_raw" "$snapshot_part" || return
+  snapshot_as sqlite3 "$1" ".backup '$snapshot_raw'" || {
+    snapshot_rc=$?
+    rm -f "$snapshot_raw"
+    echo "sqlite3 could not copy $1 (exit $snapshot_rc), so $6." >&2
+    return "$snapshot_rc"
+  }
+  snapshot_verdict=$(snapshot_as sqlite3 "$snapshot_raw" 'PRAGMA integrity_check;') || {
+    snapshot_rc=$?
+    rm -f "$snapshot_raw" "$snapshot_raw-wal" "$snapshot_raw-shm"
+    echo "sqlite3 could not check the database snapshot (exit $snapshot_rc), so $6." >&2
+    return "$snapshot_rc"
+  }
+  if [ "$snapshot_verdict" != ok ]; then
+    rm -f "$snapshot_raw" "$snapshot_raw-wal" "$snapshot_raw-shm"
+    echo "The database snapshot failed its integrity check, so $6: $snapshot_verdict" >&2
+    return 4
+  fi
+  snapshot_as sh -c 'gzip -c "$1" > "$2"' sh "$snapshot_raw" "$snapshot_part" && gzip -t "$snapshot_part" || {
+    snapshot_rc=$?
+    rm -f "$snapshot_raw" "$snapshot_part"
+    echo "Compressing the database snapshot failed (exit $snapshot_rc), so $6." >&2
+    return "$snapshot_rc"
+  }
+  snapshot_as mv -f "$snapshot_part" "$2" || return
+  rm -f "$snapshot_raw"
+  snapshot_list "$3" "$4" | tail -n +"$(($5 + 1))" | xargs -r -d '\n' rm -f -- || return
+  echo "Database snapshot: $2 ($(du -h "$2" | cut -f1))"
+}
+# snapshot_put_back <snapshot> <database>: the snapshot back as the live database, written
+# into the file in place so its owner and mode stay, once the stale -wal and -shm are gone.
+# A .gz is tested whole first.
+snapshot_put_back() {
   case "$1" in
     *.gz)
       if ! command -v gzip >/dev/null; then echo "gzip is not installed on the host, so $1 cannot be put back." >&2; return 1; fi
       if ! gzip -t "$1" 2>/dev/null; then echo "$1 is damaged (gzip -t failed), so it was not put back." >&2; return 1; fi
-      rm -f "$db-wal" "$db-shm"
-      gunzip -c "$1" > "$db"
+      rm -f "$2-wal" "$2-shm"
+      gunzip -c "$1" > "$2"
       ;;
     *)
-      rm -f "$db-wal" "$db-shm"
-      cat "$1" > "$db"
+      rm -f "$2-wal" "$2-shm"
+      cat "$1" > "$2"
       ;;
   esac
 }
@@ -2107,11 +2157,12 @@ function Install-ServiceBinary {
       - on success, Apache reloads if the vhost changed, changed units that are not services
         (timers) get try-restart, and -NoBackup removes the .old copies.
 
-    The snapshot is <SnapshotPrefix><yyyyMMdd-HHmmss><SnapshotSuffix>.gz, compressed like
-    every backup kept on the droplet (decided 2026-11-06). sqlite3 .backup writes it whole
+    The snapshot is <SnapshotPrefix><yyyyMMdd-HHmmss><SnapshotSuffix>.gz, the time in UTC,
+    compressed like every backup kept on the droplet (decided 2026-11-06). sqlite3 .backup writes it whole
     to <snapshot without .gz>.partial, PRAGMA integrity_check must pass, gzip writes
     <snapshot>.partial, gzip -t must pass, and only then is it renamed into place and the
-    uncompressed copy removed, all before anything is installed; if any of it fails, the
+    uncompressed copy removed, all before anything is installed (Backup-RemoteDatabase
+    takes the same snapshot for a site that is not a service); if any of it fails, the
     services come back up on what is in place and nothing is installed. The newest three
     are kept across both forms: the .gz ones and the uncompressed ones deploys took before
     2026-11-06, which age out over the next three deploys. Nothing else matching the prefix
@@ -2353,7 +2404,7 @@ function Install-ServiceBinary {
         if (-not $SnapshotPrefix) { $SnapshotPrefix = "$Database.pre-" }
         if ("$SnapshotPrefix$SnapshotSuffix" -match "'") { throw 'The snapshot path cannot hold a single quote (it goes into sqlite3 .backup).' }
     }
-    $snapshot = if ($Database) { $SnapshotPrefix + (Get-Date -Format 'yyyyMMdd-HHmmss') + $SnapshotSuffix + '.gz' } else { '' }
+    $snapshot = if ($Database) { $SnapshotPrefix + [datetime]::UtcNow.ToString('yyyyMMdd-HHmmss', [cultureinfo]::InvariantCulture) + $SnapshotSuffix + '.gz' } else { '' }
     $snapshotShell = if ($Database) { Get-SnapshotShell } else { '' }
 
     $variable = [ordered]@{
@@ -2378,6 +2429,7 @@ function Install-ServiceBinary {
         snap        = $snapshot
         snap_prefix = $SnapshotPrefix
         snap_suffix = $SnapshotSuffix
+        snap_keep   = "$script:SnapshotKeep"
         restore_db  = if ($RestoreDatabaseOnRollback) { '1' } else { '' }
         no_backup   = if ($NoBackup) { '1' } else { '' }
     }
@@ -2419,7 +2471,7 @@ for s in $rev; do systemctl stop "$s" 2>/dev/null || true; done
 # Whatever fails from here to the start, the services come back up on what is in place,
 # a vhost Apache has not loaded yet goes back, and a snapshot cut short is removed.
 abort_restart() {
-  if [ -n "${snap_raw:-}" ]; then rm -f "$snap_raw" "$snap_part"; fi
+  if [ -n "${snapshot_raw:-}" ]; then rm -f "$snapshot_raw" "$snapshot_part"; fi
   if [ -n "$vhost_changed" ]; then
     if [ -f "$vhost_live.old" ]; then cp -p "$vhost_live.old" "$vhost_live"; else rm -f "$vhost_live"; fi
   fi
@@ -2433,19 +2485,7 @@ trap abort_restart EXIT
 if [ -f "$bin" ]; then cp -p "$bin" "$old"; fi
 if [ -n "$db" ] && [ -f "$db" ]; then
   # Whole and checked, then compressed and checked, before anything is installed.
-  mkdir -p "$(dirname "$snap")"
-  snap_raw="${snap%.gz}.partial"
-  snap_part="$snap.partial"
-  rm -f "$snap_raw" "$snap_part"
-  sqlite3 "$db" ".backup '$snap_raw'"
-  verdict=$(sqlite3 "$snap_raw" 'PRAGMA integrity_check;')
-  if [ "$verdict" != ok ]; then echo "The database snapshot failed its integrity check, so nothing was installed: $verdict" >&2; exit 4; fi
-  gzip -c "$snap_raw" > "$snap_part"
-  gzip -t "$snap_part"
-  mv -f "$snap_part" "$snap"
-  rm -f "$snap_raw"
-  snapshots | tail -n +4 | xargs -r -d '\n' rm -f --
-  echo "Database snapshot: $snap ($(du -h "$snap" | cut -f1))"
+  snapshot_take "$db" "$snap" "$snap_prefix" "$snap_suffix" "$snap_keep" 'nothing was installed' || exit
 fi
 mkdir -p "$(dirname "$bin")" "$unit_dir"
 changed_units=
@@ -2510,7 +2550,7 @@ if [ -n "$failed" ]; then
   fi
   if [ -n "$snap" ] && [ -f "$snap" ]; then
     if [ -n "$restore_db" ]; then
-      if restore_snapshot "$snap"; then
+      if snapshot_put_back "$snap" "$db"; then
         echo 'The database is back as the snapshot before the deploy left it.' >&2
       else
         echo "The database could not be put back from $snap; check it before the services run on it." >&2
@@ -2701,10 +2741,10 @@ if [ -n "$vhost_live" ] && [ -f "$vhost_live.old" ]; then
 fi
 db_failed=
 if [ -n "$db" ]; then
-  snap=$(snapshots | head -n 1)
+  snap=$(snapshot_list "$snap_prefix" "$snap_suffix" | head -n 1)
   if [ -z "$snap" ]; then
     echo "No snapshot matches $snap_prefix<time>$snap_suffix(.gz); the database is left as it is." >&2
-  elif restore_snapshot "$snap"; then
+  elif snapshot_put_back "$snap" "$db"; then
     echo "Database restored from $snap"
   else
     db_failed=1
@@ -3183,6 +3223,246 @@ done
     $script = Join-ShellScript -Variable $variable -Body @($restore, $OnRestore, 'echo "Put the previous items back in $root."')
     if ($AsScript) { return $script }
     Invoke-RemoteFlow -Connection $Connection -Script $script -NoRetry:$NoRetry -FailureMessage "Rolling the items in $Root back failed on the host"
+}
+
+#endregion
+
+#region Database snapshots
+
+function Backup-RemoteDatabase {
+    <#
+    .SYNOPSIS
+    Returns the shell block that snapshots a site's SQLite database to Install-ServiceBinary's standard, for a step's hook; later lines of the step find the snapshot and the command that puts it back in shell variables.
+
+    .DESCRIPTION
+    The snapshot before the migrations that PHP sites take for themselves, since they are
+    not services (Simple Image Gallery, TarotGen.io), made to the standard
+    Install-ServiceBinary -Database keeps, with the same shell underneath. It runs nothing
+    itself: embed the block in a step's hook, such as Switch-RemoteItemSet's -Prepare or
+    -AfterSwap, ahead of the migrations, with Format-RemoteScript or by joining strings.
+
+    The block is plain shell, not a subshell, so the variables it sets are there for the
+    lines after it in the same step:
+      - $snapshot: the snapshot just written, or empty when there is no database file yet
+        (a first deploy), which is said and is not a failure;
+      - $snapshot_db: the database it snapshotted, as an absolute path;
+      - $snapshot_restore: the command that puts the snapshot back, or empty with no
+        snapshot: rm -f <db>-wal <db>-shm && gunzip -c <snapshot> > <db>, wrapped in
+        systemctl stop and start of -Service when given. It writes the database file in
+        place, which keeps its owner and mode. Print it in the step's failure message.
+    The shell functions snapshot_put_back and snapshot_list come with it, so
+    snapshot_put_back "$snapshot" "$snapshot_db" puts the snapshot back there and then.
+    Everything else it sets starts with snapshot_. It sets no trap and no shell option, and
+    puts the umask back after its own work.
+
+    In order: the database path is made absolute (a relative one is taken from the current
+    folder, which is Root in Switch-RemoteItemSet's hooks); sqlite3 and gzip, and runuser
+    with -Owner, must be installed; then the standard: sqlite3 .backup to <snapshot without
+    .gz>.partial, PRAGMA integrity_check, gzip to <snapshot>.partial, gzip -t, and the
+    rename to <SnapshotPrefix><yyyyMMdd-HHmmss><SnapshotSuffix>.gz, the time the block was
+    made, in UTC. With -Owner, everything that writes beside the database runs as that user
+    (runuser), so the files there keep its owner. Then the newest -Keep snapshots stay,
+    across both forms: the .gz names, and the same names without .gz, so the uncompressed
+    copies a site took before age out. Only names of exactly that form are counted, so
+    nothing else matching the prefix is touched.
+
+    A failure says why and exits, so the step stops, and the step's own trap (such as
+    Switch-RemoteItemSet's) puts its changes back: 3 when the database path is empty or
+    holds a single quote, or a tool is missing; 4 when the snapshot fails its integrity
+    check; otherwise the failing command's code. Its partial files are removed and the
+    earlier snapshots stay as they are.
+
+    The returned string also carries the note properties Database, Snapshot and Restore,
+    the values those shell variables will have, for a failure message in the deploy script
+    itself; they are known before the run only with -Database, and are empty with
+    -DatabaseVariable.
+
+    .PARAMETER Database
+    The live SQLite database on the host, as an absolute path.
+
+    .PARAMETER DatabaseVariable
+    The name of a shell variable that holds the database's path when the block runs, for a
+    path found on the host, such as DB_DATABASE in a Laravel site's .env. Set it in the
+    lines before the block; if it is empty when the block runs, the block fails.
+
+    .PARAMETER SnapshotPrefix
+    The snapshot's path up to its time stamp. An absolute path is used as it is; a relative
+    one is taken from the database's folder, such as .backups/example- for a .backups
+    folder beside the database. By default <Database>.pre-, as for Install-ServiceBinary.
+
+    .PARAMETER SnapshotSuffix
+    What follows the time stamp, such as .db; .gz follows it.
+
+    .PARAMETER Keep
+    How many snapshots stay, across both forms; the module's three unless set.
+
+    .PARAMETER Owner
+    user or user:group to write the snapshot as, through runuser, such as www-data: the
+    database's own user, so whatever is made in its folder stays that user's. The group is
+    passed to runuser only when given. Without it, the block writes as whoever runs it.
+
+    .PARAMETER Umask
+    The umask for the block's own work, such as 077 so the snapshot is for its owner alone;
+    the one in force before is put back after it.
+
+    .PARAMETER Service
+    The systemd services that write to the database, stopped first and started again in
+    the restore command. Without it, the command assumes the writers are stopped.
+
+    .EXAMPLE
+    # A PHP site whose host .env names the database (Simple Image Gallery's shape): the
+    # snapshot in a .backups folder beside the database, five kept, its earlier
+    # example-<yyyyMMdd-HHmmss>.db copies counted among them; then the migrations.
+    $afterSwap = Format-RemoteScript -Value @{
+        SNAPSHOT = Backup-RemoteDatabase -DatabaseVariable 'DB' -SnapshotPrefix '.backups/example-' -SnapshotSuffix '.db' -Keep 5
+    } -Template @'
+    DB=$(grep -E '^DB_DATABASE=' .env | head -n 1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//')
+    __SNAPSHOT__
+    if ! php artisan migrate --force --no-interaction; then
+      echo 'The migrations failed.' >&2
+      if [ -n "$snapshot" ]; then echo "To put the database back, with the site's writes stopped: $snapshot_restore" >&2; fi
+      exit 5
+    fi
+    '@
+    Switch-RemoteItemSet -Archive 'example-deploy.tgz' -Sha256 $archive.Sha256 -ExpectedFileCount $archive.FileCount `
+        -Root '/var/www/example.com' -Item 'app', 'config', 'public' -AfterSwap $afterSwap
+
+    .EXAMPLE
+    # A site whose database belongs to www-data (TarotGen.io's shape): the snapshot made as
+    # www-data under umask 077, beside the database as example.db.pre-<time>.gz, three kept,
+    # before the swap; the migrations after it; the same command in the script's own message.
+    $snapshot = Backup-RemoteDatabase -Database '/var/lib/example/db/example.db' -Owner 'www-data' -Umask '077'
+    $afterSwap = @'
+    if ! runuser -u www-data -- php vendor/bin/phinx migrate; then
+      echo "The migrations failed. To put the database back, with the site's writes stopped: $snapshot_restore" >&2
+      exit 6
+    fi
+    '@
+    $step = Switch-RemoteItemSet -AsStep -Root '/var/www/example.com' -Item 'api', 'vendor' -Prepare $snapshot -AfterSwap $afterSwap
+    # ...and after a failed smoke check:
+    throw "The database stays as the migrations left it. To put back $($snapshot.Snapshot), run on the host: $($snapshot.Restore)"
+    #>
+    [CmdletBinding(DefaultParameterSetName = 'Path')]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory, ParameterSetName = 'Path')]
+        [string]$Database,
+
+        [Parameter(Mandatory, ParameterSetName = 'Variable')]
+        [ValidatePattern('^[A-Za-z_][A-Za-z0-9_]*$')]
+        [string]$DatabaseVariable,
+
+        [string]$SnapshotPrefix,
+
+        [ValidatePattern('^[A-Za-z0-9._@-]*$')]
+        [string]$SnapshotSuffix = '',
+
+        [ValidateRange(1, 1000)]
+        [int]$Keep = $script:SnapshotKeep,
+
+        [string]$Owner,
+
+        [ValidatePattern('^[0-7]{3,4}$')]
+        [string]$Umask,
+
+        [ValidatePattern('^[A-Za-z0-9_.@-]+$')]
+        [string[]]$Service = @()
+    )
+    $byPath = $PSCmdlet.ParameterSetName -eq 'Path'
+    if ($byPath) {
+        Assert-RemotePath -Value $Database -What 'Database'
+        if (-not $Database.StartsWith('/')) { throw "Database '$Database' must be an absolute path; use -DatabaseVariable for one found on the host." }
+        if ($Database -match "'") { throw 'The database path cannot hold a single quote (it goes into the restore command).' }
+    }
+    if ($SnapshotPrefix) {
+        if ($SnapshotPrefix.StartsWith('/')) {
+            Assert-RemotePath -Value $SnapshotPrefix -What 'SnapshotPrefix'
+        } else {
+            Assert-SafeRemoteName -Value $SnapshotPrefix.TrimEnd('/') -What 'SnapshotPrefix' -AllowSlash
+        }
+        if ($SnapshotPrefix -match "'") { throw 'The snapshot path cannot hold a single quote (it goes into sqlite3 .backup).' }
+    }
+    $user, $group = Split-Owner -Owner $Owner
+    if ($Owner -notmatch ':') { $group = '' }
+    $stamp = [datetime]::UtcNow.ToString('yyyyMMdd-HHmmss', [cultureinfo]::InvariantCulture)
+
+    $variable = [ordered]@{
+        snapshot_prefix   = $SnapshotPrefix
+        snapshot_suffix   = $SnapshotSuffix
+        snapshot_stamp    = $stamp
+        snapshot_keep     = "$Keep"
+        snapshot_user     = $user
+        snapshot_group    = $group
+        snapshot_mask     = $Umask
+        snapshot_services = $Service -join ' '
+        snapshot_from     = $DatabaseVariable
+    }
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add("# Backup-RemoteDatabase: the database's snapshot; sets `$snapshot, `$snapshot_db and `$snapshot_restore.")
+    $lines.Add((Get-SnapshotShell))
+    $lines.Add(@'
+# The restore command's paths, quoted only where the shell needs it.
+snapshot_quote() {
+  case "$1" in
+    *[!A-Za-z0-9._/@:+,=-]*) printf "'%s'" "$1" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+'@)
+    $lines.Add($(if ($byPath) { "snapshot_db=$(ConvertTo-ShellLiteral -Value $Database)" } else { "snapshot_db=`"`${$($DatabaseVariable):-}`"" }))
+    foreach ($name in $variable.Keys) { $lines.Add("$name=$(ConvertTo-ShellLiteral -Value $variable[$name])") }
+    $lines.Add(@'
+case "$snapshot_db" in
+  '') echo "\$$snapshot_from names no database, so it cannot be snapshotted." >&2; exit 3 ;;
+  /*) ;;
+  *) snapshot_db="$(pwd)/$snapshot_db" ;;
+esac
+case "$snapshot_prefix" in
+  '') snapshot_prefix="$snapshot_db.pre-" ;;
+  /*) ;;
+  *) snapshot_prefix="$(dirname "$snapshot_db")/$snapshot_prefix" ;;
+esac
+snapshot="$snapshot_prefix$snapshot_stamp$snapshot_suffix.gz"
+snapshot_restore=
+case "$snapshot_db$snapshot" in
+  *\'*) echo "The database or snapshot path holds a single quote, so it cannot be snapshotted: $snapshot" >&2; exit 3 ;;
+esac
+if [ ! -f "$snapshot_db" ]; then
+  echo "No database at $snapshot_db yet, so there is nothing to snapshot."
+  snapshot=
+else
+  for snapshot_t in sqlite3 gzip ${snapshot_user:+runuser}; do
+    if ! command -v "$snapshot_t" >/dev/null 2>&1; then echo "$snapshot_t is not installed on the host, so the database cannot be snapshotted." >&2; exit 3; fi
+  done
+  snapshot_umask_was=$(umask)
+  if [ -n "$snapshot_mask" ]; then umask "$snapshot_mask"; fi
+  snapshot_take "$snapshot_db" "$snapshot" "$snapshot_prefix" "$snapshot_suffix" "$snapshot_keep" 'the step stops here' || exit
+  umask "$snapshot_umask_was"
+  snapshot_restore="rm -f $(snapshot_quote "$snapshot_db-wal") $(snapshot_quote "$snapshot_db-shm") && gunzip -c $(snapshot_quote "$snapshot") > $(snapshot_quote "$snapshot_db")"
+  if [ -n "$snapshot_services" ]; then snapshot_restore="systemctl stop $snapshot_services && $snapshot_restore && systemctl start $snapshot_services"; fi
+fi
+# Whatever runs after this in the step runs as itself again.
+snapshot_user=
+snapshot_group=
+'@)
+    $block = ($lines -join "`n") -replace "`r", ''
+
+    $known = [ordered]@{ Database = $null; Snapshot = $null; Restore = $null }
+    if ($byPath) {
+        $prefix = if (-not $SnapshotPrefix) {
+            "$Database.pre-"
+        } elseif ($SnapshotPrefix.StartsWith('/')) {
+            $SnapshotPrefix
+        } else {
+            ($Database -replace '/[^/]*$', '') + '/' + $SnapshotPrefix
+        }
+        $quote = { param([string]$Path) if ($Path -cmatch '[^A-Za-z0-9._/@:+,=-]') { "'$Path'" } else { $Path } }
+        $known.Database = $Database
+        $known.Snapshot = "$prefix$stamp$SnapshotSuffix.gz"
+        $known.Restore = 'rm -f {0} {1} && gunzip -c {2} > {3}' -f (& $quote "$Database-wal"), (& $quote "$Database-shm"), (& $quote $known.Snapshot), (& $quote $Database)
+        if ($Service) { $known.Restore = "systemctl stop $($Service -join ' ') && $($known.Restore) && systemctl start $($Service -join ' ')" }
+    }
+    Add-Member -InputObject $block -NotePropertyMembers $known -PassThru
 }
 
 #endregion
@@ -3874,6 +4154,11 @@ function Copy-LiveDatabase {
     Returns $true when the local database was refreshed. Every call rides the connection
     Open-DeployConnection holds, so the pull opens no connection of its own.
 
+    The snapshot is made as the SSH user unless -Owner names the database's own user, as
+    for a site whose database folder must hold only that user's files (www-data): then
+    sqlite3 runs as that user through runuser, still under umask 077, and the host's copy
+    can stay at its default place beside the database.
+
     .PARAMETER Database
     The live database on the host.
 
@@ -3881,7 +4166,12 @@ function Copy-LiveDatabase {
     The local development database, such as devdata/example.sqlite.
 
     .PARAMETER Snapshot
-    Where the snapshot is made on the host; by default <Database>.pull.
+    Where the snapshot is made on the host; by default <Database>.pull. With -Owner, that
+    user must be able to write there.
+
+    .PARAMETER Owner
+    user or user:group to make the host's snapshot as, through runuser, such as www-data.
+    The group is passed to runuser only when given.
 
     .PARAMETER Connection
     The connection to use; by default the one Open-DeployConnection stored.
@@ -3891,6 +4181,9 @@ function Copy-LiveDatabase {
 
     .EXAMPLE
     if (-not $NoDbPull) { $null = Copy-LiveDatabase -Database '/opt/example/data/example.sqlite' -Destination (Join-Path $repoRoot 'devdata/example.sqlite') }
+
+    .EXAMPLE
+    $null = Copy-LiveDatabase -Database '/var/lib/example/db/example.db' -Destination (Join-Path $repoRoot 'backend/db/example.db') -Owner 'www-data'
     #>
     [CmdletBinding()]
     [OutputType([bool])]
@@ -3903,6 +4196,8 @@ function Copy-LiveDatabase {
 
         [string]$Snapshot,
 
+        [string]$Owner,
+
         [object]$Connection,
 
         [switch]$NoRetry
@@ -3911,6 +4206,8 @@ function Copy-LiveDatabase {
     if (-not $Snapshot) { $Snapshot = "$Database.pull" }
     Assert-RemotePath -Value $Snapshot -What 'Snapshot'
     if ($Snapshot -match "'") { throw 'The snapshot path cannot hold a single quote (it goes into sqlite3 .backup).' }
+    $user, $group = Split-Owner -Owner $Owner
+    if ($Owner -notmatch ':') { $group = '' }
     if (Test-FileInUse -Path $Destination) {
         Write-Warning "The local database is in use (stop the dev server to refresh it): $Destination. The pull was skipped."
         return $false
@@ -3919,15 +4216,18 @@ function Copy-LiveDatabase {
     $db = ConvertTo-ShellLiteral -Value $Database
     $snap = ConvertTo-ShellLiteral -Value $Snapshot
     Write-Step 'Taking an online snapshot of the live database...'
-    $take = @"
-set -e
-umask 077
-if [ ! -f $db ]; then echo no-database; exit 0; fi
-mkdir -p "`$(dirname $snap)"
-rm -f $snap
-sqlite3 $db ".backup '$Snapshot'"
-echo snapshot-ok
-"@
+    $take = @(
+        'set -e'
+        'umask 077'
+        "snapshot_user=$(ConvertTo-ShellLiteral -Value $user)"
+        "snapshot_group=$(ConvertTo-ShellLiteral -Value $group)"
+        (Get-SnapshotShell)
+        "if [ ! -f $db ]; then echo no-database; exit 0; fi"
+        "snapshot_as mkdir -p `"`$(dirname $snap)`""
+        "rm -f $snap"
+        "snapshot_as sqlite3 $db `".backup '$Snapshot'`""
+        'echo snapshot-ok'
+    ) -join "`n"
     $lines = Invoke-Remote -Script $take -Connection $active -NoRetry:$NoRetry
     if ($lines -notcontains 'snapshot-ok') {
         Write-Host '    No database on the host yet; skipping the pull.'
@@ -4158,6 +4458,7 @@ Export-ModuleMember -Alias 'Fail' -Function @(
     'Restore-RemoteDirectory'
     'Switch-RemoteItemSet'
     'Restore-RemoteItemSet'
+    'Backup-RemoteDatabase'
     'Export-PluginRepository'
     'Publish-PluginRepository'
     'Install-BackupTimer'

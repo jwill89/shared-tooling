@@ -91,7 +91,27 @@ npm only refreshes its copy of the package when its `version` moves. shared-tool
 task shared:update -- v1.2.0
 ```
 
-That moves the submodule and the workflow refs, and re-runs `npm install -D ../shared/lint/web` here (see the root README's "Versions"). A fresh clone or CI needs nothing extra: `npm ci` installs the copy the lockfile records.
+That moves the submodule and the workflow refs, and re-runs `npm install -D ../shared/lint/web` here (see the root README's "Versions"). When the release raises a peer's range, the same install raises the project's own ESLint, Prettier, Stylelint or TypeScript into it. A fresh clone or CI needs nothing extra: `npm ci` installs the copy the lockfile records.
+
+## Stylelint 18
+
+From v2.0.0 the Stylelint configs are on Stylelint 18 (`stylelint-config-standard` 41, `stylelint-config-recommended` 19), so a project needs Stylelint 18 itself, and Node ^24.15.0 or >=26. `task shared:update` raises the project's own `stylelint` (see "Updating"). What else [Stylelint's migration guide](https://stylelint.io/migration-guide/to-18) means for a project:
+
+- Five rules join the recommended set: `value-no-invalid` (a value that doesn't parse, or math such as `10px + 2`), `selector-no-invalid`, `selector-no-unmatchable`, `selector-no-deprecated` and `at-charset-rule-no-invalid`. `declaration-property-value-no-unknown` now reads a `var()` as the custom property's declared value, so it finds what a token used to hide.
+- `declaration-block-single-line-max-declarations` is gone, from Stylelint and from the standard config; a project that sets it removes it.
+- A local `extends` or `plugins` path names its file: `./stylelint.local.js`, not `./stylelint.local`. Package names and this package's exports (`@jwill89/lint-web/stylelint`) resolve as before.
+- CLI flags take their full names (`--max-warnings`, not `--mw`) in kebab-case (`--ignore-path`), and `--fix=lax` takes its value after `=`. A bare `--fix` is unchanged.
+- A Stylelint plugin or config of the project's own that is still on Stylelint 17 can't install beside it. `stylelint-config-recommended-scss` and `stylelint-scss` have no Stylelint 18 release yet, so a `.scss` file is read with `postcss-scss` (a dev dependency of the project) and checked by the shared rules, with the Sass at-rules known:
+
+  ```js
+  overrides: [
+    {
+      files: ['**/*.scss'],
+      customSyntax: 'postcss-scss',
+      rules: { 'at-rule-no-unknown': [true, { ignoreAtRules: ['use', 'forward', 'include', 'mixin'] }] },
+    },
+  ],
+  ```
 
 ## JSX accessibility
 

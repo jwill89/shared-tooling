@@ -27,7 +27,7 @@ Single-file uploads (`Send-File`, `Send-FileVerified`) stay for the rare case th
 - PowerShell 7.4 or later (`CompatiblePSEditions = 'Core'`), on Windows.
 - PuTTY's `plink` 0.85 or later (connection sharing), on PATH or in `C:\Program Files\PuTTY`, with the key loaded in Pageant if it has a passphrase. pscp is not used.
 - Windows' own `tar.exe` for `Compress-DeployArchive`.
-- On the host: bash, systemd, GNU coreutils (`sha256sum`, `sort -V`, `stat`), `sqlite3` and `gzip` for database snapshots and backups, `curl` for `-HealthUrl`, and `apachectl` for a vhost.
+- On the host: bash, systemd, GNU coreutils (`sha256sum`, `sort -V`, `stat`), `sqlite3` and `gzip` for database snapshots and backups, `runuser` (util-linux) for an `-Owner` on `Backup-RemoteDatabase` or `Copy-LiveDatabase`, `curl` for `-HealthUrl`, and `apachectl` for a vhost.
 
 ## The one connection
 
@@ -111,6 +111,10 @@ Folder swaps:
 - `Switch-RemoteItemSet`: swaps several top-level entries of one folder (a PHP app's code) through a staging folder, and puts the old ones back if a later step fails.
 - `Restore-RemoteItemSet`: puts that backup back.
 
+Database snapshots:
+
+- `Backup-RemoteDatabase`: returns a shell block for a step's hook that snapshots a site's SQLite database to `Install-ServiceBinary -Database`'s standard, with the same shell underneath, for a PHP site's migrations. The path is given (`-Database`) or read from a shell variable at run time (`-DatabaseVariable`, such as one set from the host's `.env`). With `-Owner` everything it writes beside the database is written as that user through `runuser`, under `-Umask` if given. Afterwards `$snapshot`, `$snapshot_db` and `$snapshot_restore` (the exact command that puts it back) are set for the step's failure message; the returned string carries the same as `.Snapshot`, `.Database` and `.Restore` for the deploy script's own messages when the path is given.
+
 Plugins:
 
 - `Export-PluginRepository`: lays out a Dalamud repository folder locally, refuses a built version that differs from the index's, and cache-busts the download links with `?v=<version>`.
@@ -122,7 +126,7 @@ Scheduled backup:
 
 Development database:
 
-- `Copy-LiveDatabase`: an online `sqlite3 .backup` on the host, a checked download, three timestamped local copies kept, the host's copy removed; warns and skips if the local database is in use. The host's copy lives only for the pull, so it is not compressed.
+- `Copy-LiveDatabase`: an online `sqlite3 .backup` on the host, a checked download, three timestamped local copies kept, the host's copy removed; warns and skips if the local database is in use. The host's copy lives only for the pull, so it is not compressed. `-Owner` makes it as the database's user (`runuser`), so it can sit beside a database whose folder holds only that user's files.
 
 Smoke check:
 
@@ -134,10 +138,11 @@ Every backup the module keeps on the droplet is compressed with gzip (decided 20
 
 | What | Name before 2026-11-06 | Name now | Kept |
 | --- | --- | --- | --- |
-| `Install-ServiceBinary -Database`'s snapshot, taken after the stop | `<SnapshotPrefix><yyyyMMdd-HHmmss><SnapshotSuffix>` | the same, then `.gz` | the newest three, across both forms |
+| `Install-ServiceBinary -Database`'s snapshot, taken after the stop | `<SnapshotPrefix><yyyyMMdd-HHmmss><SnapshotSuffix>` | the same, then `.gz` (UTC) | the newest three, across both forms |
+| `Backup-RemoteDatabase`'s snapshot, taken where the step puts it (before the migrations) | a site's own copies of that form, such as `.backups/example-<yyyyMMdd-HHmmss>.db` | the same, then `.gz` (UTC) | the newest `-Keep` (three), across both forms |
 | `Install-BackupTimer`'s shared job, daily | `<Prefix>YYYY-MM-DD<Suffix>` | the same, then `.gz` | 28 days, both forms pruned by date |
 
-The prefix defaults are `<Database>.pre-` and `<Name>-`. Only names of exactly these forms are pruned, compressed or restored; nothing else in the folders is touched, apart from a run's own `.partial` files.
+The prefix defaults are `<Database>.pre-` and `<Name>-`; `Backup-RemoteDatabase` takes a relative `-SnapshotPrefix` from the database's folder. Only names of exactly these forms are pruned, compressed or restored; nothing else in the folders is touched, apart from a run's own `.partial` files. So a site that kept uncompressed snapshots under such names before, like the Gallery's `gallery-<yyyyMMdd-HHmmss>.db` in `.backups/`, passes that prefix and suffix, and its old copies count among the kept and age out.
 
 Older copies need nothing done by hand. The daily job's first run after the change, which the next deploy triggers since the job changed, compresses every uncompressed dated copy and keeps its time. Old snapshots stay as they are: a restore takes the newest snapshot of either form, and they age out over the next three deploys.
 
@@ -150,7 +155,7 @@ gunzip -c /opt/example/data/backups/example-2026-11-06.sqlite.gz > /opt/example/
 systemctl start example
 ```
 
-`Install-ServiceBinary` prints these commands, with its snapshot's paths, after a rollback in a project that has not opted into `-RestoreDatabaseOnRollback`, and the shared job's script on the host carries them, with its paths, in its header. A project's own backup command (`-Command`) keeps its own copies, so compressing them is up to that command.
+`Install-ServiceBinary` prints these commands, with its snapshot's paths, after a rollback in a project that has not opted into `-RestoreDatabaseOnRollback`, `Backup-RemoteDatabase` sets them as `$snapshot_restore` (with `systemctl stop` and `start` of its `-Service`) for the step's own message, and the shared job's script on the host carries them, with its paths, in its header. A project's own backup command (`-Command`) keeps its own copies, so compressing them is up to that command.
 
 ## Before and after
 
@@ -321,6 +326,41 @@ Install-ServiceBinary -Archive 'example-deploy.tgz' -Sha256 $archive.Sha256 -Exp
     -EnvFile '/etc/example/example.env' -HealthUrl 'http://{EXAMPLE_ADDR}/healthz' -HealthDefault @{ EXAMPLE_ADDR = 'localhost:8080' } `
     -Database '/opt/example/data/example.sqlite' -SnapshotPrefix '/opt/example/backups/example-pre-' -SnapshotSuffix '.sqlite' -RestoreDatabaseOnRollback
 ```
+
+A PHP site's snapshot before its migrations, the path read from the host's `.env` (Simple Image Gallery's shape), five kept in a `.backups` folder beside the database. A failed migration prints the command that puts the snapshot back, and `Switch-RemoteItemSet`'s trap puts the previous code back:
+
+```powershell
+$afterSwap = Format-RemoteScript -Value @{
+    SNAPSHOT = Backup-RemoteDatabase -DatabaseVariable 'DB' -SnapshotPrefix '.backups/example-' -SnapshotSuffix '.db' -Keep 5
+} -Template @'
+DB=$(grep -E '^DB_DATABASE=' .env | head -n 1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//')
+__SNAPSHOT__
+if ! php artisan migrate --force --no-interaction; then
+  echo 'The migrations failed.' >&2
+  if [ -n "$snapshot" ]; then echo "To put the database back, with the site's writes stopped: $snapshot_restore" >&2; fi
+  exit 5
+fi
+'@
+Switch-RemoteItemSet -Archive 'example-deploy.tgz' -Sha256 $archive.Sha256 -ExpectedFileCount $archive.FileCount `
+    -Root '/var/www/example.com' -Item 'app', 'config', 'public' -AfterSwap $afterSwap
+```
+
+A site whose database belongs to `www-data` (TarotGen.io's shape): the snapshot made as `www-data` under umask 077 before the swap, `<Database>.pre-<time>.gz` with three kept, and the same restore command in the deploy script's own message:
+
+```powershell
+$snapshot = Backup-RemoteDatabase -Database '/var/lib/example/db/example.db' -Owner 'www-data' -Umask '077'
+$afterSwap = @'
+if ! runuser -u www-data -- php vendor/bin/phinx migrate; then
+  echo "The migrations failed. To put the database back, with the site's writes stopped: $snapshot_restore" >&2
+  exit 6
+fi
+'@
+Switch-RemoteItemSet -AsStep -Root '/var/www/example.com' -Item 'api', 'vendor' -Prepare $snapshot -AfterSwap $afterSwap
+# ...after a failed smoke check:
+throw "The database stays as the migrations left it. To put back $($snapshot.Snapshot), run on the host: $($snapshot.Restore)"
+```
+
+The block is plain shell, not a subshell, so its variables reach the lines after it in the same step (`-Prepare` and `-AfterSwap` are one step), but not a later step of `Invoke-DeployBundle`. A failure exits 3 (an empty path, a missing `sqlite3`, `gzip` or `runuser`) or 4 (a failed integrity check), so the step stops and its trap puts its changes back; the earlier snapshots stay as they are. A database that is not there yet is skipped, with `$snapshot` empty.
 
 The dev-database pull after a deploy, on the same connection:
 

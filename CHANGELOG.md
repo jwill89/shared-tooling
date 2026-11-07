@@ -8,13 +8,26 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+This is a major: every project's own Stylelint moves to 18 when it takes it.
+
 ### Added
 
 - `LICENSE`: the MIT license, which `lint/web`'s and `test/a11y`'s `package.json` already declared. It covers this repo only; the projects that hold it as a submodule keep their own.
 - Dependabot for this repo (`.github/dependabot.yml`): weekly updates for the GitHub Actions the reusable workflows pin, `lint/web`'s and `test/a11y`'s npm packages, and `lint/go`'s Go modules, which no project can update through its submodule. They reach the projects with the next release.
+- `deploy/pwsh`'s `Backup-RemoteDatabase`: the snapshot a site that isn't a service (the Gallery, TarotGen.io) takes before its migrations, to `Install-ServiceBinary -Database`'s standard and with the same shell: `sqlite3 .backup`, `PRAGMA integrity_check`, gzip, `gzip -t`, then `<prefix><time><suffix>.gz`, the newest `-Keep` (3) kept across both forms. It returns a shell block to put in a step's hook.
+  - The database path is given (`-Database`) or read from a shell variable when the block runs (`-DatabaseVariable`, for a path the host's `.env` names).
+  - `-Owner` writes through `runuser`, under `-Umask`, so files beside the database keep its owner.
+  - Afterwards `$snapshot`, `$snapshot_db` and `$snapshot_restore` (the exact `gunzip -c` restore command, wrapped in `systemctl stop`/`start` with `-Service`) are set for the hook's failure message; with `-Database`, the returned string also carries `.Snapshot`, `.Database` and `.Restore` for PowerShell's.
+  - A site's existing uncompressed snapshots with the same names count among those kept and age out.
+- `Copy-LiveDatabase -Owner`: the host's copy is made as the database's user, under umask 077, so it can sit beside the database.
 
 ### Changed
 
+- **Breaking:** `lint/web`'s Stylelint configs move to Stylelint 18 (decided 2026-11-06). The peer range is `^18.0.0`, with `stylelint-config-standard` 41 and `stylelint-config-recommended` 19 (this repo's first two Dependabot pull requests, which failed alone). Each project raises its own `stylelint` to 18, which `task shared:update` now does, and needs Node ^24.15.0 or >=26 (`engines` says so).
+  - Five rules join the recommended set: `value-no-invalid`, `selector-no-invalid`, `selector-no-unmatchable`, `selector-no-deprecated` and `at-charset-rule-no-invalid`. The Gallery, Kindred Nights and Senpan had no findings.
+  - TarotGen.io drops `stylelint-config-recommended-scss`, which has no Stylelint 18 release and blocks the install. It reads `bulma.scss` with `customSyntax: 'postcss-scss'` and removes the stray `@charset`.
+- `repo/Update-SharedTooling.ps1` first raises a project's own copy of any `lint/web` or `test/a11y` peer that its lockfile holds outside the release's range, with `npm install -D <tool>@<range>`, then re-installs the packages: npm refuses the new package beside the old tool. Only `devDependencies` are touched, exact pins stay exact, and `-SkipInstall` skips it.
+- `Install-ServiceBinary -Database` names its snapshots by the time in UTC, as `Backup-RemoteDatabase` does, instead of the deploying machine's local time. Restores and pruning go by when each snapshot was written, not by its name, so the change moves nothing out of order.
 - `repo/dependabot.example.yml` ignores the majors of ESLint, Prettier and Stylelint, and of `eslint-*` and `stylelint-*` packages, besides TypeScript's. A major of a tool `lint/web` owns moves once, in shared-tooling, with its plugins and configs; it failed in each project on its own: Stylelint 18 against `lint/web`'s Stylelint 17 configs, in TarotGen.io and Senpan.
 
 ## [1.3.0] - 2026-11-06
