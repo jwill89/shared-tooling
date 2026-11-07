@@ -8,6 +8,10 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+### Added
+
+- `LICENSE`: the MIT license, which `lint/web`'s and `test/a11y`'s `package.json` already declared. It covers this repo only; the projects that hold it as a submodule keep their own.
+
 ## [1.3.0] - 2026-11-06
 
 ### Changed

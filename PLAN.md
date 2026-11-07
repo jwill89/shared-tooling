@@ -391,6 +391,18 @@ Do what's urgent first, settle the decisions, build the tooling, and only then m
      - The shared configs and CI, the deploy on SharedDeploy, the daily backup, the database pull, and a changelog. With no UI, it has no end-to-end suite. With no HTTP endpoint, the check after a start is that the bot is still running ten seconds later.
      - It runs as a fixed `marxbot` user instead of `DynamicUser=yes`, so the backup can run as it (decided 2026-11-06). The owner mirrors the unit's edits into the untracked `deploy/marxbot.service`, which holds the token, then deploys once with `-InstallService`.
      - The SQLite pragmas moved into the connection string: a connection reopened after a timed-out query had lost its busy timeout.
+   - **TarotGen.io** (prepared 2026-11-06 on v1.3.0, not yet committed):
+     - The shared configs and CI for all four stacks, in place of the old `eslint-config` submodule; its own plugin workflow now only packages.
+     - The deploy on SharedDeploy runs Phinx migrations after a compressed snapshot, with an HTTP smoke check and rollback, the daily backup (28 days) and the pull.
+     - The old root cron backup is retired. Retention runs alone at 10:30 UTC, only when that day's backup exists.
+     - Phinx owns the schema. A baseline compares a live database with the expected schema, and refuses, changing nothing, if they differ.
+     - The end-to-end suite grew from 2 tests to 18, with axe on the main pages.
+     - Axe and the owner's review fixed the gold buttons' text, the muted grey, and face-down cards that a screen reader named before they were turned.
+     - The privacy page now says 28 days of backups.
+   - **Follow-ups the compression rule leaves** (decided 2026-11-06):
+     - The Gallery, Kindred, Senpan and Marxbot take v1.3.0 (`task shared:update -- v1.3.0`) and deploy once, which compresses their backups and snapshots.
+     - Kindred's own `kindred backup` writes its daily copy compressed.
+     - The Gallery's own deploy snapshots (`db/.backups`, five kept, uncompressed) move to the shared format. A public module function for a site's database snapshot, with an owner to run as, would serve both the Gallery and TarotGen, which now writes its own to the same standard.
 7. **Then the migrations, in this order:**
    1. Senpan's API to huma, replacing its hand-written spec and kin-openapi.
    2. The component kit, following its own plan in shared-components-vue.

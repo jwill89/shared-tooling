@@ -116,3 +116,7 @@ A release for one stack moves the submodule for every project that takes it, but
 ## This repo's own checks
 
 `.github/workflows/ci.yml` runs the same tools on this repo: PSScriptAnalyzer on its scripts, markdownlint on its docs, the sync tool linted by its own template, actionlint on the workflows, and the front-end package's configs loading from its own install.
+
+## License
+
+MIT; see `LICENSE`. It covers this repo only: each project that holds it as a submodule keeps its own license.
