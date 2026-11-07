@@ -36,7 +36,7 @@ Which packages each stack uses and avoids, and how dependencies are added, pinne
 | Playwright, with axe through the shared `test/a11y` package | Puppeteer, Cypress | | [CI] |
 | Reka UI for headless primitives (see [components.md](components.md)) | Bulma, once the component kit replaces it | | [review] |
 | Tiptap 3 with its Markdown package, as the one editor, storing Markdown | Another rich-text editor | Every `@tiptap/*` package stays on one version | [review] |
-| Font Awesome Pro from the owner's `@awesome.me/kit-…` package, through `@fortawesome/fontawesome-svg-core` and the `<font-awesome-icon>` component | The per-style packages (`@fortawesome/pro-solid-svg-icons` and the like); icon CSS classes; icon CDNs | Only the icons a project imports ship | [review] |
+| Font Awesome through `@fortawesome/fontawesome-svg-core` and the `<font-awesome-icon>` component: the free packages (`@fortawesome/free-*-svg-icons`) where they cover a site's icons, otherwise the site's own Pro kit package (`@awesome.me/kit-…`) | Another site's kit, since each kit is made for its own site; the per-style Pro packages (`@fortawesome/pro-solid-svg-icons` and the like); icon CSS classes; icon CDNs | Only the icons a project imports ship; the free packages need no registry token | [review] |
 | Every library bundled through npm; fonts self-hosted as WOFF2, with their licences checked | CDN scripts; Google Fonts | No outside dependency that can go down | [review] |
 | openapi-typescript, run through `npx` at a pinned version, and openapi-fetch | TanStack Query | A small `useApi` composable covers loading state | [CI] |
 | Plain form components over one submit wrapper | A form library; Nuxt or any SSR | | [review] |

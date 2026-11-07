@@ -111,7 +111,7 @@ The rest of sign-in is in [security.md](security.md).
 - A preference about a screen or device (a folded menu, units, the colour scheme, infinite scroll) is kept in the browser through one helper, not on the server. [review]
 - The site still works when browser storage is blocked. [test]
 - A form's Reset returns every field to its default, so nothing typed earlier, such as a password, carries over. [test]
-- The service worker caches nothing of the app: it passes through, or handles push only, so a deploy is never served stale (see [deploy-and-ops.md](deploy-and-ops.md)). [review]
+- A service worker never caches an API answer or anything that differs per viewer; what it may cache (content-hashed files, thumbnails, and an installable app's shell) is in [performance.md](performance.md). [review]
 - Nothing is queued offline to send to the server later. [review]
 
 ## Acting for the user
