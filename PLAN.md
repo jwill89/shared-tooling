@@ -349,7 +349,7 @@ Every repo gets a CLAUDE.md that points at the standards during rollout, so that
 | --- | --- | --- |
 | Conlang Translator | Git repo, Dependabot, changelog, smoke check |  |
 | Family Card Game | CI, Dependabot, changelog, accessibility lint, HTTP smoke check | React, so `lint/web` needs a React variant |
-| Fantasy Dossier | Smoke check |  |
+| Fantasy Dossier | None once its 2026-11-07 changes land | Rolled out with the standards from the start; the last user of the `eslint-config` repo |
 | Fingerprint Generator | CI, Dependabot, tests, accessibility lint, smoke check |  |
 | Home Library | First commit and a remote, changelog | Nothing is committed until 1.0.0 by your choice, so its CI has never run |
 | IDE Résumé Site | CI, Dependabot, changelog | Moves from Puppeteer to Playwright |
@@ -384,7 +384,7 @@ Do what's urgent first, settle the decisions, build the tooling, and only then m
      - **Senpan**, with its move to huma: RFC 9457 errors, 422 for validation, camelCase JSON, openapi-typescript in place of tygo, goose (with `user_version`) in place of its own migration blocks, a write pool and a read pool, the front end embedded in the binary, one app version, Vitest specs in `src/__tests__/` with the config in `vite.config.ts`, and the shared `vue/no-static-inline-styles` rule back on.
      - **TarotGen.io**: RFC 9457 errors, 422, camelCase JSON, no `'unsafe-inline'` in `style-src`, a password change revoking plugin tokens, and Font Awesome from the kit package.
      - **Simple Image Gallery**: RFC 9457 errors, 422 (no longer overriding Laravel), `PUT` as a full replacement, camelCase JSON, trailing slashes accepted, a CSP with `frame-ancestors 'none'`, a 404 for missing static files, sessions in SQLite, and `color-named` back on.
-     - **Kindred Nights**: each animation honours reduced motion instead of one global rule, config passed in rather than held in a package-level global, and its goose migrations also set `user_version`.
+     - **Kindred Nights**: each animation honours reduced motion instead of one global rule, its package-level image-encode gate passed in rather than held globally (its config already is), and its goose migrations also set `user_version`.
      - **Marxbot**: its secrets move from the unit's `Environment=` lines into a root-owned 0600 `EnvironmentFile`, and its database into `/opt/<app>/data`.
      - **The droplet**: Apache restores the visitor's address once, server-wide, with `mod_remoteip` and Cloudflare's ranges.
      - The projects not yet rolled out take the standards with their rollout.
@@ -426,7 +426,12 @@ Do what's urgent first, settle the decisions, build the tooling, and only then m
      - Kindred's own `kindred backup` writes its daily copy compressed.
      - The Gallery's and TarotGen.io's deploy snapshots are the module's `Backup-RemoteDatabase`, and TarotGen.io's pull runs as www-data (`Copy-LiveDatabase -Owner`).
      - v2.0.0 also moved every project to Stylelint 18; TarotGen.io dropped `stylelint-config-recommended-scss` for `postcss-scss`.
-   - **Next:** `standards/` is written (step 3, 2026-11-07). The release that ships it goes to the five rolled-out projects with their standards pass, then the remaining rollouts, which follow the standards from the start.
+   - **Fantasy Dossier** (prepared 2026-11-07 on v2.1.1, not yet committed), the first rollout to take the standards from the start:
+     - The shared configs in place of the private `eslint-config` submodule, which is removed: with it gone no project uses `jwill89/eslint-config`, so the repo can be archived and its `ESLINT_CONFIG_TOKEN` secrets deleted.
+     - CI on the shared workflows, with a release job; the deploy on SharedDeploy (a swap of `dist` and `.htaccess`, a smoke check through Cloudflare, rollback); a basic end-to-end suite with axe. It has no database, so no backup timer or pull.
+     - Vitest specs moved to `src/__tests__/`, with the config in `vite.config.ts`; `noUncheckedIndexedAccess` found 29 places, now handled.
+     - Font Awesome stays on the per-style packages: the owner's kit carries only the regular and brand styles, and the site draws in solid.
+   - **Next:** the standards pass is done in the five rolled-out projects (2026-11-07): each has a CLAUDE.md importing `@AGENTS.md` and the guide, an AGENTS.md trimmed to what is its own, and a "Where this project departs from the standards" section listing what its code still does the old way. The remaining rollouts follow the standards from the start.
 7. **Then the migrations, in this order:**
    1. Senpan's API to huma, replacing its hand-written spec and kin-openapi.
    2. The component kit, following its own plan in shared-components-vue.

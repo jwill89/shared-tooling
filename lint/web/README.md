@@ -56,6 +56,15 @@ The project holds shared-tooling as a submodule at `shared/`, so from a front en
    ]
    ```
 
+   `tsStylistic` sits outside the base's Vue wrapper, which skips a template-only component (a `.vue` file with no `<script lang="ts">`) for the type-aware rules. Its own type-aware rules then fail to load on such a file. A project with one turns the set off for it (Fantasy Dossier's `SvgDefs.vue`):
+
+   ```ts
+   {
+     files: ['src/components/common/SvgDefs.vue'],
+     rules: Object.fromEntries(Object.keys(tsStylistic.rules).map((rule) => [rule, 'off'])),
+   },
+   ```
+
    ```js
    // prettier.config.js
    export { default } from '@jwill89/lint-web/prettier'

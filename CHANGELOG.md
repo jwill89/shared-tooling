@@ -8,6 +8,11 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+### Changed
+
+- `lint/web`'s README says how a project with a template-only component (a `.vue` file with no `<script lang="ts">`) turns `tsStylistic` off for it: the set sits outside the base's Vue wrapper, so its type-aware rules fail to load on such a file. Found in Fantasy Dossier's rollout.
+- `standards/README.md`'s `CLAUDE.md` example opens with a `# CLAUDE.md` heading and one line saying the project's rules live in `AGENTS.md`: two import lines alone fail markdownlint's first-line-heading rule (MD041).
+
 ## [2.1.1] - 2026-11-07
 
 ### Fixed

@@ -15,9 +15,13 @@ Where a current, accepted RFC covers what you are building, follow it, since it 
 ## How a repo uses this guide
 
 - Each repo holds shared-tooling as a submodule at `shared/`, so this folder is `shared/standards/` there.
-- A repo's `CLAUDE.md` imports two files, so Claude Code reads them at the start of every session:
+- A repo's `CLAUDE.md` imports two files, so Claude Code reads them at the start of every session, under a heading so markdownlint's first-line rule passes:
 
   ```markdown
+  # CLAUDE.md
+
+  Keep this project's rules in AGENTS.md, not here.
+
   @AGENTS.md
   @shared/standards/README.md
   ```
