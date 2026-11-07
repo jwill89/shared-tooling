@@ -62,7 +62,7 @@ And per stack (each folder's README has the detail):
         fontawesome: true
         artifact-path: web/dist
       secrets:
-        FONTAWESOME_TOKEN: ${{ secrets.FONTAWESOME_TOKEN }}
+        FONTAWESOME_TOKEN: ${{ secrets.FONTAWESOME_NPM_TOKEN }}
     go:
       needs: web
       uses: jwill89/shared-tooling/.github/workflows/go.yml@v1.0.0

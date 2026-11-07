@@ -15,7 +15,7 @@ name: E2E
 #       go-version-file: go.mod
 #       fontawesome: true
 #     secrets:
-#       FONTAWESOME_TOKEN: ${{ secrets.FONTAWESOME_TOKEN }}
+#       FONTAWESOME_TOKEN: ${{ secrets.FONTAWESOME_NPM_TOKEN }}
 
 on:
   workflow_call:
@@ -33,7 +33,7 @@ on:
         type: string
         default: test:e2e
       fontawesome:
-        description: Install from the Font Awesome Pro registry (needs the FONTAWESOME_TOKEN secret).
+        description: Install from the Font Awesome Pro registry (needs the FONTAWESOME_TOKEN secret, which callers pass from their FONTAWESOME_NPM_TOKEN).
         type: boolean
         default: false
       go-version-file:
@@ -92,7 +92,7 @@ jobs:
         env:
           FONTAWESOME_TOKEN: ${{ secrets.FONTAWESOME_TOKEN }}
         run: |
-          test -n "$FONTAWESOME_TOKEN" || { echo "::error::The FONTAWESOME_TOKEN secret is not set."; exit 1; }
+          test -n "$FONTAWESOME_TOKEN" || { echo "::error::No Font Awesome token: pass the repo's FONTAWESOME_NPM_TOKEN secret as FONTAWESOME_TOKEN."; exit 1; }
           {
             echo "@awesome.me:registry=https://npm.fontawesome.com/"
             echo "@fortawesome:registry=https://npm.fontawesome.com/"

@@ -5,7 +5,7 @@
 # repo's folders differ.
 #
 # Dependabot can't read Actions secrets. A repo on the Font Awesome Pro registry adds
-# FONTAWESOME_TOKEN again as a Dependabot secret (Settings, Secrets and variables,
+# FONTAWESOME_NPM_TOKEN again as a Dependabot secret (Settings, Secrets and variables,
 # Dependabot). shared-tooling is public, so no token is needed for the submodule.
 version: 2
 
@@ -17,7 +17,7 @@ registries:
   fontawesome:
     type: npm-registry
     url: https://npm.fontawesome.com
-    token: ${{ secrets.FONTAWESOME_TOKEN }}
+    token: ${{ secrets.FONTAWESOME_NPM_TOKEN }}
 
 updates:
   - package-ecosystem: npm

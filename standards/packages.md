@@ -72,7 +72,7 @@ Which packages each stack uses and avoids, and how dependencies are added, pinne
 - A data source is adopted only after its terms allow keeping what it gives: no paid API, no scraping. [review]
 - Install with `npm ci`, and use `npm install <pkg>` only to add a package. [CI]
 - Shared packages install from the submodule as copies, `file:../shared/...` with `install-links=true` in a tracked `.npmrc`, since through a symlink ESLint can't find its plugins. [CI]
-- The Font Awesome Pro registry token lives in each developer's own `~/.npmrc` and in the repo's `FONTAWESOME_TOKEN` Actions and Dependabot secrets, never in a tracked file (see [security.md](security.md)). [review]
+- The Font Awesome Pro registry token lives in each developer's own `~/.npmrc` and in the repo's `FONTAWESOME_NPM_TOKEN` Actions and Dependabot secrets, never in a tracked file (see [security.md](security.md)). [review]
 - A repo that holds Font Awesome Pro files stays private. [review]
 
 ## Versions and holds
