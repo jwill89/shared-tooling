@@ -10,6 +10,10 @@
 version: 2
 
 registries:
+  # The project's .npmrc names this registry for its scopes; Dependabot adds the token.
+  # Give it no `scope:`: with one, Dependabot writes its own .npmrc in place of the
+  # committed one, which loses install-links=true, so the lockfile records lint/web and
+  # test/a11y as links and npm ci fails (TarotGen.io, 2026-11-07).
   fontawesome:
     type: npm-registry
     url: https://npm.fontawesome.com
@@ -31,6 +35,12 @@ updates:
       # Held on purpose: TypeScript stays on 6.x until vue-tsc supports TypeScript 7.1.
       - dependency-name: typescript
         update-types: ['version-update:semver-major']
+      # vue-tsc 3.3.14 turns a `//` in a static attribute (placeholder="https://") into
+      # broken virtual code, which stops it checking the rest of that template
+      # (vuejs/language-tools#6322). Each Vue project pins vue-tsc at 3.3.13 and skips
+      # only 3.3.14, so the fix comes through; drop this once it has.
+      - dependency-name: vue-tsc
+        versions: ['3.3.14']
       # The tools shared-tooling's lint/web owns move to a new major once, in
       # shared-tooling, with the plugins and configs that must match, and reach here with
       # `task shared:update`; a project's own plugin for one moves with it. Minors and

@@ -350,7 +350,7 @@ Every repo gets a CLAUDE.md that points at the standards during rollout, so that
 | Nophica Discord Bot | CI, Dependabot |  |
 | Senpan App Suite | None once its 2026-11-06 changes land | Rolled out first after the pilots |
 | Simple Image Gallery | None once its 2026-11-06 changes land | The second pilot |
-| TarotGen.io | Smoke check, migrations its deploy runs | Its schema changes are one-off scripts in `backend/db/`, untracked by git and run by hand on the live site before a deploy |
+| TarotGen.io | None since its 2026-11-06 rollout | Phinx migrations, run by the deploy, replaced the one-off scripts in `backend/db/` |
 | Venue Tools Dalamud Plugin | CI, Dependabot, changelog, tests |  |
 | What Do I Know | CI, changelog | Grav plugin and theme only |
 | Zealot Gaming | CI, deploy script | Static page |
@@ -382,7 +382,7 @@ Do what's urgent first, settle the decisions, build the tooling, and only then m
    - Axe found real problems in both, and the apps fixed them. The Gallery lacked a `main` landmark and names on three icon-only buttons, its sign-in and sign-up pages had no `h1`, and its muted text was under 4.5:1. Kindred's front and not-found pages had no `h1`.
    - Both deployed with them on 2026-11-06, the Gallery from `02a8ba8` and Kindred as v0.30.0. The droplet ran both kinds of backup timer: the shared job (the Gallery) and a project's own command (Kindred). Both database pulls came down. Both suites passed in CI, the shared `e2e.yml`'s first runs: the Gallery's with PHP, Kindred's with Go and Font Awesome Pro.
 6. **Roll out one repo at a time**, on `main`, with no separate branches. Everything shared-tooling can do lands in one pass: swap in the shared configs, move its deploy script onto the shared module, turn on its scheduled backup and database pull, and add its basic end-to-end suite, together (decided 2026-11-05, after Kindred's pilot did them on two branches; backups added 2026-11-06). Point its CLAUDE.md at the standards, trim what moved there, and close that project's gaps (see Project gaps). Small fixes ride along: the SQLite switch in Senpan and Modem Monitor, jsdom, and Playwright for the résumé site. After the pilots, the order is Senpan, Marxbot, TarotGen.io, then the rest (decided 2026-11-06).
-   - **Senpan** (done 2026-11-06, `20605df`, CI green with every shared job and its end-to-end suite; not yet deployed on the module):
+   - **Senpan** (done 2026-11-06, `20605df`, CI green with every shared job and its end-to-end suite; deployed on the module 2026-11-07, on v2.0.0):
      - Everything shared-tooling can do, in one pass: the shared configs and CI, Dependabot, the deploy on SharedDeploy with an HTTP smoke check and rollback, the daily backup, the database pull, and a basic end-to-end suite of 10 tests.
      - The SQLite driver moved to modernc. modernc returns `DATETIME` columns as `time.Time` where ncruces returned the stored text, so every read now casts to text, and a test guards it.
      - Roslynator went, since the shared analyzers cover it.
@@ -392,7 +392,7 @@ Do what's urgent first, settle the decisions, build the tooling, and only then m
      - The shared configs and CI, the deploy on SharedDeploy, the daily backup, the database pull, and a changelog. With no UI, it has no end-to-end suite. With no HTTP endpoint, the check after a start is that the bot is still running ten seconds later.
      - It runs as a fixed `marxbot` user instead of `DynamicUser=yes`, so the backup can run as it (decided 2026-11-06). The owner mirrors the unit's edits into the untracked `deploy/marxbot.service`, which holds the token, then deploys once with `-InstallService`.
      - The SQLite pragmas moved into the connection string: a connection reopened after a timed-out query had lost its busy timeout.
-   - **TarotGen.io** (prepared 2026-11-06 on v1.3.0, not yet committed):
+   - **TarotGen.io** (done and deployed 2026-11-06 as v5.5.0, on v1.3.0; on v2.0.0 since 2026-11-07):
      - The shared configs and CI for all four stacks, in place of the old `eslint-config` submodule; its own plugin workflow now only packages.
      - The deploy on SharedDeploy runs Phinx migrations after a compressed snapshot, with an HTTP smoke check and rollback, the daily backup (28 days) and the pull.
      - The old root cron backup is retired. Retention runs alone at 10:30 UTC, only when that day's backup exists.
@@ -400,10 +400,12 @@ Do what's urgent first, settle the decisions, build the tooling, and only then m
      - The end-to-end suite grew from 2 tests to 18, with axe on the main pages.
      - Axe and the owner's review fixed the gold buttons' text, the muted grey, and face-down cards that a screen reader named before they were turned.
      - The privacy page now says 28 days of backups.
-   - **Follow-ups the compression rule leaves** (decided 2026-11-06):
-     - The Gallery, Kindred, Senpan and Marxbot take v1.3.0 (`task shared:update -- v1.3.0`) and deploy once, which compresses their backups and snapshots.
+   - **The compression rule's follow-ups** (decided 2026-11-06; done 2026-11-07, in v2.0.0):
+     - All five rolled-out projects took v2.0.0 and deployed, which compressed their backups and snapshots.
      - Kindred's own `kindred backup` writes its daily copy compressed.
-     - The Gallery's own deploy snapshots (`db/.backups`, five kept, uncompressed) move to the shared format. A public module function for a site's database snapshot, with an owner to run as, would serve both the Gallery and TarotGen, which now writes its own to the same standard.
+     - The Gallery's and TarotGen.io's deploy snapshots are the module's `Backup-RemoteDatabase`, and TarotGen.io's pull runs as www-data (`Copy-LiveDatabase -Owner`).
+     - v2.0.0 also moved every project to Stylelint 18; TarotGen.io dropped `stylelint-config-recommended-scss` for `postcss-scss`.
+   - **Next:** `standards/` (step 3). No other project needs a rollout first: the three SQLite apps that had no scheduled backup are done, and the rest follow the standards.
 7. **Then the migrations, in this order:**
    1. Senpan's API to huma, replacing its hand-written spec and kin-openapi.
    2. The component kit, following its own plan in shared-components-vue.

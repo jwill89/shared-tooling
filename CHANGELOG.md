@@ -8,6 +8,11 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+### Changed
+
+- `repo/dependabot.example.yml` skips vue-tsc 3.3.14, which writes a `//` in a static template attribute as broken virtual code and stops checking the rest of that template (vuejs/language-tools#6322): it reported four false errors in Kindred Nights and could hide real ones. Each Vue project pins vue-tsc at 3.3.13 until the fix ships (2026-11-07).
+- `repo/dependabot.example.yml` says to give the Font Awesome registry no `scope:`. With one, Dependabot writes its own `.npmrc` in place of the project's, which loses `install-links=true`, so its lockfile records `lint/web` and `test/a11y` as links and `npm ci` fails: TarotGen.io's npm pull request #12.
+
 ## [2.0.0] - 2026-11-06
 
 This is a major: every project's own Stylelint moves to 18 when it takes it.
