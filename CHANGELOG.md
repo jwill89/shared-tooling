@@ -8,6 +8,10 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+### Changed
+
+- The Font Awesome secret is named `FONTAWESOME_NPM_TOKEN` in every repo's Actions and Dependabot secrets. `web.yml` and `e2e.yml` keep their `FONTAWESOME_TOKEN` secret input, which callers fill from `secrets.FONTAWESOME_NPM_TOKEN`; their usage comments, input descriptions and missing-token error now say so, as do README.md, `repo/dependabot.example.yml` and `standards/packages.md`.
+
 ## [2.1.3] - 2026-11-07
 
 ### Changed
