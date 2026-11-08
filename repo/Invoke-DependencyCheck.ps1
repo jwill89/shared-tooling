@@ -22,9 +22,10 @@
     the file in the shape of repo/dependabot.example.yml, line by line, since PowerShell has
     no YAML parser.
 
-    An update inside its range (npm's "wanted", a Composer "semver-safe-update", any Go or
-    NuGet minor or patch) is one Dependabot would fold into the ecosystem's grouped pull
-    request; -Update takes those. A major is one Dependabot opens alone, after its breaking
+    An update short of a new major (for npm the newest release in the installed major, so a
+    pinned version or a ~ range rises as Dependabot raises it; a Composer "semver-safe-update";
+    any Go or NuGet minor or patch) is one Dependabot would fold into the ecosystem's grouped
+    pull request; -Update takes those. A major is one Dependabot opens alone, after its breaking
     changes are read, so it is listed and never taken. GitHub Actions pins name a major tag
     (v7), so their updates are majors too.
 
@@ -79,6 +80,37 @@ function Get-UpdateKind {
     if ($a[0] -ne $b[0]) { return 'major' }
     if ($a[1] -ne $b[1]) { return 'minor' }
     'patch'
+}
+
+function Test-NewerVersion {
+    # Whether $Candidate is a later version than $Than, prereleases ordered as semver orders them.
+    param([string] $Candidate, [string] $Than)
+    $a = $null
+    $b = $null
+    if ([System.Management.Automation.SemanticVersion]::TryParse($Candidate, [ref] $a) -and
+        [System.Management.Automation.SemanticVersion]::TryParse($Than, [ref] $b)) {
+        return $a -gt $b
+    }
+    $x = Get-VersionPart $Candidate
+    $y = Get-VersionPart $Than
+    if (-not $x -or -not $y) { return $Candidate -ne $Than }
+    foreach ($i in 0..2) {
+        if ($x[$i] -ne $y[$i]) { return $x[$i] -gt $y[$i] }
+    }
+    $false
+}
+
+function Get-NpmNewestInMajor {
+    # The newest release in the installed version's major (0.x counted as one major, as
+    # Get-UpdateKind counts it), prereleases left out; $null when the registry has none newer.
+    # Asked only when "latest" is a major away, since npm outdated says nothing in between.
+    param([string] $Directory, [string] $Name, [string] $Current)
+    $parts = Get-VersionPart $Current
+    if (-not $parts) { return $null }
+    $raw = npm view "$Name@$($parts[0]).x" version --json --prefix $Directory 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $raw) { return $null }
+    $newest = @($raw | Out-String | ConvertFrom-Json)[-1]
+    if ($newest -and (Test-NewerVersion $newest $Current)) { $newest } else { $null }
 }
 
 function Read-DependabotHold {
@@ -156,11 +188,16 @@ try {
             if ($name -like '@jwill89/*') { continue }
             $info = @($outdated[$name])[0]
             if (-not $info.current) { continue }
-            if ($info.wanted -and $info.wanted -ne $info.current) {
-                $kind = Get-UpdateKind $info.current $info.wanted
-                Add-Update -Ecosystem npm -Directory $dir -Name $name -Current $info.current -Target $info.wanted -Kind $kind -InRange $true
+            # Dependabot's grouped pull request takes a package to its newest release short of a
+            # new major, raising a pinned version or a ~ range as it raises a ^ one. npm's
+            # "wanted" stays inside the range, so it never showed a pin's updates (Home Library's
+            # @types/node 26.6.5, 2026-11-08).
+            $latestIsMajor = -not $info.latest -or (Get-UpdateKind $info.current $info.latest) -eq 'major'
+            $target = if (-not $latestIsMajor) { $info.latest } else { (Get-NpmNewestInMajor -Directory $dir -Name $name -Current $info.current) ?? $info.wanted }
+            if ($target -and (Test-NewerVersion $target $info.current)) {
+                Add-Update -Ecosystem npm -Directory $dir -Name $name -Current $info.current -Target $target -Kind (Get-UpdateKind $info.current $target) -InRange $true
             }
-            if ($info.latest -and $info.latest -ne $info.wanted -and (Get-UpdateKind ($info.wanted ?? $info.current) $info.latest) -eq 'major') {
+            if ($info.latest -and $latestIsMajor -and (Test-NewerVersion $info.latest $info.current)) {
                 Add-Update -Ecosystem npm -Directory $dir -Name $name -Current $info.current -Target $info.latest -Kind major -InRange $false
             }
         }

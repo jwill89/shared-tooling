@@ -8,6 +8,14 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+### Changed
+
+- `standards/testing.md`: a task that two of `check`'s parallel steps depend on and that writes files (a frontend build lint and the tests both need) has `run: once`, so the second waits for the first's run instead of building over the same folder. An end-to-end suite that starts its own server stops with a message when something already answers on its port, fails setup when its server doesn't come up, and keeps the server's output in a log file. Home Library's suite failed 46 tests with no reason shown when another server answered on its port.
+
+### Fixed
+
+- `task shared:deps` and `task shared:push` see the minor and patch updates of an exactly pinned npm package (or a `~` range), which Dependabot raises in its grouped pull request: they took npm's "wanted", which stays inside the range, so Home Library's `@types/node` 26.6.5 went untaken and came back as a Dependabot pull request. The target is now the newest release in the installed major; when "latest" is a major away, the registry is asked for it.
+
 ## [2.2.3] - 2026-11-07
 
 ### Changed
