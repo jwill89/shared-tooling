@@ -8,6 +8,8 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-11-07
+
 ### Fixed
 
 - `task shared:deps:update` no longer takes npm updates with `npm update`, which moved only some of a family whose packages pin each other through peer dependencies: in Kindred Nights and TarotGen.io it raised `@tiptap/starter-kit` to 3.33.0 and left the other Tiptap packages on 3.32, so two copies of `@tiptap/core` broke the type check. `repo/npm-take-updates.mjs` now raises each range in `package.json`, keeping its `^`, `~` or exact form, and drops the lockfile entries of the package's family (its scope, or the package alone), and then `npm install` resolves the family afresh.
