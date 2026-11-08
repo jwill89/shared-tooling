@@ -13,6 +13,7 @@ What every project tests, how it tests it, and where each stack keeps and runs i
 | C# (Dalamud plugins) | A test project beside the plugin | xUnit v3 | `dotnet.yml` |
 
 - `task test` runs every suite in the repo, and `task check` runs them with the rest of what CI runs (see [docs-and-agents.md](docs-and-agents.md)). [CI]
+- `task check` starts the steps that don't depend on each other at once, with `task --parallel --output prefixed` (lint, the vulnerability checks and the unit tests, typically), so each line names its step; the steps that need them (the build, the end-to-end suite, a generated-code diff) follow in order. CI runs the same steps as separate jobs already. [review]
 
 ## Every stack
 
@@ -80,7 +81,7 @@ What every project tests, how it tests it, and where each stack keeps and runs i
 - The suite runs the real built app (the real binary, or PHP served through the production routing so pages get the real CSP) on a throwaway database in the OS temp folder, built by the migrations and seeded. [CI]
 - The prepare script refuses any database path inside the checkout. [test]
 - Anything that leaves the app, such as mail or an outside API, is dry-run. [review]
-- The Playwright config spreads `test/e2e`'s `playwrightDefaults`: tests in `e2e/`, one worker in order, one retry in CI, a trace kept on failure, and the browser already installed (Edge locally on Windows, the runner's Chrome in CI). [CI]
+- The Playwright config spreads `test/e2e`'s `playwrightDefaults`: tests in `e2e/`, one worker in order, one retry in CI, a trace kept on failure, and the browser already installed (Edge locally on Windows, the runner's Chrome in CI). The one worker is because a suite's steps share one server and one database, so it holds locally too. [CI]
 - A suite is checked for flakiness with `--repeat-each=5`, and every step tolerates the extra data a retry leaves behind. [review]
 - A change to the key user flow updates its end-to-end spec in the same change. [review]
 

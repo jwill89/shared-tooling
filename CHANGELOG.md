@@ -8,6 +8,10 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+### Changed
+
+- `standards/testing.md`: `task check` starts its independent steps at once with `task --parallel --output prefixed` (lint, the vulnerability checks and the unit tests, typically), each line prefixed with its step, and runs the build, the end-to-end suite and any generated-code diff after them, in order. The end-to-end suite keeps its one worker, since its steps share one server and one database; the standard now says why. Every project's `check` moved to it.
+
 ## [2.2.2] - 2026-11-07
 
 ### Fixed
