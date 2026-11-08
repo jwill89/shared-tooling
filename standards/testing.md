@@ -14,6 +14,8 @@ What every project tests, how it tests it, and where each stack keeps and runs i
 
 - `task test` runs every suite in the repo, and `task check` runs them with the rest of what CI runs (see [docs-and-agents.md](docs-and-agents.md)). [CI]
 - `task check` starts the steps that don't depend on each other at once, with `task --parallel --output prefixed` (lint, the vulnerability checks and the unit tests, typically), so each line names its step; the steps that need them (the build, the end-to-end suite, a generated-code diff) follow in order. CI runs the same steps as separate jobs already. [review]
+- A task that two of those parallel steps depend on and that writes files (a frontend build both lint and the tests need, say) has `run: once`, so the second step waits for the first's run instead of starting its own over the same output folder. [review]
+- An end-to-end suite that starts its own server first checks that nothing already answers on its port, and stops with that message if something does: a server left from another run would otherwise answer the tests with its own data and sessions. It also fails setup when its server doesn't come up, and keeps the server's output in a log file. [review]
 
 ## Every stack
 
