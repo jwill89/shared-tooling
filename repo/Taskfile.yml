@@ -13,6 +13,10 @@
 # project whose parts ship separately adds `deploy:backend`, `deploy:frontend` and
 # `deploy:plugin` for one part each, and has no `deploy:both` or `deploy:all`
 # (standards/deploy-and-ops.md). One whose parts ship in one archive keeps `deploy` alone.
+#
+# A project's `task push` wraps `shared:push`: it takes the in-range updates Dependabot
+# would open (`shared:deps`), scans the lockfiles for advisories (`shared:vuln`, also part
+# of its `task check`), runs `task check`, then pushes (standards/packages.md, Updates).
 version: '3'
 
 vars:
@@ -64,3 +68,24 @@ tasks:
     desc: Run scripts/deploy.ps1 (pass its flags after --, e.g. -- -SkipBuild)
     cmds:
       - pwsh -NoProfile -File scripts/deploy.ps1 {{.CLI_ARGS}}
+
+  deps:
+    desc: List the dependency updates Dependabot would open, in range and majors, leaving out what .github/dependabot.yml holds
+    cmds:
+      - pwsh -NoProfile -File "{{.SHARED}}/repo/Invoke-DependencyCheck.ps1" -Path .
+
+  deps:update:
+    desc: Take the in-range dependency updates (npm, Go, Composer, NuGet); majors and held versions are left alone
+    cmds:
+      - pwsh -NoProfile -File "{{.SHARED}}/repo/Invoke-DependencyCheck.ps1" -Path . -Update
+
+  vuln:
+    desc: Scan every lockfile with OSV-Scanner, as CI's osv job does, honouring each osv-scanner.toml
+    cmds:
+      - pwsh -NoProfile -File "{{.SHARED}}/repo/Invoke-VulnerabilityScan.ps1" -Path .
+
+  push:
+    desc: Take the in-range updates Dependabot would open, scan for advisories, run task check, then git push (-- -Yes, -SkipUpdates, -SkipCheck)
+    interactive: true
+    cmds:
+      - pwsh -NoProfile -File "{{.SHARED}}/repo/Invoke-Push.ps1" -Path . {{.CLI_ARGS}}

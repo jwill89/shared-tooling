@@ -8,6 +8,17 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+### Added
+
+- `task shared:push` (`repo/Invoke-Push.ps1`), for a project's `task push`: on a clean tree that isn't behind its remote, it lists the in-range updates Dependabot would open and, once you agree (`-- -Yes` skips the question), takes them, runs `task check` and commits them as one `chore(deps)` commit; then it scans the lockfiles for advisories, runs `task check`, and pushes. Majors are listed at the end, for Dependabot to open one by one. A failing check or an advisory stops it before anything is pushed.
+- `task shared:deps` and `task shared:deps:update` (`repo/Invoke-DependencyCheck.ps1`): the updates Dependabot would open for npm, Go, Composer, NuGet and GitHub Actions, leaving out what `.github/dependabot.yml` holds; `deps:update` takes the in-range ones and never a major or `modernc.org/libc`.
+- `task shared:vuln` (`repo/Invoke-VulnerabilityScan.ps1`): OSV-Scanner, pinned at v2.2.4 through `go run`, over every lockfile the repo tracks outside `shared/`, as CI's OSV job scans them, honouring each `osv-scanner.toml`. Projects add it to `task check`.
+- `repo/osv-scanner.example.toml`: the advisories OSV-Scanner may pass over, for a project to copy beside a lockfile as `osv-scanner.toml`. It holds the three that reach only lint, test and build tooling with no fix inside their dependents' ranges: minimatch (GHSA-g3hv-75wg-m249, through ESLint), glob (GHSA-3g3m-2fjr-6pw4, through js-beautify and Workbox's build) and deepmerge (GHSA-gcqx-w48m-w2h4, through Workbox's build), each with its reason and a date in three months. `standards/packages.md` says when an advisory may be passed over, and that a Go module OSV-Scanner flags is raised even when govulncheck finds it unreached; `osv.yml` points to both.
+
+### Fixed
+
+- `lint/pwsh/Invoke-ScriptLint.ps1`: after PSScriptAnalyzer crashes, the lint starts again in a fresh `pwsh` process on the same analyzer version, rather than retrying in the session that crashed. That session could report findings that weren't there: Home Library's CI flagged `Split-Path -Parent $PSScriptRoot` with PSUseCmdletCorrectly on such a retry (2026-11-07). Findings now come only from a run that never crashed; the six attempts and their warnings are as before.
+
 ## [2.1.7] - 2026-11-07
 
 ### Changed

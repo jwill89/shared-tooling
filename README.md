@@ -83,7 +83,16 @@ And per stack (each folder's README has the detail):
       uses: jwill89/shared-tooling/.github/workflows/pwsh.yml@v1.0.0
     docs:
       uses: jwill89/shared-tooling/.github/workflows/docs.yml@v1.0.0
+    osv:
+      uses: jwill89/shared-tooling/.github/workflows/osv.yml@v1.0.0
+      permissions:
+        contents: read
+        actions: read
+        security-events: write
   ```
+
+- **Vulnerabilities:** copy `repo/osv-scanner.example.toml` beside each npm lockfile as `osv-scanner.toml`, keeping only the advisories that lockfile has, and add `task shared:vuln` to the project's `task check`.
+- **Pushing:** add `push: { interactive: true, cmds: [task: shared:push] }`, so `task push` takes the in-range updates Dependabot would open (`task shared:deps` lists them, `task shared:deps:update` takes them), scans for advisories, runs `task check`, and pushes. Majors are only listed, for Dependabot to open one by one.
 
 A fresh clone needs `git submodule update --init` once (or `git clone --recurse-submodules`). The repo is public, so CI fetches it with the default token.
 

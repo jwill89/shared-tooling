@@ -19,15 +19,33 @@
     most twice before passing; GitHub's Linux runner crashed three times in a row. So a
     crash is tried again, up to six times in all; a finding is never retried.
 
+    Each new try is the whole lint in a fresh pwsh process, on the same PSScriptAnalyzer
+    version, so the findings reported always come from a session that never crashed. A
+    session that has crashed can report what isn't there: Home Library's CI, retrying in
+    the same session (2026-11-07), flagged `Split-Path -Parent $PSScriptRoot` with
+    PSUseCmdletCorrectly, where every clean run passes it.
+
 .PARAMETER Path
     The repo to lint. Defaults to the current folder.
+
+.PARAMETER Attempt
+    Which try this is; the script passes it to the fresh process it starts after a crash.
+
+.PARAMETER AnalyzerVersion
+    The PSScriptAnalyzer version to import; the script passes the one it ran to the fresh
+    process, so every try runs the same version.
 
 .EXAMPLE
     pwsh shared/lint/pwsh/Invoke-ScriptLint.ps1
 #>
 [CmdletBinding()]
 param(
-    [string] $Path = '.'
+    [string] $Path = '.',
+
+    [ValidateRange(1, 6)]
+    [int] $Attempt = 1,
+
+    [string] $AnalyzerVersion
 )
 
 $ErrorActionPreference = 'Stop'
@@ -36,26 +54,41 @@ $settings = Join-Path $PSScriptRoot 'PSScriptAnalyzerSettings.psd1'
 if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
     throw 'PSScriptAnalyzer is not installed: Install-PSResource PSScriptAnalyzer -Version 1.25.0 -Scope CurrentUser'
 }
+if ($AnalyzerVersion) {
+    Import-Module PSScriptAnalyzer -RequiredVersion $AnalyzerVersion
+}
 
+$crash = $null
 Push-Location -LiteralPath $Path
 try {
     # A tracked file deleted but not yet committed is still listed; there is nothing to lint.
     $files = @(git ls-files '*.ps1' '*.psm1' '*.psd1' | Where-Object { Test-Path -LiteralPath $_ })
     $findings = foreach ($file in $files) {
-        for ($try = 1; ; $try++) {
-            try {
-                Invoke-ScriptAnalyzer -Path $file -Settings $settings -ErrorAction Stop
-                break
-            } catch {
-                if ($try -ge 6) {
-                    throw
-                }
-                Write-Warning "PSScriptAnalyzer crashed on ${file} (attempt $try of 6): $($_.Exception.Message) Trying again."
-            }
+        try {
+            Invoke-ScriptAnalyzer -Path $file -Settings $settings -ErrorAction Stop
+        } catch {
+            $crash = "PSScriptAnalyzer crashed on ${file} (attempt $Attempt of 6): $($_.Exception.Message)"
+            break
         }
     }
 } finally {
     Pop-Location
+}
+
+if ($crash) {
+    if ($Attempt -ge 6) {
+        throw $crash
+    }
+    # This session's analyzer may now report what isn't there, so nothing it found counts:
+    # the whole lint runs again in a fresh process.
+    Write-Warning "$crash Trying again in a fresh process."
+    $version = (Get-Module PSScriptAnalyzer | Select-Object -First 1).Version
+    $retry = @('-NoProfile', '-File', $PSCommandPath, '-Path', (Resolve-Path -LiteralPath $Path).Path, '-Attempt', ($Attempt + 1))
+    if ($version) {
+        $retry += @('-AnalyzerVersion', "$version")
+    }
+    & (Get-Process -Id $PID).Path @retry
+    exit $LASTEXITCODE
 }
 
 $findings | Format-Table -AutoSize | Out-String | Write-Output

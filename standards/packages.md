@@ -90,6 +90,8 @@ Which packages each stack uses and avoids, and how dependencies are added, pinne
 ## Updates
 
 - Dependabot runs weekly on Monday for every ecosystem in the repo, from a `dependabot.yml` copied from `repo/dependabot.example.yml`. [review]
+- A push goes through `task push`, so Dependabot finds little left to open: it takes the in-range updates Dependabot would open (`task shared:deps`, which leaves out what `dependabot.yml` holds) after asking, runs `task check` on them and commits them as one `chore(deps)` commit, then scans every lockfile with OSV-Scanner (`task shared:vuln`), runs `task check`, and pushes. Majors are only listed: Dependabot opens each alone, to be read first. [review]
+- Every project's `task check` includes `task shared:vuln`, so a known advisory fails locally before CI's OSV job finds it. [review]
 - Minors and patches are grouped per ecosystem, and majors come one by one. [review]
 - Dependabot ignores held majors and the majors of tools `lint/web` owns, and leaves out the `shared/` submodule, since a shared-tooling release is taken on purpose. [review]
 - A major is planned apart from in-range updates: check its breaking changes against the code and specs before taking it, and recheck the library's APIs after. [review]
@@ -99,4 +101,5 @@ Which packages each stack uses and avoids, and how dependencies are added, pinne
 ## Audits
 
 - CI audits dependencies and gates the build: `npm audit --omit=dev` in `web.yml`, `composer audit` in `php.yml`, govulncheck in `go.yml`, and OSV-Scanner over every lockfile in `osv.yml`. [CI]
-- Go keeps govulncheck beside OSV-Scanner, since govulncheck checks whether the vulnerable code is actually called. [CI]
+- Go keeps govulncheck beside OSV-Scanner, since govulncheck checks whether the vulnerable code is actually called. A Go module OSV-Scanner flags is still raised to its fixed version once a tagged release carries the fix, even when govulncheck finds the code unreached. [CI]
+- An advisory OSV-Scanner reports is fixed by raising the package. Only one that reaches nothing that ships (lint, test or build tooling), and whose fix no dependent's range takes, may be passed over: in an `osv-scanner.toml` beside the lockfile, copied from `repo/osv-scanner.example.toml`, each entry with its reason and an `ignoreUntil` three months out, when it is looked at again. [CI]

@@ -4,6 +4,10 @@ name: Vulnerabilities
 # NuGet), through Google's own reusable workflow. Go modules keep govulncheck too
 # (go.yml), since it checks whether the vulnerable code is actually called.
 #
+# An advisory in lint, test or build tooling whose fix no dependent's range takes is
+# passed over by an osv-scanner.toml beside that lockfile, from
+# repo/osv-scanner.example.toml (standards/packages.md); the scanner reads it there.
+#
 #   osv:
 #     uses: jwill89/shared-tooling/.github/workflows/osv.yml@v1.0.0
 #     permissions:
