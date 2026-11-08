@@ -8,6 +8,11 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+### Fixed
+
+- `task shared:deps` judges a Composer update by what `composer update --dry-run` would take, so one the project's own `conflict` rule holds, or that a held package keeps back, counts as held rather than in range. `composer outdated` weighs neither: Fantasy Dossier's phpstan, held at 2.3.3, and the rector 2.8.4 that needs a newer phpstan were offered, never taken, and still named in the commit. `deps:update` moves Composer packages with `--with-all-dependencies`.
+- `task shared:push` scans again after taking the updates, so its `chore(deps)` commit names only what was taken and warns about any held back. It commits only the manifests and lockfiles, and stops, committing nothing, if anything else changed while updating or checking; it had staged every change with `git add -A`.
+
 ## [2.2.0] - 2026-11-07
 
 ### Added

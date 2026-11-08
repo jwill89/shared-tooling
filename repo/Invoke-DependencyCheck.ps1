@@ -184,11 +184,24 @@ try {
         if (-not (Get-Command composer -ErrorAction SilentlyContinue)) { $skipped.Add("composer ($dir): composer is not on PATH"); continue }
         $raw = composer outdated --direct --format=json --working-dir=$dir 2>$null
         if (-not $raw) { continue }
+        # What an update would really do: composer outdated doesn't weigh the project's own
+        # `conflict` holds, or a package another one holds back (Fantasy Dossier's phpstan, held
+        # at 2.3.3, keeps rector at 2.8.2), so an in-range update counts only if the dry run takes it.
+        $upgrades = @{}
+        foreach ($line in composer update --dry-run --with-all-dependencies --no-interaction --working-dir=$dir 2>&1) {
+            if ("$line" -match 'Upgrading (\S+) \((.+?) => (.+?)\)') { $upgrades[$Matches[1]] = $Matches[3] }
+        }
         foreach ($package in @((($raw | Out-String) | ConvertFrom-Json).installed)) {
             if (-not $package.latest -or $package.latest -eq $package.version) { continue }
-            $inRange = $package.'latest-status' -eq 'semver-safe-update'
             $kind = Get-UpdateKind $package.version $package.latest
-            Add-Update -Ecosystem composer -Directory $dir -Name $package.name -Current $package.version -Target $package.latest -Kind $kind -InRange $inRange
+            if ($package.'latest-status' -ne 'semver-safe-update') {
+                Add-Update -Ecosystem composer -Directory $dir -Name $package.name -Current $package.version -Target $package.latest -Kind $kind -InRange $false
+            } elseif ($upgrades.ContainsKey($package.name)) {
+                $target = $upgrades[$package.name]
+                Add-Update -Ecosystem composer -Directory $dir -Name $package.name -Current $package.version -Target $target -Kind (Get-UpdateKind $package.version $target) -InRange $true
+            } else {
+                $script:held++
+            }
         }
     }
 
@@ -250,7 +263,9 @@ try {
                     if ($LASTEXITCODE -ne 0) { throw "go mod tidy failed in $($first.Directory)." }
                 }
                 'composer' {
-                    composer update @names --with-dependencies --working-dir=$($first.Directory) --no-interaction
+                    # All dependencies, so packages that require each other move together: rector
+                    # needs a newer phpstan, a root requirement too, which --with-dependencies leaves.
+                    composer update @names --with-all-dependencies --working-dir=$($first.Directory) --no-interaction
                     if ($LASTEXITCODE -ne 0) { throw "composer update failed in $($first.Directory)." }
                     # The floors rise to what is now installed (standards/packages.md), then the lock records them.
                     composer bump @names --working-dir=$($first.Directory) --no-interaction
@@ -286,7 +301,7 @@ try {
         $majors | ForEach-Object { Write-Output ("  {0} ({1}) {2} {3} -> {4}" -f $_.Ecosystem, $_.Directory, $_.Name, $_.Current, $_.Target) }
     }
     if (-not $entries.Count) { Write-Output 'Up to date: Dependabot has nothing to open.' }
-    if ($held) { Write-Output "$held more held by .github/dependabot.yml, left out." }
+    if ($held) { Write-Output "$held more held back (by .github/dependabot.yml, a Composer conflict, or a package that depends on them), left out." }
     $skipped | ForEach-Object { Write-Warning $_ }
 } finally {
     Pop-Location

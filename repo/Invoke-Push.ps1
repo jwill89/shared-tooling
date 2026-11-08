@@ -13,9 +13,11 @@
          it. With nothing to push, it stops there.
       2. The dependency updates Dependabot would open (Invoke-DependencyCheck.ps1, which
          leaves out what .github/dependabot.yml holds). The ones inside their ranges are
-         listed and, once you agree (or with -Yes), taken: then task check runs, and they
-         are committed as one chore(deps) commit. A failing check stops the push and leaves
-         them uncommitted to look at.
+         listed and, once you agree (or with -Yes), taken: then task check runs, and the
+         manifests and lockfiles they changed are committed as one chore(deps) commit that
+         names what was taken. One that something else holds back is named as not taken. A
+         failing check, or a change to any other file, stops the push and leaves everything
+         uncommitted to look at.
       3. OSV-Scanner over every lockfile (Invoke-VulnerabilityScan.ps1). An advisory stops
          the push.
       4. task check, unless step 2 just ran it.
@@ -89,16 +91,38 @@ try {
         }
         if ($take) {
             & (Join-Path $PSScriptRoot 'Invoke-DependencyCheck.ps1') -Path . -Update
+            # What was really taken: an update a dependent holds back is still on offer afterwards.
+            $after = @(& (Join-Path $PSScriptRoot 'Invoke-DependencyCheck.ps1') -Path . -PassThru | Where-Object InRange)
+            $taken = @($inRange | Where-Object {
+                    $entry = $_
+                    -not ($after | Where-Object { $_.Ecosystem -eq $entry.Ecosystem -and $_.Directory -eq $entry.Directory -and $_.Name -eq $entry.Name })
+                })
+            $left = @($inRange | Where-Object { $taken -notcontains $_ })
+            if ($left) {
+                Write-Warning ('Not taken, since something they depend on or that depends on them holds them back: ' + (($left | ForEach-Object { '{0} {1}' -f $_.Name, $_.Target }) -join ', '))
+            }
             Write-Step 'Running task check on the updates...'
             task check
             if ($LASTEXITCODE -ne 0) {
                 Exit-Push 'task check fails with the updates. They are left uncommitted to look at; git checkout -- . puts the tree back.'
             }
             $checked = $true
-            git add -A
-            git commit --quiet -m "chore(deps): take the in-range updates before pushing" -m ($inRange | ForEach-Object { '- {0}: {1} {2} -> {3}' -f $_.Ecosystem, $_.Name, $_.Current, $_.Target } | Out-String).Trim()
-            if ($LASTEXITCODE -ne 0) { Exit-Push 'Committing the updates failed.' }
-            Write-Step 'Committed the updates as one chore(deps) commit.'
+            # Only the manifests and lockfiles the updates change are committed; anything else
+            # changed (a check that rewrote a file) stops here to be looked at.
+            $changed = @(git status --porcelain | ForEach-Object { $_.Substring(3).Trim('"') })
+            $dependencyFile = '(^|/)(package(-lock)?\.json|npm-shrinkwrap\.json|go\.(mod|sum)|composer\.(json|lock)|packages\.lock\.json|[^/]+\.csproj)$'
+            $other = @($changed | Where-Object { $_ -notmatch $dependencyFile })
+            if ($other) {
+                Exit-Push ("Besides the dependency files, these changed while updating and checking; look at them before pushing: $($other -join ', '). Nothing was committed.")
+            }
+            if (-not $changed) {
+                Write-Output 'Nothing changed: no update could be taken.'
+            } else {
+                git add -- @changed
+                git commit --quiet -m 'chore(deps): take the in-range updates before pushing' -m ($taken | ForEach-Object { '- {0}: {1} {2} -> {3}' -f $_.Ecosystem, $_.Name, $_.Current, $_.Target } | Out-String).Trim()
+                if ($LASTEXITCODE -ne 0) { Exit-Push 'Committing the updates failed.' }
+                Write-Step "Committed $($taken.Count) update(s) as one chore(deps) commit."
+            }
         } else {
             Write-Output 'Left for now; Dependabot will open them on its next run.'
         }
