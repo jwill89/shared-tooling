@@ -8,6 +8,8 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-11-08
+
 ### Changed
 
 - `standards/testing.md`: a task that two of `check`'s parallel steps depend on and that writes files (a frontend build lint and the tests both need) has `run: once`, so the second waits for the first's run instead of building over the same folder. An end-to-end suite that starts its own server stops with a message when something already answers on its port, fails setup when its server doesn't come up, and keeps the server's output in a log file. Home Library's suite failed 46 tests with no reason shown when another server answered on its port.
