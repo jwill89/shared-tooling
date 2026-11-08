@@ -8,6 +8,8 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-07
+
 ### Added
 
 - `task shared:push` (`repo/Invoke-Push.ps1`), for a project's `task push`: on a clean tree that isn't behind its remote, it lists the in-range updates Dependabot would open and, once you agree (`-- -Yes` skips the question), takes them, runs `task check` and commits them as one `chore(deps)` commit; then it scans the lockfiles for advisories, runs `task check`, and pushes. Majors are listed at the end, for Dependabot to open one by one. A failing check or an advisory stops it before anything is pushed.
