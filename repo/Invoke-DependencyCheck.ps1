@@ -35,9 +35,11 @@
     The repo. Defaults to the current folder.
 
 .PARAMETER Update
-    Take the in-range updates: npm update --save for those packages, go get each module at
-    its version then go mod tidy, composer update then composer bump for those packages,
-    and dotnet add package. Majors and held versions are left alone.
+    Take the in-range updates: for npm, each package's range raised to the new version and
+    its family's lockfile entries dropped (npm-take-updates.mjs), then npm install, so
+    packages that pin each other move together; go get each module at its version then go
+    mod tidy; composer update then composer bump for those packages; and dotnet add package.
+    Majors and held versions are left alone.
 
 .PARAMETER PassThru
     Return the updates as objects (Ecosystem, Directory, Name, Current, Target, Kind,
@@ -251,8 +253,13 @@ try {
             Write-Output "== $($first.Ecosystem) ($($first.Directory)): $($names -join ', ')"
             switch ($first.Ecosystem) {
                 'npm' {
-                    npm update --save --prefix $first.Directory @names
-                    if ($LASTEXITCODE -ne 0) { throw "npm update failed in $($first.Directory)." }
+                    # The ranges rise and the families' lock entries go (npm-take-updates.mjs), so
+                    # packages that pin each other move together; npm update left Tiptap split.
+                    $specs = @($group.Group | ForEach-Object { "$($_.Name)@$($_.Target)" })
+                    node (Join-Path $PSScriptRoot 'npm-take-updates.mjs') $first.Directory @specs
+                    if ($LASTEXITCODE -ne 0) { throw "Raising the npm ranges failed in $($first.Directory)." }
+                    npm install --prefer-offline --no-audit --prefix $first.Directory
+                    if ($LASTEXITCODE -ne 0) { throw "npm install failed in $($first.Directory)." }
                 }
                 'gomod' {
                     foreach ($entry in $group.Group) {
