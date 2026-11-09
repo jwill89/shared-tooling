@@ -1974,6 +1974,246 @@ function Get-ReleaseTag {
     "$tag".Trim()
 }
 
+function Get-DeployRelease {
+    <#
+    .SYNOPSIS
+    The newest release CI tagged on the branch this checkout tracks: what a deploy ships.
+
+    .DESCRIPTION
+    Fetches the tags first, since CI tags a release once main is green. Then it takes the
+    newest tag matching -Match (by version) among those on the branch HEAD tracks
+    (origin/main), or on HEAD when it tracks none. Commits after that release, such as a
+    shared-tooling update or work not yet released, are not part of it: the deploy builds the
+    release as CI tested and tagged it (New-ReleaseTree), so HEAD need not be tagged and the
+    working tree need not be clean (decided 2026-11-09). Throws if no release is tagged yet.
+
+    Returns the tag, its commit, the branch it was found on, and how many commits on that
+    branch follow it.
+
+    .PARAMETER Path
+    The repository; by default the current location.
+
+    .PARAMETER Match
+    The tags that are releases, as a git tag pattern.
+
+    .EXAMPLE
+    $release = Get-DeployRelease -Path $repoRoot
+    Write-Step "Deploying $($release.Tag)"
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [string]$Path = (Get-Location).Path,
+        [string]$Match = 'v[0-9]*'
+    )
+    git -C $Path fetch --tags --quiet | Out-Host
+    if ($LASTEXITCODE -ne 0) { Write-Warning 'Could not fetch the tags; looking among the local ones.' }
+    $branch = "$(git -C $Path rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>$null)".Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $branch) { $branch = 'HEAD' }
+    $tag = "$(@(git -C $Path tag --merged $branch --list $Match --sort=-v:refname) | Select-Object -First 1)".Trim()
+    if (-not $tag) { throw "No release ($Match) is tagged on $branch yet. CI tags one when a push raises the version." }
+    [pscustomobject]@{
+        Tag    = $tag
+        Commit = "$(git -C $Path rev-parse "$tag^{commit}")".Trim()
+        Branch = $branch
+        Since  = [int]"$(git -C $Path rev-list --count "$tag..$branch")".Trim()
+    }
+}
+
+function Get-DeployedRelease {
+    <#
+    .SYNOPSIS
+    The release the host last took for a name, as Set-DeployedRelease recorded it; empty if none.
+
+    .DESCRIPTION
+    A deploy records its release on the host once the site has passed its checks, in
+    ~/.shared-deploy/<name> of the SSH user: outside every web root, and written only by a
+    deploy that stayed, never by one that rolled back. A release deploy reads it first and
+    stops when the host already runs that release, unless told to deploy it again. An empty
+    answer (nothing recorded yet, as before the first deploy that records) means the release
+    goes out. Rides the held connection.
+
+    .PARAMETER Name
+    What was deployed, one name a project (or one of its parts) keeps: homelibrary,
+    tarotgen-backend.
+
+    .PARAMETER Connection
+    The connection to use; by default the one Open-DeployConnection stored.
+
+    .EXAMPLE
+    if ((Get-DeployedRelease -Name 'example') -eq $release.Tag) { Write-Ok "$($release.Tag) is live already." }
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Name,
+
+        [object]$Connection
+    )
+    Assert-SafeRemoteName -Value $Name -What 'The release record'
+    $lines = Invoke-Remote -Connection $Connection -Script "cat `"`$HOME/.shared-deploy/$Name`" 2>/dev/null || true"
+    "$(@($lines) | Select-Object -First 1)".Trim()
+}
+
+function Set-DeployedRelease {
+    <#
+    .SYNOPSIS
+    Records on the host the release a deploy put there, for Get-DeployedRelease.
+
+    .DESCRIPTION
+    Call it once the deployed site has passed its checks, so a deploy that rolled back
+    leaves the record of the release still running. A -Preview deploy records its preview
+    stamp, so the next release deploy goes out whatever release the record named before.
+    Written whole (to a partial file, then renamed) and readable by the SSH user alone.
+
+    .PARAMETER Name
+    The name Get-DeployedRelease reads it by.
+
+    .PARAMETER Release
+    The release now running: its tag, or a preview stamp.
+
+    .PARAMETER Connection
+    The connection to use; by default the one Open-DeployConnection stored.
+
+    .EXAMPLE
+    Set-DeployedRelease -Name 'example' -Release $release.Tag
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Name,
+
+        [Parameter(Mandatory)]
+        [string]$Release,
+
+        [object]$Connection
+    )
+    Assert-SafeRemoteName -Value $Name -What 'The release record'
+    Assert-SafeRemoteName -Value $Release -What 'The release'
+    if (-not $PSCmdlet.ShouldProcess("~/.shared-deploy/$Name on the host", "Record $Release")) { return }
+    $script = Format-RemoteScript -Value @{ NAME = $Name; RELEASE = $Release } -Template @'
+umask 077
+mkdir -p "$HOME/.shared-deploy"
+printf '%s\n' '__RELEASE__' > "$HOME/.shared-deploy/__NAME__.partial"
+mv -f "$HOME/.shared-deploy/__NAME__.partial" "$HOME/.shared-deploy/__NAME__"
+'@
+    $null = Invoke-Remote -Connection $Connection -Script $script
+}
+
+function New-ReleaseTree {
+    <#
+    .SYNOPSIS
+    Checks a release out into a folder of its own, with its submodules and clean npm installs, to build from.
+
+    .DESCRIPTION
+    A release deploy builds the tagged commit, not the working tree (decided 2026-11-09).
+    The commits after the release and any change not committed stay out of it, and so do
+    the packages installed for HEAD, which can differ from the release's lockfiles. git
+    worktree adds the tag, detached, in a new folder under the temp folder; its submodules
+    (shared/) follow at the commits the release names; and npm ci installs each -Npm folder
+    from the release's lockfile. npm takes a package it has in its cache from there, by the
+    integrity the lockfile records, so a Font Awesome kit is not downloaded again. Untracked
+    files of the checkout (a .env, the deploy config) are not in it; a build that needs one
+    reads it from the checkout.
+
+    Remove it with Remove-ReleaseTree in a finally block. A failure part-way removes what
+    was made and throws.
+
+    .PARAMETER Path
+    The repository's checkout.
+
+    .PARAMETER Tag
+    The release to check out, from Get-DeployRelease.
+
+    .PARAMETER Npm
+    The folders, relative to the repository, to run npm ci in: web, frontend.
+
+    .EXAMPLE
+    $tree = New-ReleaseTree -Path $repoRoot -Tag $release.Tag -Npm 'web'
+    try { task -d $tree build:linux } finally { Remove-ReleaseTree -Path $tree -Repository $repoRoot }
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string]$Tag,
+
+        [string[]]$Npm = @()
+    )
+    $name = ((Split-Path -Path $Path -Leaf) -replace '[^A-Za-z0-9]', '').ToLowerInvariant()
+    if ($name.Length -gt 12) { $name = $name.Substring(0, 12) }
+    # Short, so a package deep in node_modules stays inside Windows' path limit.
+    $tree = Join-Path ([IO.Path]::GetTempPath()) "rel-$name-$([guid]::NewGuid().ToString('N').Substring(0, 6))"
+    if (-not $PSCmdlet.ShouldProcess($tree, "Check out $Tag and install its packages")) { return }
+    Write-Step "Checking out $Tag to build it, in $tree..."
+    # Every command's output goes to the screen, so the folder is all this returns.
+    git -C $Path worktree add --detach --quiet $tree "$Tag^{commit}" | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "git worktree add could not check out $Tag." }
+    try {
+        git -C $tree submodule update --init --recursive --quiet | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "The submodules $Tag names could not be checked out." }
+        foreach ($folder in $Npm) {
+            $dir = Join-Path -Path $tree -ChildPath $folder
+            if (-not (Test-Path -LiteralPath (Join-Path -Path $dir -ChildPath 'package-lock.json'))) { throw "$folder has no package-lock.json in $Tag." }
+            Write-Step "Installing $folder's packages from $Tag's lockfile (npm ci)..."
+            Push-Location -LiteralPath $dir
+            try {
+                npm ci --prefer-offline --no-audit --no-fund | Out-Host
+                if ($LASTEXITCODE -ne 0) { throw "npm ci failed in $folder (exit $LASTEXITCODE). Nothing was deployed." }
+            } finally {
+                Pop-Location
+            }
+        }
+    } catch {
+        Remove-ReleaseTree -Path $tree -Repository $Path
+        throw
+    }
+    Write-Ok "$Tag checked out, with its submodules and packages"
+    $tree
+}
+
+function Remove-ReleaseTree {
+    <#
+    .SYNOPSIS
+    Removes a folder New-ReleaseTree made, and git's record of it.
+
+    .DESCRIPTION
+    git worktree remove --force, which also takes the worktree's submodules; where Windows
+    still holds a file (a build tool's binary), the folder is deleted and git's record
+    pruned instead. Never throws: a folder it could not remove is named in a warning.
+
+    .PARAMETER Path
+    The folder New-ReleaseTree returned.
+
+    .PARAMETER Repository
+    The checkout it was made from.
+
+    .EXAMPLE
+    Remove-ReleaseTree -Path $tree -Repository $repoRoot
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string]$Repository
+    )
+    if (-not $PSCmdlet.ShouldProcess($Path, 'Remove the release checkout')) { return }
+    if (Test-Path -LiteralPath $Path) {
+        git -C $Repository worktree remove --force $Path 2>$null | Out-Host
+        if (Test-Path -LiteralPath $Path) {
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    git -C $Repository worktree prune 2>$null | Out-Host
+    if (Test-Path -LiteralPath $Path) { Write-Warning "The release's build folder could not be removed; delete $Path by hand." }
+}
+
 #endregion
 
 #region The deploy bundle
@@ -4451,6 +4691,11 @@ Export-ModuleMember -Alias 'Fail' -Function @(
     'Invoke-PluginBuild'
     'Assert-CleanWorkingTree'
     'Get-ReleaseTag'
+    'Get-DeployRelease'
+    'Get-DeployedRelease'
+    'Set-DeployedRelease'
+    'New-ReleaseTree'
+    'Remove-ReleaseTree'
     'Invoke-DeployBundle'
     'Install-ServiceBinary'
     'Restore-ServiceBinary'

@@ -20,7 +20,9 @@
     It leaves out what .github/dependabot.yml holds: an `ignore` entry's dependency-name
     (with * patterns), limited to its update-types or versions when it names them. It reads
     the file in the shape of repo/dependabot.example.yml, line by line, since PowerShell has
-    no YAML parser.
+    no YAML parser. It leaves out, too, a NuGet package no project file of the repo names:
+    one an SDK adds by itself, such as Dalamud.NET.Sdk's DotNet.ReproducibleBuilds, which
+    Dependabot never sees and which moves only with that SDK. The report counts those apart.
 
     An update short of a new major (for npm the newest release in the installed major, so a
     pinned version or a ~ range rises as Dependabot raises it; a Composer "semver-safe-update";
@@ -174,6 +176,8 @@ try {
     $script:holds = Read-DependabotHold -File '.github/dependabot.yml'
     $script:entries = [System.Collections.Generic.List[object]]::new()
     $script:held = 0
+    # NuGet packages an SDK adds, which no project file names.
+    $script:implied = [System.Collections.Generic.List[string]]::new()
     $skipped = [System.Collections.Generic.List[string]]::new()
 
     # npm
@@ -244,7 +248,11 @@ try {
         }
     }
 
-    # NuGet
+    # NuGet. Only the packages the repo's own MSBuild files name, as Dependabot reads them: dotnet
+    # list package also reports what an SDK adds by itself (Dalamud.NET.Sdk's
+    # DotNet.ReproducibleBuilds), as if a project had asked for it.
+    $msbuild = @($tracked | Where-Object { $_ -match '\.(csproj|props|targets)$' -and (Test-Path -LiteralPath $_) } |
+            ForEach-Object { Get-Content -LiteralPath $_ -Raw })
     foreach ($project in $tracked | Where-Object { $_ -match '\.csproj$' }) {
         $dir = Split-Path -Path $project -Parent
         if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { $skipped.Add('nuget: dotnet is not on PATH'); break }
@@ -253,6 +261,11 @@ try {
         $report = ($raw | Out-String) | ConvertFrom-Json
         foreach ($package in @($report.projects.frameworks.topLevelPackages | Where-Object { $_ })) {
             if (-not $package.latestVersion -or $package.latestVersion -eq $package.resolvedVersion) { continue }
+            $named = "(?i)\b(Include|Update)\s*=\s*[`"']$([regex]::Escape($package.id))[`"']"
+            if (-not @($msbuild | Where-Object { $_ -match $named })) {
+                if ($package.id -notin $script:implied) { $script:implied.Add($package.id) }
+                continue
+            }
             $kind = Get-UpdateKind $package.resolvedVersion $package.latestVersion
             if ($script:entries | Where-Object { $_.Ecosystem -eq 'nuget' -and $_.Name -eq $package.id -and $_.Project -eq $project }) { continue }
             Add-Update -Ecosystem nuget -Directory $dir -Name $package.id -Current $package.resolvedVersion -Target $package.latestVersion -Kind $kind -InRange ($kind -ne 'major') -Project $project
@@ -351,6 +364,7 @@ try {
     }
     if (-not $entries.Count) { Write-Output 'Up to date: Dependabot has nothing to open.' }
     if ($held) { Write-Output "$held more held back (by .github/dependabot.yml, a Composer conflict, or a package that depends on them), left out." }
+    if ($implied.Count) { Write-Output "$($implied.Count) more an SDK adds rather than a project file ($($implied -join ', ')), left out: Dependabot never sees them, and they move with that SDK." }
     $skipped | ForEach-Object { Write-Warning $_ }
 } finally {
     Pop-Location

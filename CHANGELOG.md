@@ -8,6 +8,15 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+### Added
+
+- Deploys ship the newest release, not the tag on HEAD. `Get-DeployRelease` fetches the tags and finds the newest one CI made on main, so a shared-tooling update or other commits after a release no longer stop `task deploy` with "HEAD is not tagged" (Home Library, after its v2.3.2 update followed v1.1.2). `New-ReleaseTree` checks the release out into a folder of its own, with its submodules and an `npm ci` from its lockfiles, and the deploy builds there, so nothing uncommitted and no package installed for HEAD reaches it; `Remove-ReleaseTree` removes it. npm takes the packages from its cache by the lockfile's integrity: a release build of Home Library made no network request at all. `Get-DeployedRelease` and `Set-DeployedRelease` keep a record on the host, `~/.shared-deploy/<name>`, of the release each deploy left running, written once the site passes its checks; a deploy whose release is already running does nothing, and `-Force` deploys it again. `standards/deploy-and-ops.md` says so; `Get-ReleaseTag` and `Assert-CleanWorkingTree` stay for Senpan until its overhaul.
+
+### Fixed
+
+- `task shared:deps` and `task shared:push` no longer list a NuGet package an SDK adds by itself as a major Dependabot would open. `dotnet list package` reports Dalamud.NET.Sdk's `DotNet.ReproducibleBuilds` (1.2.39, 2.0.5 out) like a package the plugin asked for, so every push in Kindred Nights, TarotGen.io and Senpan named it; but no project file names it, Dependabot never opened it, and it moves only with the SDK. A NuGet package now counts only where one of the repo's own `.csproj`, `.props` or `.targets` files names it, and the report counts the others apart.
+- `task shared:lint:scripts` no longer crashes on a large file. PSScriptAnalyzer 1.25.0 runs its rules side by side, and two of them reading the same command's parameters at once throw a NullReferenceException: `UseCorrectCasing` against the rest, and in a module the rules that read its `Export-ModuleMember` (`AvoidReservedCharInCmdlet` among them). Once `SharedDeploy.psm1` grew, all six of the lint's tries crashed. A script is now analyzed in two passes, `UseCorrectCasing` alone and then every other rule, and a module one rule at a time (about 13 seconds for `SharedDeploy.psm1`); on a file seeded with ten kinds of finding, both report exactly what one pass did. A crash names the pass it came from, and is still retried in a fresh process.
+
 ## [2.3.2] - 2026-11-09
 
 ### Fixed

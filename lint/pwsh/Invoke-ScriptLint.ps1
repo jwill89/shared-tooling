@@ -15,9 +15,15 @@
 
     PSScriptAnalyzer 1.25.0, the newest release, races with itself on a large file when
     it starts cold: it throws a NullReferenceException, or "more than one dynamic module
-    in each dynamic assembly", and then passes once warm. Locally a process crashed at
-    most twice before passing; GitHub's Linux runner crashed three times in a row. So a
-    crash is tried again, up to six times in all; a finding is never retried.
+    in each dynamic assembly", and then passes once warm. The NullReferenceException is
+    UseCorrectCasing reading a command's parameters while another rule, run beside it,
+    builds them (CommandInfo.Parameters): SharedDeploy.psm1 crashed six tries in six once
+    it grew (2026-11-09). So UseCorrectCasing runs on each script in a pass of its own and
+    every other rule in a second; the two report what one pass did. A module (.psm1) races
+    in more rules than that, those that read its Export-ModuleMember (AvoidReservedChar-
+    InCmdlet among them), so a module is analyzed one rule at a time: SharedDeploy.psm1's
+    74 rules in about 13 seconds, with no crash. A crash of either kind is still tried
+    again, up to six times in all; a finding is never retried.
 
     Each new try is the whole lint in a fresh pwsh process, on the same PSScriptAnalyzer
     version, so the findings reported always come from a session that never crashed. A
@@ -58,16 +64,34 @@ if ($AnalyzerVersion) {
     Import-Module PSScriptAnalyzer -RequiredVersion $AnalyzerVersion
 }
 
+# Every rule the settings run, for a module's one-at-a-time pass: all of PSScriptAnalyzer's,
+# less those the settings exclude. A formatting rule they leave switched off reports nothing
+# when asked for alone, as in one pass.
+$excluded = @((Import-PowerShellDataFile -LiteralPath $settings).ExcludeRules)
+$rules = @(Get-ScriptAnalyzerRule | Where-Object { $_.RuleName -notin $excluded } | ForEach-Object RuleName)
+
 $crash = $null
 Push-Location -LiteralPath $Path
 try {
     # A tracked file deleted but not yet committed is still listed; there is nothing to lint.
     $files = @(git ls-files '*.ps1' '*.psm1' '*.psd1' | Where-Object { Test-Path -LiteralPath $_ })
     $findings = foreach ($file in $files) {
+        $pass = 'UseCorrectCasing'
         try {
-            Invoke-ScriptAnalyzer -Path $file -Settings $settings -ErrorAction Stop
+            if ($file -like '*.psm1') {
+                # A module, one rule at a time (see above).
+                foreach ($rule in $rules) {
+                    $pass = $rule
+                    Invoke-ScriptAnalyzer -Path $file -Settings $settings -IncludeRule $rule -ErrorAction Stop
+                }
+            } else {
+                # UseCorrectCasing alone, then the rest: run together they race (see above).
+                Invoke-ScriptAnalyzer -Path $file -Settings $settings -IncludeRule PSUseCorrectCasing -ErrorAction Stop
+                $pass = 'the other rules'
+                Invoke-ScriptAnalyzer -Path $file -Settings $settings -ExcludeRule PSUseCorrectCasing -ErrorAction Stop
+            }
         } catch {
-            $crash = "PSScriptAnalyzer crashed on ${file} (attempt $Attempt of 6): $($_.Exception.Message)"
+            $crash = "PSScriptAnalyzer crashed on ${file}, in $pass (attempt $Attempt of 6): $($_.Exception.Message)"
             break
         }
     }

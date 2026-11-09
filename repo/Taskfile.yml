@@ -13,6 +13,8 @@
 # project whose parts ship separately adds `deploy:backend`, `deploy:frontend` and
 # `deploy:plugin` for one part each, and has no `deploy:both` or `deploy:all`
 # (standards/deploy-and-ops.md). One whose parts ship in one archive keeps `deploy` alone.
+# Each ships the newest release CI tagged on main, built in its own checkout, and does
+# nothing when the host already runs it; `task deploy -- -Force` deploys it again.
 #
 # A project's `task push` wraps `shared:push`: it takes the in-range updates Dependabot
 # would open (`shared:deps`), scans the lockfiles for advisories (`shared:vuln`, also part

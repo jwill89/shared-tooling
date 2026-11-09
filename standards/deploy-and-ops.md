@@ -15,14 +15,16 @@ The shared deploy module (SharedDeploy, in `deploy/pwsh`) does most of a deploy.
 - Every deploy config names its SSH user; nothing defaults to root. [module]
 - Missing settings fail the deploy before it builds or connects, all listed in one error. [module]
 - Nothing tracked reveals the server's layout: the example config holds placeholders only (see [security.md](security.md)). [review]
-- Each deploy ships one tag: the tag on HEAD (`Get-ReleaseTag`), from a clean working tree (`Assert-CleanWorkingTree`). [module]
-- An untagged tree ships only as a preview, behind the deploy script's `-Preview` switch, which stamps the build `preview-<date-time>` in place of a tag. [review]
+- A deploy ships the newest release: the newest tag CI made on main, with the tags fetched first (`Get-DeployRelease`). HEAD need not carry it, and commits after it (a shared-tooling update, work not yet released) are not part of it. [module]
+- The release is checked out into a folder of its own, with its submodules and an `npm ci` from its lockfiles, and built and packed from there (`New-ReleaseTree`, then `Remove-ReleaseTree` in a `finally`). Nothing uncommitted and no package installed for HEAD reaches it. npm takes the packages from its cache by the lockfile's integrity, so nothing already downloaded, a Font Awesome kit included, is fetched again. Untracked files a deploy needs (a bot's unit, a local `.env`) are read from the checkout. [module]
+- The host records the release each deploy leaves running, in `~/.shared-deploy/<name>` of the SSH user, once the site has passed its checks (`Set-DeployedRelease`); a rolled-back deploy leaves the record as it was. A deploy reads it first (`Get-DeployedRelease`) and does nothing when the host already runs the release; `-Force` deploys it again. [review]
+- An untagged tree ships only as a preview, behind the deploy script's `-Preview` switch, which builds the working tree and stamps the build `preview-<date-time>` in place of a tag. The host records the stamp, so the next release deploy goes out. `-SkipBuild`, where a script has it, goes with `-Preview` alone: a release is always built from its tag. [review]
 - The switch that skips the database pull is `-NoDbPull`. [review]
 - A local copy never runs with production credentials (a bot's token) while production is running, since both would handle every event. [review]
 
 ## The shape of a deploy
 
-- A deploy builds and packs everything into one archive before it connects, so a broken build changes nothing. [module]
+- A deploy builds and packs everything into one archive before anything on the host changes, so a broken build changes nothing. It may connect first, to read which release the host runs. [module]
 - It holds one SSH connection for the whole run, and one remote run checks the archive's SHA-256 and file count before anything live changes. [module]
 - A deploy ships code and config only, never `.env`, the data, the backups or user uploads. [review]
 - Live files never change in place: the new tree is built whole beside the live one, swapped in by renames, and the previous copy is kept for rollback (`Switch-RemoteDirectory`, `Switch-RemoteItemSet`). A release folder behind a `current` link follows the same rule. [module]

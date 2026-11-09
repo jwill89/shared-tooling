@@ -92,8 +92,11 @@ Builds and checks before a deploy:
 - `Invoke-GoBuild`: a static, stripped linux/amd64 Go build, with `GOOS`, `GOARCH` and `CGO_ENABLED` restored afterwards.
 - `Invoke-NpmBuild`: `npm run build`, then checks its `index.html` exists.
 - `Invoke-PluginBuild`: deletes a Dalamud plugin's `bin/` and `obj/`, then builds it in Release.
+- `Get-DeployRelease`: fetches the tags and returns the newest release tagged on the branch the checkout tracks (`origin/main`), with its commit and how many commits follow it. What a deploy ships.
+- `New-ReleaseTree`: checks a release out into a folder of its own under the temp folder (`git worktree`, detached), with its submodules and an `npm ci` in each folder named, to build from; `Remove-ReleaseTree` removes it, in a `finally`.
+- `Get-DeployedRelease` and `Set-DeployedRelease`: read and write the record on the host of the release a deploy left running (`~/.shared-deploy/<name>` of the SSH user). A deploy reads it first and stops when the host already runs the release; it writes it once the site has passed its checks.
 - `Assert-CleanWorkingTree`: throws if git has uncommitted changes, listing them.
-- `Get-ReleaseTag`: the tag on HEAD, or a throw if there is none.
+- `Get-ReleaseTag`: the tag on HEAD, or a throw if there is none. For a deploy that has not moved to `Get-DeployRelease` yet.
 
 The remote run:
 
