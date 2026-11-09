@@ -295,7 +295,12 @@ try {
                     $specs = @($group.Group | ForEach-Object { "$($_.Name)@$($_.Target)" })
                     node (Join-Path $PSScriptRoot 'npm-take-updates.mjs') $first.Directory @specs
                     if ($LASTEXITCODE -ne 0) { throw "Raising the npm ranges failed in $($first.Directory)." }
-                    npm install --prefer-offline --no-audit --prefix $first.Directory
+                    # npm's own cache rules, not --prefer-offline: the new versions came from the
+                    # registry, and --prefer-offline resolves them against the cached package lists,
+                    # which can predate them and their new dependencies (vite 8.3.7 and the rolldown
+                    # 1.2.18 it needs, both out that day, 2026-11-09). A tarball the lockfile names
+                    # with its integrity still comes from the cache, so Font Awesome isn't fetched again.
+                    npm install --no-audit --prefix $first.Directory
                     if ($LASTEXITCODE -ne 0) { throw "npm install failed in $($first.Directory)." }
                 }
                 'gomod' {
