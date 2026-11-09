@@ -8,6 +8,8 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+## [2.3.2] - 2026-11-09
+
 ### Fixed
 
 - `test/web`'s `vitestDefaults` gives each test 15 seconds instead of Vitest's 5. `task check` runs the unit tests beside lint and the scans, and a test file's first test imports the app cold, which under that load has run past 5 seconds and failed a check that passes on its own: TarotGen.io's router spec on 2026-11-07, its AdminListPage spec on 2026-11-09. A test that hangs still fails, after 15 seconds.
