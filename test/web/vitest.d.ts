@@ -20,6 +20,7 @@ export declare function vitestDefaults(options?: VitestDefaultsOptions): {
   environment: 'jsdom' | 'node'
   include: string[]
   setupFiles: string[]
+  testTimeout: number
   restoreMocks: true
   unstubGlobals: true
   coverage: {
