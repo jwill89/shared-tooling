@@ -8,6 +8,8 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-11-09
+
 ### Fixed
 
 - `task shared:deps:update` and `task shared:push` no longer fail with `ETARGET` ("No matching version found") on an npm release made that day. They installed with `--prefer-offline`, which resolves versions against npm's cached package lists, and those could predate the release `npm outdated` had just found, or a new dependency it brings: Kindred Nights' vite 8.3.7 and the rolldown 1.2.18 it needs. The install now follows npm's own cache rules, which recheck a cached list once it is a few minutes old. A tarball the lockfile already names still comes from the cache, so Font Awesome packages aren't downloaded again. CI's `npm ci --prefer-offline` is unchanged, since it installs the lockfile as written and resolves nothing.
