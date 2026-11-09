@@ -8,6 +8,8 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-09
+
 ### Added
 
 - Deploys ship the newest release, not the tag on HEAD. `Get-DeployRelease` fetches the tags and finds the newest one CI made on main, so a shared-tooling update or other commits after a release no longer stop `task deploy` with "HEAD is not tagged" (Home Library, after its v2.3.2 update followed v1.1.2). `New-ReleaseTree` checks the release out into a folder of its own, with its submodules and an `npm ci` from its lockfiles, and the deploy builds there, so nothing uncommitted and no package installed for HEAD reaches it; `Remove-ReleaseTree` removes it. npm takes the packages from its cache by the lockfile's integrity: a release build of Home Library made no network request at all. `Get-DeployedRelease` and `Set-DeployedRelease` keep a record on the host, `~/.shared-deploy/<name>`, of the release each deploy left running, written once the site passes its checks; a deploy whose release is already running does nothing, and `-Force` deploys it again. `standards/deploy-and-ops.md` says so; `Get-ReleaseTag` and `Assert-CleanWorkingTree` stay for Senpan until its overhaul.
