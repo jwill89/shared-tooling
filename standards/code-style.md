@@ -21,7 +21,7 @@ Each rule ends with how it is checked. Names are in [naming.md](naming.md), CSS 
 ### Design
 
 - Match the surrounding code: its naming, comment density, idioms and patterns. Don't bring in a new style. [review]
-- Comments say why, not what, in one line where one will do. [review]
+- Comments and doc comments follow [comments.md](comments.md). [review]
 - There is one way to do each thing: one API client, one form pattern, one table component, one formatter for each kind of value. [review]
 - Look for an existing helper or registry entry before writing a new one. A second way is a refactor of the first, never an addition beside it. [review]
 - Don't abstract ahead of a second case. Build the first plainly, and let the second show what is truly common. [review]
@@ -60,7 +60,6 @@ Each rule ends with how it is checked. Names are in [naming.md](naming.md), CSS 
 - A service never exits from inside. A listen failure goes through the normal graceful shutdown, not `os.Exit`. [review]
 - A top-level recover in the HTTP handler logs a panic and returns 500, and every long-lived goroutine recovers, so one panic can't stop the process. [review]
 - One goroutine owns each piece of shared state and takes its work off a channel or queue. Events only nudge it, so a burst is handled in one pass, nothing runs twice at once, and no locks are needed. [review]
-- An exported name gets a doc comment only when the name doesn't already say it, and the comment starts with the name. [review]
 
 ## Vue and TypeScript
 

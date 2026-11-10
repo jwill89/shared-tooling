@@ -8,6 +8,10 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+### Added
+
+- `standards/comments.md`: what a comment is for, and each language's doc-comment convention. A comment describes the code as it is now, giving the reason itself rather than pointing at a plan, a standards document, an audit or another project, and keeps history out (that belongs in the commit and the CHANGELOG); a project's own rules document, cited by rule number, is the one reference allowed. The same rules reach text that becomes documentation (OpenAPI descriptions, CLI help) and the source of generated code (sqlc query comments). Doc comments follow Go Doc Comments, TSDoc, PHPDoc with PSR-19's tags, C#'s XML documentation comments, and PowerShell's comment-based help. `code-style.md`'s comment rules move there.
+
 ## [2.4.0] - 2026-11-09
 
 ### Added

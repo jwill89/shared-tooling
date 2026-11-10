@@ -55,6 +55,7 @@ A rule a tool can check belongs in the tool's config as well, which keeps this g
 | File | Read it before working on |
 | --- | --- |
 | [code-style.md](code-style.md) | Code in any stack: Go, Vue and TypeScript, PHP, C#, PowerShell |
+| [comments.md](comments.md) | Writing a comment or doc comment in any language, or text that becomes documentation (an OpenAPI description, a CLI's help) |
 | [naming.md](naming.md) | Naming files, components, packages, tables and columns, API fields and paths, CSS classes |
 | [api-and-realtime.md](api-and-realtime.md) | An API endpoint, its errors and OpenAPI spec, or a live feed (SSE or WebSockets) |
 | [security.md](security.md) | Headers and CSP, sign-in and sessions, rate limits, client addresses behind Cloudflare, secrets |
