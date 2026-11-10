@@ -41,6 +41,14 @@ on:
         description: The lowest statement coverage allowed, in percent. 0 reports without failing.
         type: number
         default: 0
+      coverpkg:
+        description: >-
+          The packages a test run counts coverage in, as go test's -coverpkg takes them.
+          ./... credits code with the tests of every package that runs it, such as a handler
+          package exercised through the server's request tests. Empty counts each package's
+          own tests only.
+        type: string
+        default: ''
       coverage-exclude:
         description: Regular expressions, one per line; matching files are left out of the coverage count.
         type: string
@@ -122,9 +130,10 @@ jobs:
       - name: Tests
         env:
           RACE: ${{ inputs.race && '-race' || '' }}
+          COVERPKG: ${{ inputs.coverpkg }}
         run: |
           # shellcheck disable=SC2086 # $RACE is a flag or nothing
-          go test $RACE -shuffle=on -covermode=atomic -coverprofile=coverage.out ./...
+          go test $RACE -shuffle=on -covermode=atomic ${COVERPKG:+"-coverpkg=$COVERPKG"} -coverprofile=coverage.out ./...
 
       - name: Coverage floor
         shell: pwsh
