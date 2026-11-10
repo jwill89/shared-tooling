@@ -8,6 +8,8 @@ Every change to shared-tooling, by release. A project takes a release with `task
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-11-10
+
 ### Added
 
 - `go.yml`: a `coverpkg` input, passed to `go test -coverpkg`. With `./...`, code is credited with the tests of every package that runs it, so a module whose request tests sit in one package and exercise another counts that coverage. Empty, the default, keeps each package's own tests only. The floor script already merges a block that several test binaries report.
