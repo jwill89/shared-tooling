@@ -1,6 +1,6 @@
 # Standards
 
-The rules every project follows, for the owner and for every coding agent working in any of the repos. They were gathered from what the projects' own docs already said, and where those disagreed, the owner decided (2026-11-07). A project's own docs keep only what is specific to it.
+The rules every project follows, for the owner and for every coding agent working in any of the repos. They were gathered from what the projects' own docs already said, and where those disagreed, the owner decided. A project's own docs keep only what is specific to it.
 
 ## Follow the published standard
 

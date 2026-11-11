@@ -3,7 +3,7 @@
 // form, and the lockfile forgets the package's whole family (its scope, such as @tiptap/, or the
 // package alone), with that part of node_modules. A family whose members pin each other exactly
 // through peer dependencies, as Tiptap's do, then moves together; `npm update` moved only some of
-// Tiptap's packages and left two copies of @tiptap/core (2026-11-07).
+// Tiptap's packages and left two copies of @tiptap/core.
 //
 //   node npm-take-updates.mjs <folder> <name>@<version> ...
 import { readFileSync, rmSync, writeFileSync } from 'node:fs'

@@ -4,9 +4,8 @@ declare(strict_types=1);
 
 /**
  * The shared PHP CS Fixer rules: PER Coding Style 3.0, PSR-12's successor, pinned so
- * a fixer upgrade can't move the standard. Fantasy Dossier, the résumé site and
- * TarotGen.io share these today. The project adds the migration set for the PHP its
- * composer.json requires, so the fixer never writes syntax the server can't run:
+ * a fixer upgrade can't move the standard. The project adds the migration set for the
+ * PHP its composer.json requires, so the fixer never writes syntax the server can't run:
  *
  *     ->setRules([
  *         ...require __DIR__ . '/shared/lint/php/php-cs-fixer-rules.php',

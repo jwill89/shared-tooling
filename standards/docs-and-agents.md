@@ -10,13 +10,13 @@ What each repo doc holds, how docs and copy are written, how a change goes from 
 - AGENTS.md links to `shared/standards/README.md`, for agents that don't read CLAUDE.md. [review]
 - **CLAUDE.md** imports `@AGENTS.md` and `@shared/standards/README.md`, and the repo's own rules live in AGENTS.md. [review]
 - **CONTRIBUTING.md** only says how to propose and submit a change: how to report a bug (steps, expected, actual, environment), and to open an issue before anything beyond a small, obvious fix. [review]
-- **CHANGELOG.md** is the only changelog. It lists what a user could notice, and any deploy that changes behaviour; for shared-tooling, a user is a project that takes the release. [review]
+- **CHANGELOG.md** is the only changelog. It lists what a user could notice, and any deploy that changes behaviour; for shared-tooling, a user is a project that takes the release. What an entry says is under [What a changelog entry says](#what-a-changelog-entry-says). [review]
 - Git history, subjects and bodies, is the record of every change, so there is no second changelog file. [review]
 - CHANGELOG.md follows Keep a Changelog: an `## [Unreleased]` section at the top collects bullets under Added, Changed, Deprecated, Removed, Fixed or Security, and a release turns it into `## [x.y.z] - YYYY-MM-DD` with a compare link. [review]
 - An app that shows its changelog reads CHANGELOG.md at build time: there is no changelog table, hand-written page or API. [review]
 - **PLAN.md** holds the product decisions, the data model and the phase order, and is read before anything structural changes. [review]
 - A feature that doesn't fit the plan changes PLAN.md first, in the same change. [review]
-- A repo's own plan covers only what is specific to it, and links to shared-tooling's PLAN.md and `standards/` rather than repeating them. [review]
+- A repo's own plan covers only what is specific to it, and links to shared-tooling's `standards/` rather than repeating them. [review]
 - **docs/decisions.md** gets a dated one-line entry (`- YYYY-MM-DD — ...`) for each decision worth remembering; the reasoning behind a larger one goes in PLAN.md. [review]
 - **API.md** holds only the conventions; the endpoint list is the OpenAPI spec generated from code, served with an interactive reference (see [api-and-realtime.md](api-and-realtime.md)). [test]
 - Each OpenAPI operation's description states its guard: public, auth, admin or `permission:<key>`. [test]
@@ -26,6 +26,16 @@ What each repo doc holds, how docs and copy are written, how a change goes from 
 - A deploy script documents its whole run in comment-based help, read with `Get-Help .\scripts\deploy.ps1 -Full`. [review]
 - An audit or work list orders its sections by risk and tags each item with impact and effort, plus a Where, a Fix and a Verify step. [review]
 - An audit records each measurement with the command that produced it, and lists the claims that failed verification so nobody chases them again. [review]
+
+## What a changelog entry says
+
+- A CHANGELOG is a list of changes, not a document: one bullet per change a user could notice, in a sentence or two, saying what changed as the user meets it. How it was built, the design behind it and the options weighed belong in the commit and the plan. [review]
+- It is project-agnostic, as a comment is ([comments.md](comments.md)): no entry names another project, a plan, a standards document, an audit, a ticket, a person, or the date something was decided. A change made to follow the shared standards says so in shorthand: `Adopted the shared comment standard.`, not `Comments follow shared-tooling's standards/comments.md, as myapp's do.` [review]
+- It gives no instructions: no deploy steps, commands, checklists or how-tos. A release that needs a step at deploy says so in one line and points to the steps, which are in the project's `docs/ops.md` ([deploy-and-ops.md](deploy-and-ops.md)): `Needs a one-time step at deploy (docs/ops.md, Upgrading to 5.2.0).` [review]
+- It leaves out what no user could notice: refactors, renamed internals, tests, coverage, lint and CI. A change of that kind is listed only for what a user sees or does differently (a new required setting, a renamed flag, a removed endpoint). [review]
+- It names what the user knows (a page, a setting, a command, a flag, an endpoint, a message), not file paths, packages, functions or tables, unless that is what the user touches. For shared-tooling, whose users are projects, a workflow input, a task or a module function is exactly that. [review]
+- A fix says what was wrong as the user saw it, not its cause in the code. [review]
+- Released entries follow the same rules: one that doesn't is cut to fit, keeping its version and date. [review]
 
 ## Keeping docs true
 

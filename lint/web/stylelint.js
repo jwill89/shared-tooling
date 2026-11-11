@@ -36,13 +36,11 @@ export default {
 }
 
 /**
- * The palette rule, as Fantasy Dossier, the Gallery and TarotGen.io hold it: a
- * colour is defined once, as a token, and used through var(). Neutral black and
- * white at any alpha (shadows, scrims, hairlines) are not palette colours and may be
- * written inline, as rgb(0 0 0 / a) and rgb(255 255 255). A tint is
- * color-mix(in srgb, var(--x) N%, transparent) (standards/css.md); the rule still
- * lets the older channel form, rgb(var(--x-rgb) / a), through for a project that
- * hasn't moved off it yet.
+ * The palette rule: a colour is defined once, as a token, and used through var().
+ * Neutral black and white at any alpha (shadows, scrims, hairlines) are not palette
+ * colours and may be written inline, as rgb(0 0 0 / a) and rgb(255 255 255). A tint is
+ * color-mix(in srgb, var(--x) N%, transparent); the rule still lets the older channel
+ * form, rgb(var(--x-rgb) / a), through for a project that hasn't moved off it yet.
  *
  * Turn it off for the file that defines the tokens with an `overrides` entry.
  *

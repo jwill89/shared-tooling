@@ -194,8 +194,7 @@ try {
             if (-not $info.current) { continue }
             # Dependabot's grouped pull request takes a package to its newest release short of a
             # new major, raising a pinned version or a ~ range as it raises a ^ one. npm's
-            # "wanted" stays inside the range, so it never showed a pin's updates (Home Library's
-            # @types/node 26.6.5, 2026-11-08).
+            # "wanted" stays inside the range, so it never shows a pin's updates.
             $latestIsMajor = -not $info.latest -or (Get-UpdateKind $info.current $info.latest) -eq 'major'
             $target = if (-not $latestIsMajor) { $info.latest } else { (Get-NpmNewestInMajor -Directory $dir -Name $name -Current $info.current) ?? $info.wanted }
             if ($target -and (Test-NewerVersion $target $info.current)) {
@@ -228,8 +227,8 @@ try {
         $raw = composer outdated --direct --format=json --working-dir=$dir 2>$null
         if (-not $raw) { continue }
         # What an update would really do: composer outdated doesn't weigh the project's own
-        # `conflict` holds, or a package another one holds back (Fantasy Dossier's phpstan, held
-        # at 2.3.3, keeps rector at 2.8.2), so an in-range update counts only if the dry run takes it.
+        # `conflict` holds, or a package another one holds back (a held phpstan keeps back the
+        # rector that needs a newer one), so an in-range update counts only if the dry run takes it.
         $upgrades = @{}
         foreach ($line in composer update --dry-run --with-all-dependencies --no-interaction --working-dir=$dir 2>&1) {
             if ("$line" -match 'Upgrading (\S+) \((.+?) => (.+?)\)') { $upgrades[$Matches[1]] = $Matches[3] }
@@ -310,8 +309,8 @@ try {
                     if ($LASTEXITCODE -ne 0) { throw "Raising the npm ranges failed in $($first.Directory)." }
                     # npm's own cache rules, not --prefer-offline: the new versions came from the
                     # registry, and --prefer-offline resolves them against the cached package lists,
-                    # which can predate them and their new dependencies (vite 8.3.7 and the rolldown
-                    # 1.2.18 it needs, both out that day, 2026-11-09). A tarball the lockfile names
+                    # which can predate them and their new dependencies (a release out that day, and
+                    # one it needs). A tarball the lockfile names
                     # with its integrity still comes from the cache, so Font Awesome isn't fetched again.
                     npm install --no-audit --prefix $first.Directory
                     if ($LASTEXITCODE -ne 0) { throw "npm install failed in $($first.Directory)." }

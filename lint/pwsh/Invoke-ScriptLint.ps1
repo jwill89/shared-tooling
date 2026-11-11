@@ -17,8 +17,8 @@
     it starts cold: it throws a NullReferenceException, or "more than one dynamic module
     in each dynamic assembly", and then passes once warm. The NullReferenceException is
     UseCorrectCasing reading a command's parameters while another rule, run beside it,
-    builds them (CommandInfo.Parameters): SharedDeploy.psm1 crashed six tries in six once
-    it grew (2026-11-09). So UseCorrectCasing runs on each script in a pass of its own and
+    builds them (CommandInfo.Parameters): a module the size of SharedDeploy.psm1 crashes
+    six tries in six. So UseCorrectCasing runs on each script in a pass of its own and
     every other rule in a second; the two report what one pass did. A module (.psm1) races
     in more rules than that, those that read its Export-ModuleMember (AvoidReservedChar-
     InCmdlet among them), so a module is analyzed one rule at a time: SharedDeploy.psm1's
@@ -27,9 +27,9 @@
 
     Each new try is the whole lint in a fresh pwsh process, on the same PSScriptAnalyzer
     version, so the findings reported always come from a session that never crashed. A
-    session that has crashed can report what isn't there: Home Library's CI, retrying in
-    the same session (2026-11-07), flagged `Split-Path -Parent $PSScriptRoot` with
-    PSUseCmdletCorrectly, where every clean run passes it.
+    session that has crashed can report what isn't there: a retry in the same session has
+    flagged `Split-Path -Parent $PSScriptRoot` with PSUseCmdletCorrectly, where every clean
+    run passes it.
 
 .PARAMETER Path
     The repo to lint. Defaults to the current folder.

@@ -6,7 +6,7 @@ Where an RFC describes a behaviour, the API follows it ([README.md](README.md) s
 
 ## Paths and methods
 
-- Every endpoint sits under one base path, `/api`. [review]
+- Every endpoint sits under one base path: `/api/v1` in a Go service, `/api` in a PHP site. The examples below write it `/api`. [review]
 - Endpoints are resource-shaped and shared by every client (the SPA, a plugin, a native app). No endpoint exists for one screen. [review]
 - A report is a filter on its resource (`?from&to`), not an endpoint of its own. [review]
 - A collection is a plural noun (`/api/decks`), an item is `/api/<resource>/{id}`, and a sub-collection nests (`/api/<resource>/{id}/<subs>/{subId}`). [review]
@@ -21,7 +21,7 @@ Where an RFC describes a behaviour, the API follows it ([README.md](README.md) s
 - A state change that isn't CRUD is `POST /api/<resource>/{id}/<verb>` (`…/close`, `…/approve`). [review]
 - A bulk write is a `POST` verb (`…/reorder`, or `POST /api/media/bulk-delete` with the ids in the body). [review]
 - Deleting everything, optionally narrowed by a query filter, is `DELETE /api/<resource>/all` and answers `{ "deleted": N }`. [review]
-- Credential and session endpoints (`/api/auth/*`, sign-up) are the one exception that stays action-shaped. [review]
+- Signing in and out, sign-up and every other credential ceremony are operations under the base path's `auth/` (`/api/v1/auth/*`), in the spec like any other endpoint, and are the one exception that stays action-shaped (`POST /api/v1/auth/login`, `POST /api/v1/auth/passkey/finish`). Adding a credential to a signed-in account is resource-shaped (`POST /api/v1/me/passkeys`). [review]
 - In a PHP router, a route with a fixed segment (`/media/random`) is registered before a route with a parameter in that place (`/media/{id}`). [review]
 - A PHP app has one controller per resource, matching its route group and taking only the dependencies its methods use. [review]
 - A PHP app is built in a factory kept apart from `index.php`, so each test can build its own. [test]
@@ -55,12 +55,12 @@ Each project sets its own cache headers, starting from this baseline. A project 
 
 ## Errors
 
-- Every error is an RFC 9457 problem details body, `application/problem+json`, which is huma's default. A PHP app sends the same shape. [test]
+- Every error is an RFC 9457 problem details body, `application/problem+json`, which is huma's default, except on an operation a browser navigates to (below). A PHP app sends the same shape. [test]
 - `detail` holds a message a user can read that says why. [test]
 - A failed validation lists each broken field in `errors`, each entry with `message` and `location`, as huma sends them. [test]
 - The UI shows that message (a toast, with field errors inline) and never a raw error. [review]
 - 400 answers a request the server can't parse, such as malformed JSON. [test]
-- 401 means not signed in. It is a problem details body, never a redirect to a sign-in page, and the client treats it as signed out. [test]
+- 401 means not signed in. It is a problem details body, never a redirect to a sign-in page, and the client treats it as signed out, except from the `auth/` operations, where it is a sign-in that failed and stays with the page that tried it. [test]
 - 403 means signed in but not allowed. A wrong current password, when changing it or deleting the account, is 403 too. [test]
 - 404 answers an unknown id and anything the requester may not see, so ids can't be probed. [test]
 - 409 answers a conflict: a duplicate, a taken code, or a row that has moved since it was read. [test]
@@ -68,6 +68,7 @@ Each project sets its own cache headers, starting from this baseline. A project 
 - 429 answers a rate limit, with `Retry-After`. [test]
 - A client error is never a 500 or a false success. [test]
 - Every API error is problem details whatever the request's `Accept`, the framework's own 404, 405 (keeping `Allow`) and 500 included. [test]
+- An operation a browser navigates to rather than calls, such as an OAuth provider's start and callback (`GET /api/v1/auth/<provider>/callback`), answers 302 with `Location` whatever happens: a failure, a rate limit included, redirects to the sign-in page with `?error=` and a reason the page knows, since a navigation can't show a problem body. The spec declares the 302 and its `Location`, and the operation's inputs carry no constraint the framework would refuse first. [test]
 - The SPA fallback route never matches `/api/…`. [test]
 - In production an unexpected exception answers only a generic message. Its own message and chain go out only in development. [test]
 - A real exception is logged in full. A 404 or 405 is logged without a stack trace, so scanner traffic doesn't bury the real errors. [review]
@@ -87,13 +88,14 @@ Each project sets its own cache headers, starting from this baseline. A project 
 - The API contract carries its own version, apart from the app's, and it moves only when the API surface changes. [review]
 - With huma, every response struct sets `Status` explicitly, because a zero panics the server. [review]
 - With huma, every type embedded in a response is exported, because huma silently drops unexported embedded fields. [review]
+- With huma, a sign-in operation reaches the session through its context (scs's `LoadAndSave` around the mux), so it needs no `Set-Cookie` output, and nothing outside the API signs anyone in. [review]
 
 ## Front-end client
 
 - Front-end API types are generated from the committed spec with openapi-typescript (`npm run gen:types`), committed, and never edited by hand. [CI]
 - The types are regenerated after each spec change, and CI checks they are current. [CI]
 - Each entity the API sends is re-exported from the generated file. Only client-side shapes are written by hand. [review]
-- API calls go through one framework-free client module, called from composables. No other file calls `fetch(`; TarotGen.io's `api-client-only` lint rule is the model. [review]
+- API calls go through one framework-free client module, called from composables. No other file calls `fetch(`, which a project's own lint rule can hold by refusing `fetch(` anywhere else. [review]
 - A caller that must tell failures apart gets a discriminated result (`ok`, `status`, `error`, `data`, `networkError`). [review]
 
 ## Writes and retries
@@ -133,12 +135,12 @@ Checks on URLs that users or admins set are in [security.md](security.md).
 
 - Writes stay on REST, or are intents that a game sends over its socket. [review]
 - The server validates and persists, then broadcasts. Clients reconcile from what it sends and never poll or hold the real state. [review]
-- A change feed is an in-process hub that the handlers publish to after a write commits. Kindred Nights' feed is the model. [review]
+- A change feed is an in-process hub that the handlers publish to after a write commits, so no event goes out for a write that rolled back. [review]
 - A WebSocket event carries the new state, so the HTTP response and the broadcast carry the same truth. [review]
 - An SSE event names what changed, and the client refetches it over REST, so REST stays the one way data is read. [review]
 - An SSE client may gather events for a moment and refetch only the records they name. [review]
 - Every SSE event has the same envelope: `id`, `type`, a scope id, `at`, and a `payload` object, which is `{}` when empty and never null. [review]
-- Socket messages are one declared union of JSON message types, typed on both sides (Go and TypeScript). Family Card Game's versioned protocol is the model. [review]
+- Socket messages are one declared union of JSON message types, typed on both sides (Go and TypeScript), and the protocol carries a version both sides check, so a client out of step with its server says so rather than misreading messages. [review]
 
 ### Connections
 

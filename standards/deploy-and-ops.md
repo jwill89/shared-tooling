@@ -30,7 +30,7 @@ The shared deploy module (SharedDeploy, in `deploy/pwsh`) does most of a deploy.
 - Live files never change in place: the new tree is built whole beside the live one, swapped in by renames, and the previous copy is kept for rollback (`Switch-RemoteDirectory`, `Switch-RemoteItemSet`). A release folder behind a `current` link follows the same rule. [module]
 - Upload folders sit beside the swapped folder (siblings of `dist/`), so a swap never wipes them. [review]
 - When one run deploys several parts, the API goes first, then the SPA, then the plugin, since a new backend still serves the old SPA while a new SPA may call endpoints an old backend lacks. [review]
-- A release that needs steps beyond the deploy (a unit or vhost change, a manual backup, a backfill) lists them in order in its CHANGELOG entry, and they run in that order. [review]
+- A release that needs steps beyond the deploy (a new host setting, a manual backup, a backfill) lists them in order in the project's `docs/ops.md`, under an `Upgrading to x.y.z` heading, and they run in that order. Its CHANGELOG entry says only that it needs a step at deploy, and where the steps are ([docs-and-agents.md](docs-and-agents.md)). [review]
 
 ## Builds
 
@@ -49,7 +49,7 @@ The shared deploy module (SharedDeploy, in `deploy/pwsh`) does most of a deploy.
 - `/healthz` answers publicly, through Cloudflare, so an uptime check can poll it and the smoke check can fetch it; it returns nothing private. [review]
 - A service with no health URL (a bot) is `Type=notify` and reports ready only once it is (logged in), so a start that can't connect fails the deploy and rolls back. [module]
 - After the swap the deploy smoke-checks the public site from the dev machine, through Cloudflare, trying each URL several times: the API answers with data or names the new version, `/` names this build's entry script, and a plugin index carries this release's `?v=` (`Invoke-SmokeCheck`). [module]
-- Each smoke-check URL carries a fresh `?deploy=` token, so no edge-cached answer can pass (TarotGen.io's deploy is the model). [review]
+- Each smoke-check URL carries a fresh `?deploy=` token, so no edge-cached answer can pass. [review]
 - A failed smoke check rolls back on its own. [module]
 - A rollback undoes the run in reverse order: the plugin and front end first, then the backend. [review]
 - A failed start or smoke check puts the pre-deploy database snapshot back only where the project opts in with `-RestoreDatabaseOnRollback`. [module]
@@ -58,12 +58,12 @@ The shared deploy module (SharedDeploy, in `deploy/pwsh`) does most of a deploy.
 
 ## Host setup and server config
 
-- One-time host setup (the service user, folders, units, vhost, env file, DNS) is an idempotent script, run once as root and written in the project's `docs/ops.md`. [review]
+- One-time host setup (the service user, folders, env file, certificate, DNS) is an idempotent script, run once as root and written in the project's `docs/ops.md`. [review]
 - A later deploy appends a host-only env line only when the env file lacks it. [review]
-- A service's systemd units and Apache vhost live on the host and are changed there by hand; the repo keeps templates of them, with placeholders for host-specific values. [review]
-- When a live unit or vhost changes, its template in the repo changes to match. [review]
-- A deploy installs no service unit and no vhost: it passes neither `-Unit` nor `-Vhost` to `Install-ServiceBinary`. The backup timer's units are the exception, installed by `Install-BackupTimer`. [review]
-- A vhost changed by hand passes `apachectl configtest` before Apache reloads, and the previous copy is kept until the site checks out. [review]
+- A service's systemd units and its Apache vhost live in the repo as templates, and every deploy ships them, so the host always runs what the repo says. Host-specific values (server names, the certificate, ports, paths, the service user) are placeholders in the template, filled from the git-ignored deploy config when the deploy script packs the archive (`Format-RemoteScript`). [review]
+- The deploy installs a unit or the vhost only where it differs from the live copy, checks the vhost with `apachectl configtest` before anything stops, and puts every previous copy back if the start or a check fails (`Install-ServiceBinary -Unit`, `-Vhost`). The backup timer's units are installed the same way, by `Install-BackupTimer`. [module]
+- Nobody edits a unit or a vhost on the host: a change goes into its template and ships with the next deploy. [review]
+- A unit holds no secret, so it can be tracked: secrets go in the service's `EnvironmentFile` ([security.md](security.md)). [review]
 - `.htaccess` files, cron files and every script a timer or cron runs live in the repo and ship with the deploy; nobody edits them on the host or copies them there by hand. [review]
 - A config file the deploy ships is installed only where it differs, checked after (the expected paths, then status and header checks), and put back from its previous copy if a check fails. [review]
 - Scheduled jobs other than the backup timer go in the site's own file in `/etc/cron.d` (`root:root`, mode 644, LF line endings, a trailing newline), and no other site's crontab is touched. [review]
@@ -126,7 +126,7 @@ The cache headers a site sends; [performance.md](performance.md) has the rest of
 - A new or changed timer runs once before it is kept; if that run fails, the deploy fails, saying the site is live but its backup isn't. [module]
 - A project whose app has its own backup command runs it from the same timer (`-Command`), and that command checks and compresses its copies the same way. [review]
 - A deploy that touches a database snapshots it first with `sqlite3 .backup`: after the service stops, or before a PHP site's migrations (`Install-ServiceBinary -Database`, `Backup-RemoteDatabase`). [module]
-- A deploy keeps the newest three snapshots; the Gallery keeps five. [module]
+- A deploy keeps the newest three snapshots; a site's own count goes in `Backup-RemoteDatabase -Keep`. [module]
 - If the snapshot fails, the deploy stops before it migrates. [module]
 - A live database is copied only with an online backup (`sqlite3 .backup` or `VACUUM INTO`), never `cp`, which misses what is still in the `-wal`. [module]
 - Backups and snapshots sit outside the web root, in a folder closed to all but their owner (mode 0700), each file mode 0600. [module]

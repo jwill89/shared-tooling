@@ -7,9 +7,9 @@ Each rule ends with how it is checked. The rest of the style for each language i
 ## What a comment says
 
 - A comment describes the code beside it, as it is now: what it does where the code doesn't make that plain, and why it is written this way where that isn't obvious. The why is the valuable part: a constraint, an invariant, a unit, an edge case, a security or performance reason, or the bug a workaround avoids. [review]
-- It gives the reason itself, never where the reason is written down. No comment points at a plan, a standards document, an audit, another project, a ticket, a person, or the date something was decided: `// A token can't make or revoke tokens, so a stolen one can't keep itself alive.`, not `// see security.md` or `// as Kindred does`. [review]
+- It gives the reason itself, never where the reason is written down. No comment points at a plan, a standards document, an audit, another project, a ticket, a person, or the date something was decided: `// A token can't make or revoke tokens, so a stolen one can't keep itself alive.`, not `// see security.md` or `// as myapp does`. [review]
 - The one reference allowed is a project's own rules document (domain rules, a grammar), cited by its rule number, because the rule's text lives there and a copy would drift from it ([docs-and-agents.md](docs-and-agents.md)). [review]
-- It describes the present. History (`now`, `used to`, `no longer`, `the old handler`, `was changed to`) belongs in the commit message and the CHANGELOG. [review]
+- It describes the present. History (`now`, `used to`, `no longer`, `the old handler`, `was changed to`) belongs in the commit message and the CHANGELOG, whose entries are held to the same agnosticism ([docs-and-agents.md](docs-and-agents.md#what-a-changelog-entry-says)). [review]
 - It doesn't restate the code or narrate the obvious, and says it in one line where one will do. [review]
 - It is kept true: a change to the code updates its comments in the same commit. A comment that has gone wrong is a bug. [review]
 - No commented-out code, and no `TODO` or `FIXME` in a commit: do the work, or write it in the project's plan. [review]

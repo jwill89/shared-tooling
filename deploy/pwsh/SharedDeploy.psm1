@@ -1,16 +1,15 @@
 #Requires -Version 7.4
 <#
-SharedDeploy: the helpers and flow pieces the deploy scripts under C:\Web Projects copied
-into each other, gathered in one module. Each function's help names the scripts it came
-from. Nothing here names a host, user, key or address: those stay in each project's
-git-ignored deploy.config.ps1.
+SharedDeploy: the helpers and flow pieces a project's deploy script is built from. Nothing
+here names a host, user, key or address: those stay in each project's git-ignored
+deploy.config.ps1.
 
-The shape of every deploy (decided 2026-11-05): everything it needs packed into ONE
-archive, one upload, then one remote run that unpacks it to a staging folder, checks its
-SHA-256 and file count, and only then runs the steps. All of it rides ONE SSH connection,
-held open by a background plink with PuTTY's connection sharing (-share), and reopened if
-it drops, so the droplet's `ufw limit ssh` (six in 30 seconds) sees one connection a deploy.
-pscp is not used: uploads and downloads stream through plink.
+The shape of every deploy: everything it needs packed into ONE archive, one upload, then
+one remote run that unpacks it to a staging folder, checks its SHA-256 and file count, and
+only then runs the steps. All of it rides ONE SSH connection, held open by a background
+plink with PuTTY's connection sharing (-share), and reopened if it drops, so a host that
+runs `ufw limit ssh` (six connections in 30 seconds) sees one connection a deploy. pscp is
+not used: uploads and downloads stream through plink.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -18,14 +17,30 @@ $ErrorActionPreference = 'Stop'
 # turns this on would make the call throw first, before the message.
 $PSNativeCommandUseErrorActionPreference = $false
 
-# The droplet runs `ufw limit ssh`, which refuses an address after six connections in 30
-# seconds. A retry waits this long first, so the window has passed.
+# `ufw limit ssh` refuses an address after six connections in 30 seconds. A retry waits
+# this long first, so the window has passed.
 $script:RetryDelaySeconds = 35
 # What plink prints when the connection failed, as opposed to the remote command.
 $script:ConnectionFailurePattern = 'Network error|Connection (timed out|refused|reset|abandoned)|Unable to (open connection|authenticate)|Server unexpectedly closed'
+# plink -share hands its command to the shared connection in one message, and a command
+# over about 16 KB ends that pipe ("Error 109: The pipe has been ended") before the host
+# sees any of it, while the shared connection stays up. So a remote script travels on
+# plink's standard input, and the command itself stays well under that.
+$script:MaxCommandBytes = 8KB
+# The host runs a script as `$SHELL -c <script>`, and Linux takes at most 128 KB, less its
+# closing NUL, in one argument.
+$script:MaxScriptBytes = 128KB - 1
+# The line the host prints once a script has arrived whole, just before it runs.
+$script:StartedLine = 'shared-deploy: script started'
+# The command plink runs for each remote script. It reads the script from standard input
+# and runs it only if its SHA-256 matches, so a script cut short in transit never runs
+# part of itself. It runs it as sshd would have, with `$SHELL -c`, with standard input
+# empty, so nothing in it can read the rest of the script, and its errors merged into its
+# output in the order they were written.
+$script:RunScriptCommand = 's=$(cat); if [ "$(printf %s "$s" | sha256sum)" = ''<hash>  -'' ]; then echo ''<started>''; exec "${SHELL:-/bin/sh}" -c "$s" </dev/null 2>&1; fi; echo ''The script reached the host incomplete, so none of it ran.'' >&2; exit 125'
 # The connection the remote functions use when they are not handed one.
 $script:DefaultConnection = $null
-# Database snapshots kept on the host, and pulled copies kept here (decided 2026-11-05).
+# Database snapshots kept on the host, and pulled copies kept here.
 $script:SnapshotKeep = 3
 # Every plink holding a shared connection open, so none outlives the session.
 $script:Holders = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
@@ -321,15 +336,93 @@ function Write-RemoteLine {
     }
 }
 
+function Get-PlinkArgument {
+    <#
+    .SYNOPSIS
+    plink's arguments for one command on the held connection; throws, sending nothing, when the command is too long for the shared connection to carry.
+    #>
+    param([object]$Connection, [string]$Command)
+    $size = [System.Text.Encoding]::UTF8.GetByteCount($Command)
+    if ($size -gt $script:MaxCommandBytes) {
+        throw "The remote command is $size bytes, over the $($script:MaxCommandBytes) a shared connection carries safely (plink -share ends its pipe at about 16 KB, and the host runs none of it). Nothing was sent."
+    }
+    @('-batch', '-share') + $Connection.HostKeyArgs + @('-i', $Connection.KeyPath, $Connection.Target, $Command)
+}
+
+function Split-OutputLine {
+    <#
+    .SYNOPSIS
+    Splits a command's output into lines as PowerShell does for a native command: no line endings, and no empty line after the last one.
+    #>
+    param([string]$Text)
+    if (-not $Text) { return }
+    $lines = $Text -split '\r?\n'
+    if ($lines[-1] -eq '') { $lines = $lines[0..($lines.Count - 2)] }
+    $lines
+}
+
 function Invoke-PlinkOnce {
     <#
     .SYNOPSIS
-    Runs one remote command through plink -share, riding the held connection, and returns its exit code and output lines.
+    Runs one remote script through plink -share, riding the held connection, and returns its exit code, its output lines, and whether the host started it.
+
+    .DESCRIPTION
+    The script goes to the host on plink's standard input, under a short fixed command
+    ($script:RunScriptCommand), never as the command itself. The host checks it arrived
+    whole and prints $script:StartedLine before running it; that line is taken out of the
+    output and becomes Started. A run that failed without it never reached the script, so
+    none of it ran: plink could not connect, the shared connection refused the command, or
+    the script arrived incomplete.
     #>
     param([object]$Connection, [string]$Script)
-    $plinkArgs = @('-batch', '-share') + $Connection.HostKeyArgs + @('-i', $Connection.KeyPath, $Connection.Target, $Script)
-    $lines = @(& $Connection.Plink @plinkArgs 2>&1 | ForEach-Object { "$_" })
-    [pscustomobject]@{ ExitCode = $LASTEXITCODE; Lines = $lines }
+    $text = ($Script -replace "`r", '').TrimEnd("`n")
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    $bytes = $utf8.GetBytes($text)
+    if ($bytes.Length -gt $script:MaxScriptBytes) {
+        throw "The remote script is $($bytes.Length) bytes, over the $($script:MaxScriptBytes) a host runs as one command. Nothing was sent; split it into smaller steps."
+    }
+    $hash = [System.Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+    $command = $script:RunScriptCommand.Replace('<hash>', $hash).Replace('<started>', $script:StartedLine)
+    $start = [System.Diagnostics.ProcessStartInfo]::new($Connection.Plink)
+    foreach ($argument in (Get-PlinkArgument -Connection $Connection -Command $command)) { $start.ArgumentList.Add($argument) }
+    $start.UseShellExecute = $false
+    $start.RedirectStandardInput = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $start.StandardOutputEncoding = $utf8
+    $start.StandardErrorEncoding = $utf8
+    $process = [System.Diagnostics.Process]::Start($start)
+    try {
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        try {
+            $process.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
+            $process.StandardInput.Close()
+        } catch [System.IO.IOException] {
+            Write-Verbose 'plink stopped reading the script; its own output says why, and the host runs no part of a script it did not get whole.'
+        }
+        $process.WaitForExit()
+        $out = @(Split-OutputLine -Text $stdout.GetAwaiter().GetResult())
+        $started = $out.Count -gt 0 -and $out[0] -ceq $script:StartedLine
+        if ($started) { $out = @($out | Select-Object -Skip 1) }
+        [pscustomobject]@{
+            ExitCode = $process.ExitCode
+            Lines    = [string[]]($out + @(Split-OutputLine -Text $stderr.GetAwaiter().GetResult()))
+            Started  = $started
+        }
+    } finally {
+        $process.Dispose()
+    }
+}
+
+function Get-NotStartedMessage {
+    <#
+    .SYNOPSIS
+    What a failed remote run says when the host never started its script, with plink's reason.
+    #>
+    param([object]$Result)
+    $why = @($Result.Lines | Where-Object { "$_".Trim() }) -join ' '
+    "The step never started on the host, so none of it ran$(if ($why) { ": $why" } else { " (exit $($Result.ExitCode))." })"
 }
 
 function Test-UpstreamExist {
@@ -504,7 +597,10 @@ function Invoke-RemoteFlow {
     #>
     param([object]$Connection, [string]$Script, [switch]$NoRetry, [string]$FailureMessage)
     $result = Invoke-RemoteCore -Connection (Get-ActiveConnection -Connection $Connection) -Script $Script -NoRetry:$NoRetry -Echo
-    if ($result.ExitCode -ne 0) { throw "$FailureMessage (exit $($result.ExitCode))" }
+    if ($result.ExitCode -ne 0) {
+        if (-not $result.Started) { throw (Get-NotStartedMessage -Result $result) }
+        throw "$FailureMessage (exit $($result.ExitCode))"
+    }
 }
 
 function Invoke-PlinkStream {
@@ -521,6 +617,7 @@ function Invoke-PlinkStream {
         [string]$Status,
         [int]$TimeoutSeconds
     )
+    $plinkArgs = Get-PlinkArgument -Connection $Connection -Command $Command
     $temp = [System.IO.Path]::GetTempPath()
     $errFile = Join-Path -Path $temp -ChildPath ('plink-err-{0}.log' -f [guid]::NewGuid())
     $scratch = [System.Collections.Generic.List[string]]::new()
@@ -535,7 +632,6 @@ function Invoke-PlinkStream {
         $OutputFile = Join-Path -Path $temp -ChildPath ('plink-out-{0}.log' -f [guid]::NewGuid())
         $scratch.Add($OutputFile)
     }
-    $plinkArgs = @('-batch', '-share') + $Connection.HostKeyArgs + @('-i', $Connection.KeyPath, $Connection.Target, $Command)
     $process = Start-Process -FilePath $Connection.Plink -NoNewWindow -PassThru -ArgumentList (Join-ProcessArgument -Argument $plinkArgs) `
         -RedirectStandardInput $InputFile -RedirectStandardOutput $OutputFile -RedirectStandardError $errFile
     $watch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -627,8 +723,8 @@ snapshot_as() {
   fi
 }
 # snapshot_list <prefix> <suffix>: the snapshots in <prefix><yyyyMMdd-HHmmss><suffix> form,
-# newest written first: .gz since 2026-11-06, uncompressed before. Only names of exactly that
-# form count, so a .partial or anything else beside them is never taken for one.
+# newest written first, compressed (.gz) or not. Only names of exactly that form count, so a
+# .partial or anything else beside them is never taken for one.
 snapshot_list() {
   for f in "$1"[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]"$2" \
     "$1"[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]"$2.gz"; do
@@ -787,9 +883,7 @@ function Write-Step {
     Prints a step heading: a blank line, then "==> <message>" in cyan.
 
     .DESCRIPTION
-    The heading each deploy script prints before a step. Copied unchanged from Family Card
-    Game, Fantasy Dossier, Fingerprint Generator, IDE Resume Site, Marxbot, Nophica, Senpan,
-    Simple Image Gallery, TarotGen.io, Venue Tools and What Do I Know.
+    The heading a deploy script prints before each step.
 
     .PARAMETER Message
     What the step does.
@@ -810,9 +904,6 @@ function Write-Ok {
     <#
     .SYNOPSIS
     Prints an indented line in green, for a step that went well.
-
-    .DESCRIPTION
-    Copied unchanged from the same eleven scripts as Write-Step.
 
     .PARAMETER Message
     What went well.
@@ -835,17 +926,15 @@ function Exit-Deploy {
     Prints "ERROR: <message>" in red and ends the deploy script with exit code 1.
 
     .DESCRIPTION
-    The scripts' Fail helper under an approved verb. The alias Fail keeps their call sites
-    as they are. Like the original it ends the whole script, not just the function, so use
-    it in the script itself; the module's own functions throw instead, so the caller can
-    roll back first. It closes any held SSH connection before it exits. Copied from the
-    same eleven scripts as Write-Step.
+    Also available as Fail. It ends the whole script, not just the function, so use it in
+    the script itself; the module's own functions throw instead, so the caller can roll back
+    first. It closes any held SSH connection before it exits.
 
     .PARAMETER Message
     Why the deploy stopped, and what to do about it.
 
     .PARAMETER ExitCode
-    The script's exit code. Every script uses 1.
+    The script's exit code; 1 by default.
 
     .EXAMPLE
     Fail 'Upload failed. Live site untouched.'
@@ -874,18 +963,16 @@ function Resolve-DeploySetting {
     Resolves each deploy setting from its parameter, then $env:DEPLOY_*, then the git-ignored config file.
 
     .DESCRIPTION
-    All fourteen scripts resolve their settings in this order; this is the one copy. For a
-    setting named VpsHost it takes, first non-empty wins:
+    For a setting named VpsHost it takes, first non-empty wins:
       1. the value passed in -Value (the script's own -VpsHost),
       2. $env:DEPLOY_VPS_HOST,
       3. $DeployVpsHost from the config file, which is dot-sourced in a scope of its own,
       4. the -Default value, if any.
     Every missing -Required setting is listed in one error, with the three places it can be
-    set (Senpan's message, the most complete). The result has one property per setting.
+    set. The result has one property per setting.
 
-    The SSH user is required in every config (decided 2026-11-05): VpsUser is always
-    treated as required when it is asked for, and a -Default for it is refused. Fantasy
-    Dossier, Fingerprint Generator, IDE Resume Site and TarotGen.io used to default it to root.
+    The SSH user is required in every config, so that nothing defaults to root: VpsUser is
+    always treated as required when it is asked for, and a -Default for it is refused.
 
     .PARAMETER ConfigPath
     The git-ignored config file, usually (Join-Path $PSScriptRoot 'deploy.config.ps1'). It
@@ -920,7 +1007,7 @@ function Resolve-DeploySetting {
         [hashtable]$Default = @{}
     )
     if ($Default.ContainsKey('VpsUser')) {
-        throw 'VpsUser has no default: the SSH user is set in each project''s deploy.config.ps1 (decided 2026-11-05).'
+        throw 'VpsUser has no default: the SSH user is set in each project''s deploy.config.ps1.'
     }
     $fromConfig = @{}
     if ($ConfigPath -and (Test-Path -LiteralPath $ConfigPath)) {
@@ -968,9 +1055,8 @@ function Resolve-PuttyTool {
     Finds a PuTTY tool (plink): on PATH first, then in C:\Program Files\PuTTY.
 
     .DESCRIPTION
-    Copied from the eleven scripts that define it (all but Kindred Nights, Home Library and
-    Conlang Translator, which call plink and pscp from PATH). It throws, rather than
-    exiting, when the tool is in neither place. The module itself needs only plink now.
+    It throws, rather than exiting, when the tool is in neither place. The module itself
+    needs only plink.
 
     .PARAMETER Name
     The tool's name without .exe, such as plink.
@@ -997,10 +1083,8 @@ function Resolve-TarTool {
     Returns Windows' own tar (bsdtar), by its full path.
 
     .DESCRIPTION
-    TarotGen.io's and Home Library's choice: Git's GNU tar can come first on PATH, and it
-    reads "C:\..." as a remote host. Senpan and Simple Image Gallery took tar from PATH
-    instead, and Conlang Translator called it bare. On a system other than Windows it falls
-    back to the tar on PATH.
+    Not the tar on PATH: Git's GNU tar can come first there, and it reads "C:\..." as a
+    remote host. On a system other than Windows it falls back to the tar on PATH.
 
     .EXAMPLE
     $tar = Resolve-TarTool
@@ -1024,13 +1108,12 @@ function Resolve-DeployConnection {
     Checks the key, finds plink, and stores the connection the remote functions use, without opening it.
 
     .DESCRIPTION
-    Gathers what every script sets up before its first SSH call: the key file must exist
-    (the eleven scripts with Resolve-PuttyTool check this), plink is found with
-    Resolve-PuttyTool, the target is user@host, and What Do I Know's optional -hostkey
-    pin is passed along. The result is stored as the module's default connection, so the
+    Gathers what a script sets up before its first SSH call: the key file must exist, plink
+    is found with Resolve-PuttyTool, the target is user@host, and an optional -hostkey pin
+    is passed along. The result is stored as the module's default connection, so the
     remote functions need no -Connection, and returned for scripts that print
-    $connection.Target or keep more than one. pscp is no longer needed: uploads and
-    downloads stream through plink.
+    $connection.Target or keep more than one. pscp is not needed: uploads and downloads
+    stream through plink.
 
     A deploy opens the connection with Open-DeployConnection instead, which does all this
     and then holds one shared SSH connection open. Without that, each remote call still
@@ -1039,7 +1122,7 @@ function Resolve-DeployConnection {
     Settings can be piped in from Resolve-DeploySetting.
 
     .PARAMETER VpsHost
-    The droplet's address or host name, from the project's config.
+    The host's address or name, from the project's config.
 
     .PARAMETER VpsUser
     The SSH user, from the project's config.
@@ -1102,8 +1185,8 @@ function Open-DeployConnection {
     Opens the deploy's one SSH connection and holds it, as WinSCP does, so every remote step rides it.
 
     .DESCRIPTION
-    Every deploy keeps one SSH connection open for the whole run (decided 2026-11-05). This
-    resolves the connection as Resolve-DeployConnection does, then starts a hidden
+    Every deploy keeps one SSH connection open for the whole run. This resolves the
+    connection as Resolve-DeployConnection does, then starts a hidden
     background plink -batch -share -N, which logs in and holds the connection, and waits
     until plink -share -shareexists reports it is up. Every remote command, upload and
     download then runs as plink -share, multiplexed over that connection with no new
@@ -1119,7 +1202,7 @@ function Open-DeployConnection {
     plink is left holding a connection.
 
     .PARAMETER VpsHost
-    The droplet's address or host name, from the project's config.
+    The host's address or name, from the project's config.
 
     .PARAMETER VpsUser
     The SSH user, from the project's config.
@@ -1202,14 +1285,16 @@ function Invoke-RemoteWithRetry {
     Runs a command on the host through plink, prints its output, and returns whether it succeeded.
 
     .DESCRIPTION
-    The scripts' Invoke-RemoteWithRetry, in its most complete form: carriage returns are
-    stripped (IDE Resume Site), output lines are printed indented, and when the failure
+    Carriage returns are stripped, output lines are printed indented, and when the failure
     looks like a dropped connection it reconnects and runs the command once more, printing
-    that output too (Fantasy Dossier, IDE Resume Site). It rides the connection
-    Open-DeployConnection holds; a reconnect waits 35 seconds only if it is refused. A
-    genuine command failure is not retried. From Family Card Game, Fantasy Dossier,
-    Fingerprint Generator, IDE Resume Site (as Invoke-Remote), Marxbot, Nophica, Senpan,
-    TarotGen.io and Venue Tools.
+    that output too. It rides the connection Open-DeployConnection holds; a reconnect waits
+    35 seconds only if it is refused. A genuine command failure is not retried. A command
+    that never started on the host (plink could not deliver it) prints a line saying none
+    of it ran.
+
+    The command goes to the host on plink's standard input, so its length is limited only
+    by the host (128 KB), and it runs only if it arrived whole. It runs with an empty
+    standard input, and its errors are merged into its output.
 
     .PARAMETER Script
     The shell command or script to run on the host.
@@ -1234,6 +1319,9 @@ function Invoke-RemoteWithRetry {
         [switch]$NoRetry
     )
     $result = Invoke-RemoteCore -Connection (Get-ActiveConnection -Connection $Connection) -Script $Script -NoRetry:$NoRetry -Echo
+    if ($result.ExitCode -ne 0 -and -not $result.Started) {
+        Write-Host '    The command never started on the host, so none of it ran.' -ForegroundColor Yellow
+    }
     $result.ExitCode -eq 0
 }
 
@@ -1243,10 +1331,11 @@ function Invoke-Remote {
     Runs a command on the host through plink and returns its output lines; throws if it fails.
 
     .DESCRIPTION
-    Kindred Nights' and Home Library's Invoke-Remote: carriage returns stripped, stderr
-    merged into the output, and on failure the output printed before the throw, so the
-    reason shows. Like every remote call here it rides the held connection and, after a
-    dropped one, reconnects and retries once (decided 2026-11-05); -NoRetry turns that off.
+    Carriage returns stripped, stderr merged into the output, and on failure the output
+    printed before the throw, so the reason shows. A command that never started on the
+    host throws a message saying so, with plink's reason. Like every remote call here it
+    rides the held connection and, after a dropped one, reconnects and retries once;
+    -NoRetry turns that off. The command travels as Invoke-RemoteWithRetry's does.
 
     .PARAMETER Script
     The shell command or script to run on the host.
@@ -1272,6 +1361,7 @@ function Invoke-Remote {
     )
     $result = Invoke-RemoteCore -Connection (Get-ActiveConnection -Connection $Connection) -Script $Script -NoRetry:$NoRetry
     if ($result.ExitCode -ne 0) {
+        if (-not $result.Started) { throw (Get-NotStartedMessage -Result $result) }
         $result.Lines | Write-Host
         throw "Remote command failed ($($result.ExitCode))"
     }
@@ -1284,7 +1374,7 @@ function Invoke-RemoteStep {
     Runs several self-contained shell blocks (such as the Restore- functions' -AsScript output) in one connection; throws if any fails.
 
     .DESCRIPTION
-    For a rollback that spans targets, such as Senpan's backend and frontend after a failed
+    For a rollback that spans targets, such as a backend and its frontend after a failed
     smoke check: one connection, set -e first, the blocks joined by newlines so the first
     failure stops the rest.
 
@@ -1331,9 +1421,8 @@ function Format-RemoteScript {
     Fills a shell template's placeholders literally, so a $ in a value stays a $.
 
     .DESCRIPTION
-    IDE Resume Site's Format-Remote, which fills __NAME__ placeholders, also filling
-    Simple Image Gallery's {{NAME}} ones, so both scripts' templates work unchanged.
-    Carriage returns are stripped. Values are inserted as they are, not quoted.
+    Fills both __NAME__ and {{NAME}} placeholders. Carriage returns are stripped. Values are
+    inserted as they are, not quoted.
 
     .PARAMETER Template
     The shell script, usually a single-quoted here-string.
@@ -1371,11 +1460,11 @@ function Compress-DeployArchive {
     Packs everything a deploy needs into ONE .tar.gz, and returns its path, file count and SHA-256.
 
     .DESCRIPTION
-    Every deploy ships one archive (decided 2026-11-05): the binary, systemd units, env
-    templates, .htaccess, plugin files and static dist all go in it, and the host unpacks
-    it once and checks it before anything changes (Invoke-DeployBundle). SCP negotiates each
-    file separately, so loose files spend most of an upload on round trips, and a truncated
-    archive refuses to unpack where a half-copied folder can look whole (Senpan's reasoning).
+    Every deploy ships one archive: the binary, systemd units, env templates, .htaccess,
+    plugin files and static dist all go in it, and the host unpacks it once and checks it
+    before anything changes (Invoke-DeployBundle). SCP negotiates each file separately, so
+    loose files spend most of an upload on round trips, and a truncated archive refuses to
+    unpack where a half-copied folder can look whole.
 
     -Content maps each path inside the archive to a local file or folder, so pieces from
     different places (server/, web/dist, deploy/) can be laid out as the steps want them;
@@ -1383,8 +1472,7 @@ function Compress-DeployArchive {
     pack a folder that is already laid out.
 
     It uses Windows' own tar (Resolve-TarTool) in ustar format, since the default pax
-    format carries Windows file flags that GNU tar on the host warns about for every entry
-    (TarotGen.io). From Senpan, TarotGen.io, Simple Image Gallery and Conlang Translator.
+    format carries Windows file flags that GNU tar on the host warns about for every entry.
 
     .PARAMETER Content
     An ordered dictionary: each key a path inside the archive ('dist', '.htaccess',
@@ -1400,7 +1488,7 @@ function Compress-DeployArchive {
     The local .tar.gz to write; by default a new file in the temp folder.
 
     .PARAMETER Exclude
-    tar --exclude patterns, such as '__pycache__' (Conlang Translator).
+    tar --exclude patterns, such as '__pycache__'.
 
     .EXAMPLE
     $archive = Compress-DeployArchive -Content ([ordered]@{ 'example' = $binary; 'example.service' = $unit; 'dist' = $dist })
@@ -1467,14 +1555,13 @@ function Invoke-Upload {
     Uploads the deploy archive over the held connection, byte for byte, with an elapsed-time indicator and a time limit.
 
     .DESCRIPTION
-    The scripts' Invoke-Upload, and the one upload of every deploy. pscp cannot share a
-    connection from its command line, so the archive streams through plink instead
-    (decided 2026-11-05): plink -share runs `cat > <Destination>` on the host with the
-    archive as its standard input, through Start-Process redirection, which passes the
-    bytes untouched. The SHA-256 check in Invoke-DeployBundle then confirms what arrived.
-    The console shows an elapsed-time bar, and the upload is stopped after 15 minutes. If
-    the connection drops, it reconnects and uploads once more. Returns Ok, Err and Elapsed.
-    From Senpan, TarotGen.io, Fantasy Dossier and Fingerprint Generator.
+    The one upload of every deploy. pscp cannot share a connection from its command line,
+    so the archive streams through plink instead: plink -share runs `cat > <Destination>`
+    on the host with the archive as its standard input, through Start-Process redirection,
+    which passes the bytes untouched. The SHA-256 check in Invoke-DeployBundle then confirms
+    what arrived. The console shows an elapsed-time bar, and the upload is stopped after 15
+    minutes. If the connection drops, it reconnects and uploads once more. Returns Ok, Err
+    and Elapsed.
 
     Upload into the SSH user's home (a relative -Destination), which always exists.
 
@@ -1495,7 +1582,7 @@ function Invoke-Upload {
     The number of files in the archive, for the progress bar.
 
     .PARAMETER TimeoutSeconds
-    How long the upload may take before it is stopped. Every script uses 900.
+    How long the upload may take before it is stopped; 900 by default.
 
     .PARAMETER Connection
     The connection to use; by default the one Open-DeployConnection stored.
@@ -1557,12 +1644,10 @@ function Send-File {
     Uploads single files over the held connection; returns whether it worked. For the rare case outside a deploy's one archive.
 
     .DESCRIPTION
-    The scripts' Send-File, now streamed through plink -share (`cat > <path>` with the file
-    as standard input) rather than pscp. Deploys ship one archive through Invoke-Upload and
-    Invoke-DeployBundle instead (decided 2026-11-05); this stays for the rare case that
-    truly cannot. Folders are not sent: put them in an archive. If the connection drops,
-    it reconnects and sends once more. From Family Card Game, Marxbot, Nophica, Senpan,
-    Simple Image Gallery and Venue Tools.
+    Streamed through plink -share (`cat > <path>` with the file as standard input). Deploys
+    ship one archive through Invoke-Upload and Invoke-DeployBundle instead; this is for the
+    rare case that truly cannot. Folders are not sent: put them in an archive. If the
+    connection drops, it reconnects and sends once more.
 
     .PARAMETER Path
     The local file or files.
@@ -1624,13 +1709,12 @@ function Get-File {
     Downloads a file over the held connection and checks it against the host's SHA-256; returns whether it worked.
 
     .DESCRIPTION
-    Senpan's Get-File, the mirror of Send-File, now streamed through plink -share: `cat` on
-    the host with its standard output going to a local file through Start-Process
-    redirection, which passes the bytes untouched. The download goes to <Destination>.part,
-    the host's sha256sum of the file is compared with the local one, and only a match is
-    moved into place; otherwise the partial file is removed. If the connection drops, it
-    reconnects and downloads once more. Copy-LiveDatabase uses it; Kindred Nights and Home
-    Library downloaded the same way inline, with pscp and no check.
+    The mirror of Send-File, streamed through plink -share: `cat` on the host with its
+    standard output going to a local file through Start-Process redirection, which passes
+    the bytes untouched. The download goes to <Destination>.part, the host's sha256sum of
+    the file is compared with the local one, and only a match is moved into place;
+    otherwise the partial file is removed. If the connection drops, it reconnects and
+    downloads once more. Copy-LiveDatabase uses it.
 
     .PARAMETER Source
     The remote file. Relative paths are relative to the SSH user's home.
@@ -1699,13 +1783,12 @@ function Send-FileVerified {
     Uploads one file beside its place, checks its SHA-256 on the host, and only then renames it in. For the rare case outside a deploy archive.
 
     .DESCRIPTION
-    Senpan's Send-FileVerified: the file goes to <Destination>.new, the host checks the hash
-    computed here, and a rename puts it in place, so a reader sees the old file or the new
-    one. The remote step is safe to retry: if the staged file is gone, the rename already
-    ran, and the final check confirms what is in place. On failure the live file is
-    untouched and the staged copy removed. Two remote calls, both on the held connection. Files that ship with a deploy
-    go in its one archive instead (decided 2026-11-05), including the .htaccess files and
-    plugin files Senpan and Venue Tools uploaded one by one.
+    The file goes to <Destination>.new, the host checks the hash computed here, and a rename
+    puts it in place, so a reader sees the old file or the new one. The remote step is safe
+    to retry: if the staged file is gone, the rename already ran, and the final check
+    confirms what is in place. On failure the live file is untouched and the staged copy
+    removed. Two remote calls, both on the held connection. Files that ship with a deploy,
+    .htaccess and plugin files included, go in its one archive instead.
 
     .PARAMETER Path
     The local file.
@@ -1760,8 +1843,7 @@ function Restore-Env {
     Puts an environment variable back to a value saved earlier; $null removes it.
 
     .DESCRIPTION
-    Copied unchanged from Family Card Game, Marxbot, Nophica and Senpan, which save GOOS,
-    GOARCH and CGO_ENABLED around their Go build. Invoke-GoBuild uses it.
+    Invoke-GoBuild uses it to put GOOS, GOARCH and CGO_ENABLED back after its build.
 
     .PARAMETER Name
     The variable's name, without Env:.
@@ -1795,11 +1877,10 @@ function Invoke-GoBuild {
     Cross-compiles a static, stripped linux/amd64 binary and returns its path.
 
     .DESCRIPTION
-    The build Family Card Game, Marxbot, Nophica and Senpan each copy: check that go is on
-    PATH, set GOOS=linux GOARCH=amd64 CGO_ENABLED=0 for the build only (the previous
-    values come back afterwards, even on failure), and run go build "-ldflags=-s -w" in the
-    module's folder. -ForceRebuild adds -a, which Family Card Game needs so the embedded
-    front end is never stale. Throws if the build fails or leaves no binary.
+    Checks that go is on PATH, sets GOOS=linux GOARCH=amd64 CGO_ENABLED=0 for the build only
+    (the previous values come back afterwards, even on failure), and runs go build
+    "-ldflags=-s -w" in the module's folder. -ForceRebuild adds -a, for a binary whose
+    embedded front end must never be stale. Throws if the build fails or leaves no binary.
 
     .PARAMETER Path
     The folder holding the Go main package.
@@ -1855,9 +1936,7 @@ function Invoke-NpmBuild {
     Runs npm run build in a folder and checks the build left its index.html.
 
     .DESCRIPTION
-    The front-end build Family Card Game, Fantasy Dossier, Fingerprint Generator, Senpan,
-    Simple Image Gallery and TarotGen.io each copy. Throws if npm fails or the expected
-    output is missing, so nothing is deployed.
+    Throws if npm fails or the expected output is missing, so nothing is deployed.
 
     .PARAMETER Path
     The folder with package.json.
@@ -1895,11 +1974,9 @@ function Invoke-PluginBuild {
     Builds a Dalamud plugin in Release after deleting its bin/ and obj/ folders.
 
     .DESCRIPTION
-    The plugin build Kindred Nights, Senpan, Venue Tools and TarotGen.io each copy, with
-    TarotGen.io's clean start for all four (decided 2026-11-05): DalamudPackager's
-    incremental packaging can leave a stale latest.zip whose embedded version lags the
-    freshly built manifest, and Dalamud then offers an update it can never reconcile.
-    Throws if dotnet is missing or the build fails.
+    It always starts clean: DalamudPackager's incremental packaging can leave a stale
+    latest.zip whose embedded version lags the freshly built manifest, and Dalamud then
+    offers an update it can never reconcile. Throws if dotnet is missing or the build fails.
 
     .PARAMETER Project
     The plugin's .csproj, or the folder holding it.
@@ -1931,9 +2008,8 @@ function Assert-CleanWorkingTree {
     Throws unless the git working tree has no uncommitted changes, listing them if it does.
 
     .DESCRIPTION
-    For deploys that ship a commit. IDE Resume Site's form, which also catches git itself
-    failing and lists the changed files; Kindred Nights and Home Library make the same
-    check in one line.
+    For deploys that ship a commit. It also catches git itself failing, and lists the
+    changed files.
 
     .PARAMETER Path
     The repository; by default the current location.
@@ -1956,7 +2032,8 @@ function Get-ReleaseTag {
     Returns the tag on HEAD, or throws if HEAD is not tagged.
 
     .DESCRIPTION
-    Kindred Nights and Home Library ship tagged commits only; this is their check.
+    For a deploy that ships only a tagged HEAD. A release deploy uses Get-DeployRelease
+    instead, which needs no tag on HEAD.
 
     .PARAMETER Path
     The repository; by default the current location.
@@ -1985,7 +2062,7 @@ function Get-DeployRelease {
     (origin/main), or on HEAD when it tracks none. Commits after that release, such as a
     shared-tooling update or work not yet released, are not part of it: the deploy builds the
     release as CI tested and tagged it (New-ReleaseTree), so HEAD need not be tagged and the
-    working tree need not be clean (decided 2026-11-09). Throws if no release is tagged yet.
+    working tree need not be clean. Throws if no release is tagged yet.
 
     Returns the tag, its commit, the branch it was found on, and how many commits on that
     branch follow it.
@@ -2034,8 +2111,8 @@ function Get-DeployedRelease {
     goes out. Rides the held connection.
 
     .PARAMETER Name
-    What was deployed, one name a project (or one of its parts) keeps: homelibrary,
-    tarotgen-backend.
+    What was deployed, one name a project (or one of its parts) keeps: myapp,
+    myapp-backend.
 
     .PARAMETER Connection
     The connection to use; by default the one Open-DeployConnection stored.
@@ -2107,8 +2184,7 @@ function New-ReleaseTree {
     Checks a release out into a folder of its own, with its submodules and clean npm installs, to build from.
 
     .DESCRIPTION
-    A release deploy builds the tagged commit, not the working tree (decided 2026-11-09).
-    The commits after the release and any change not committed stay out of it, and so do
+    A release deploy builds the tagged commit, not the working tree. The commits after the release and any change not committed stay out of it, and so do
     the packages installed for HEAD, which can differ from the release's lockfiles. git
     worktree adds the tag, detached, in a new folder under the temp folder; its submodules
     (shared/) follow at the commits the release names; and npm ci installs each -Npm folder
@@ -2224,20 +2300,25 @@ function Invoke-DeployBundle {
     The one remote run of a deploy: unpack the uploaded archive to a staging folder, check its SHA-256 and file count, then run each step in order.
 
     .DESCRIPTION
-    Every deploy's shape (decided 2026-11-05): one archive, one upload, one remote run. This
-    is the run. Nothing on the host changes until the archive's SHA-256 and file count both
-    match; then the steps run under set -e, each a block from a flow function's -AsStep
+    Every deploy's shape: one archive, one upload, one remote run. This is the run. Nothing
+    on the host changes until the archive's SHA-256 and file count both match; then the
+    steps run under set -e, each a block from a flow function's -AsStep
     (Install-ServiceBinary, Switch-RemoteDirectory, Switch-RemoteItemSet,
     Publish-PluginRepository) or the project's own shell. A deploy with several targets
-    (Senpan, TarotGen.io) passes one step for each, so it still rides the deploy's one
-    connection, and needs none of the 35-second pauses Senpan used between targets.
+    (a backend, its front end and a plugin) passes one step for each, so it still rides the
+    deploy's one connection, with no pause between targets.
 
     Steps find the unpacked upload in the shell variable $bundle. Files are unpacked with
     the server's usual owner, modes (644 files, 755 folders) and times rather than the
-    archive's, since Windows tar records 0666 files (TarotGen.io).
+    archive's, since Windows tar records 0666 files.
+
+    The whole run goes to the host as one script on plink's standard input, which the host
+    runs only once it has all of it (Invoke-RemoteWithRetry), so a long list of steps is
+    not cut short by the shared connection. A run the host never started fails saying so,
+    rather than as a failed deploy.
 
     The run rides the connection Open-DeployConnection holds. If that connection drops,
-    it reconnects and runs once more (decided 2026-11-05), and the retry resumes rather
+    it reconnects and runs once more, and the retry resumes rather
     than starting again: marker files in the SSH user's
     ~/.shared-deploy record that this run's upload was checked and which steps finished,
     so finished steps are skipped, and a run that already completed says so and succeeds.
@@ -2371,10 +2452,8 @@ function Install-ServiceBinary {
     From the checked upload, in one remote run: stop the services, keep the old binary, snapshot the database, install the binary, units and vhost, start, check, and roll back everything together if anything fails.
 
     .DESCRIPTION
-    The binary swap Family Card Game, Marxbot, Nophica, Senpan (backend), Kindred Nights
-    and Home Library each write, with the most careful step of each, for one service or a
-    set of them. The binary, units and vhost travel in the deploy's one archive, uploaded
-    before anything stops (decided 2026-11-05). In order:
+    The binary swap for one service or a set of them. The binary, units and vhost travel in
+    the deploy's one archive, uploaded before anything stops. In order:
       - checks before anything stops: the binary and units are in the upload; with
         -Database, sqlite3 and gzip are installed; the health URL can be built; the vhost,
         where it differs, is installed and must pass apachectl configtest, or it is put
@@ -2382,12 +2461,12 @@ function Install-ServiceBinary {
       - every listed service stops (a missing one is tolerated), and from here to the start
         a trap brings them back up on what is in place if a step fails;
       - <Binary>.old keeps the current binary; with -Database, the database is snapshotted
-        (below) and the newest three snapshots are kept (decided 2026-11-05);
+        (below) and the newest three snapshots are kept;
       - each unit that differs from the live one (compared with cmp) is installed, the
         previous kept as <name>.old (mode kept, so 600 stays 600), and systemd reloaded;
         a new unit's service is enabled, and the first service whenever its own unit changed;
       - the binary is installed with its mode and owner, then each service restarts: the
-        first always, the others if they are enabled (Home Library's text service);
+        first always, the others if they are enabled (a worker that runs only where it is set up);
       - the check: every started service active after -SettleSeconds, or, with -HealthUrl,
         the first service answering it within -HealthTimeoutSeconds;
       - on failure, everything goes back together: the journal's last 30 lines of each
@@ -2398,14 +2477,14 @@ function Install-ServiceBinary {
         (timers) get try-restart, and -NoBackup removes the .old copies.
 
     The snapshot is <SnapshotPrefix><yyyyMMdd-HHmmss><SnapshotSuffix>.gz, the time in UTC,
-    compressed like every backup kept on the droplet (decided 2026-11-06). sqlite3 .backup writes it whole
+    compressed like every backup kept on the host. sqlite3 .backup writes it whole
     to <snapshot without .gz>.partial, PRAGMA integrity_check must pass, gzip writes
     <snapshot>.partial, gzip -t must pass, and only then is it renamed into place and the
     uncompressed copy removed, all before anything is installed (Backup-RemoteDatabase
     takes the same snapshot for a site that is not a service); if any of it fails, the
     services come back up on what is in place and nothing is installed. The newest three
-    are kept across both forms: the .gz ones and the uncompressed ones deploys took before
-    2026-11-06, which age out over the next three deploys. Nothing else matching the prefix
+    are kept across both forms, so uncompressed ones under the same names age out over the
+    next three deploys. Nothing else matching the prefix
     is touched. A restore writes the database in place (gunzip -c, or cat for an
     uncompressed one), after removing its -wal and -shm. By hand, with the service stopped:
       rm -f <Database>-wal <Database>-shm && gunzip -c <snapshot> > <Database>
@@ -2424,26 +2503,25 @@ function Install-ServiceBinary {
     The binary's path inside the upload; by default Binary's file name.
 
     .PARAMETER Mode
-    The installed binary's mode; 755 in every script.
+    The installed binary's mode; 755 by default.
 
     .PARAMETER Owner
-    user or user:group for the binary (a bare user also names the group): Kindred Nights
-    and Family Card Game use the service's own user, Home Library root. When empty the
-    binary is owned by the SSH user, as in Marxbot, Nophica and Senpan.
+    user or user:group for the binary (a bare user also names the group), such as the
+    service's own user. When empty the binary is owned by the SSH user.
 
     .PARAMETER Unit
     Systemd unit files inside the upload, each installed as /etc/systemd/system/<its name>
     when it differs from the live one.
 
     .PARAMETER UnitMode
-    The units' mode. Marxbot and Nophica use 600, since their units hold the bot token.
+    The units' mode: 600 for a unit that holds a secret.
 
     .PARAMETER UnitBackupDirectory
     Where the previous units are kept as <name>.old; by default the binary's folder.
 
     .PARAMETER Vhost
     An Apache vhost inside the upload, installed as -VhostPath when it differs and checked
-    with apachectl configtest before anything stops (Home Library).
+    with apachectl configtest before anything stops.
 
     .PARAMETER VhostPath
     The live vhost file, such as /etc/apache2/sites-available/example.conf.
@@ -2453,7 +2531,7 @@ function Install-ServiceBinary {
 
     .PARAMETER HealthUrl
     A URL fetched on the host (curl -fs, two seconds each) once a second until it answers,
-    instead of the first service's is-active check (Home Library's /healthz). Parts in
+    instead of the first service's is-active check, such as its /healthz. Parts in
     braces, such as http://{EXAMPLE_ADDR}/healthz, are read from -EnvFile on the host.
 
     .PARAMETER EnvFile
@@ -2463,13 +2541,13 @@ function Install-ServiceBinary {
     Values for -HealthUrl's {NAME} parts the env file does not set.
 
     .PARAMETER HealthTimeoutSeconds
-    How long -HealthUrl may take to answer; Home Library allows 30.
+    How long -HealthUrl may take to answer, such as 30.
 
     .PARAMETER SettleSeconds
-    How long to wait before the is-active check; every script waits 2.
+    How long to wait before the is-active check; 2 by default.
 
     .PARAMETER Umask
-    The umask for the whole step, so snapshots and copies are for root alone (Home Library: 077).
+    The umask for the whole step, such as 077, so snapshots and copies are for root alone.
 
     .PARAMETER Database
     The live SQLite database on the host, snapshotted with sqlite3 .backup after the stop
@@ -2477,21 +2555,21 @@ function Install-ServiceBinary {
 
     .PARAMETER SnapshotPrefix
     The snapshot's path up to its time stamp, such as /opt/example/backups/example-pre-.
-    By default <Database>.pre- (Senpan).
+    By default <Database>.pre-.
 
     .PARAMETER SnapshotSuffix
     What follows the time stamp, such as .sqlite; .gz follows it.
 
     .PARAMETER RestoreDatabaseOnRollback
     Put the snapshot back on a rollback, since the new binary may have migrated the schema
-    before it fell over (Kindred Nights, Home Library). Opt-in per project (decided
-    2026-11-05); without it, the command to do so (gunzip -c) is printed (Marxbot).
+    before it fell over. Opt-in per project; without it, the command to do so (gunzip -c)
+    is printed.
 
     .PARAMETER AfterStop
     Shell run just after the stop, before the backup and snapshot.
 
     .PARAMETER BeforeStart
-    Shell run after the install, just before the start (Nophica retires its old service here).
+    Shell run after the install, just before the start, such as retiring a service the new one replaces.
 
     .PARAMETER OnRollback
     Shell run on a rollback, after everything is back and before the services start.
@@ -2834,14 +2912,12 @@ function Restore-ServiceBinary {
     step of its own for when the services start but the site is wrong. It stops the
     services, puts <Binary>.old back, puts back each listed unit and the vhost that have a
     .old copy from the last deploy, optionally the newest database snapshot, then starts
-    the services and checks they are active. The scripts that kept a .old binary printed
-    this as the manual rollback (Family Card Game, Marxbot, Nophica, Senpan). Needs the .old
-    file, so it does nothing useful after Install-ServiceBinary -NoBackup. One connection.
+    the services and checks they are active. Needs the .old file, so it does nothing useful
+    after Install-ServiceBinary -NoBackup. One connection.
 
     The newest snapshot is the one written last of those Install-ServiceBinary names
-    <SnapshotPrefix><yyyyMMdd-HHmmss><SnapshotSuffix>.gz and, from deploys before
-    2026-11-06, the same names without .gz; nothing else matching the prefix is taken for
-    one. A .gz must pass gzip -t, then is decompressed into the database file in place (an
+    <SnapshotPrefix><yyyyMMdd-HHmmss><SnapshotSuffix>.gz, or the same names without .gz;
+    nothing else matching the prefix is taken for one. A .gz must pass gzip -t, then is decompressed into the database file in place (an
     uncompressed one is copied in), after the database's -wal and -shm are removed. If it
     cannot be put back, the services still start on the previous binary and this fails.
 
@@ -3022,18 +3098,15 @@ function Switch-RemoteDirectory {
     From the checked upload: swap a folder into place by renames, keeping the previous one as <Live>.old, and put it back if a later step fails.
 
     .DESCRIPTION
-    The swap Fantasy Dossier, Fingerprint Generator, Senpan (frontend) and TarotGen.io
-    (frontend and plugin) each write, and the one What Do I Know (its plugin or theme
-    folder) and IDE Resume Site (its files, moved into a folder of their own) move to
-    (decided 2026-11-05). The folder always arrives in the deploy's one archive, checked by
-    SHA-256 and file count before anything changes (decided 2026-11-05); the folder
-    upload with pscp -r is gone. Then:
+    For a site's front end, a plugin repository, a theme or any folder that ships whole.
+    The folder always arrives in the deploy's one archive, checked by SHA-256 and file
+    count before anything changes. Then:
       - the new folder moves beside the live one as <Live>.new (so the swap itself is two
         renames on one filesystem) and, with -Owner, is given to that owner;
       - -BeforeSwap runs on it; a failure leaves the live folder untouched;
       - <Live> becomes <Live>.old and the new folder becomes <Live>; if that last rename
-        fails, the old folder is put back (Fantasy Dossier);
-      - each -File moves into place too, its previous copy kept as .old (Fantasy Dossier's .htaccess);
+        fails, the old folder is put back;
+      - each -File moves into place too, its previous copy kept as .old (a site's .htaccess);
       - -AfterSwap runs; if it fails, the previous folder and files go back.
     A run cut off between the two renames is noticed by the next and the live folder put back first.
 
@@ -3050,13 +3123,13 @@ function Switch-RemoteDirectory {
     the upload, each value its live path. A file missing from the upload is skipped.
 
     .PARAMETER Owner
-    user or user:group given the new folder and files before the swap (What Do I Know: www-data).
+    user or user:group given the new folder and files before the swap, such as www-data.
 
     .PARAMETER BeforeSwap
-    Shell run on the new folder ($new) before the swap, such as IDE Resume Site's php -l.
+    Shell run on the new folder ($new) before the swap, such as php -l on its scripts.
 
     .PARAMETER AfterSwap
-    Shell run after the swap, such as What Do I Know's grav clearcache; a failure swaps back.
+    Shell run after the swap, such as clearing the site's cache; a failure swaps back.
 
     .PARAMETER NoBackup
     Remove <Live>.old and the files' .old copies once the swap is done. Restore-RemoteDirectory
@@ -3148,10 +3221,9 @@ function Restore-RemoteDirectory {
     Puts <Live>.old back as <Live>, after a swap that went in but failed its smoke check.
 
     .DESCRIPTION
-    The rollback Fantasy Dossier, Fingerprint Generator, Senpan and TarotGen.io printed for
-    the owner to run by hand, done by renames: the failed folder is moved aside and removed
-    only once the old one is back. (Their printed mv '<Live>.old' '<Live>' moved the old
-    folder inside the live one while that existed.) Each -File gets its .old copy back too.
+    Done by renames: the failed folder is moved aside and removed only once the old one is
+    back. (A plain mv '<Live>.old' '<Live>' would move the old folder inside the live one
+    while that exists.) Each -File gets its .old copy back too.
     One connection.
 
     .PARAMETER Live
@@ -3215,8 +3287,7 @@ function Switch-RemoteItemSet {
 
     .DESCRIPTION
     For sites whose code is several entries in one folder rather than one folder of its
-    own. Simple Image Gallery's swap with TarotGen.io's refusal of a missing entry
-    (confirmed 2026-11-05):
+    own, such as a Laravel app:
       - the listed entries move from the upload into a staging folder inside Root, so the
         swap is renames on one filesystem;
       - -Prepare runs on the staging folder, still beside the live site (copy vendor/,
@@ -3239,10 +3310,10 @@ function Switch-RemoteItemSet {
     The folder inside the upload that holds the entries; by default the upload's top.
 
     .PARAMETER Staging
-    The staging folder, relative to Root; the Gallery's .deploy-next by default.
+    The staging folder, relative to Root; .deploy-next by default.
 
     .PARAMETER Backup
-    The backup folder, relative to Root; the Gallery's .deploy-backup by default.
+    The backup folder, relative to Root; .deploy-backup by default.
 
     .PARAMETER Prepare
     Shell run on the staging folder before the swap.
@@ -3251,7 +3322,7 @@ function Switch-RemoteItemSet {
     Shell run after the swap; a failure here puts the previous entries back.
 
     .PARAMETER OnRestore
-    Shell run after the previous entries are put back (the Gallery restarts its queue).
+    Shell run after the previous entries are put back, such as restarting a queue worker.
 
     .PARAMETER NoBackup
     Remove the backup folder once everything has succeeded.
@@ -3397,10 +3468,9 @@ function Restore-RemoteItemSet {
     Puts the items Switch-RemoteItemSet moved into its backup folder back, after a deploy that failed its smoke check.
 
     .DESCRIPTION
-    The rollback Simple Image Gallery's trap does, as a step of its own. Each item found
+    The rollback Switch-RemoteItemSet's trap does, as a step of its own. Each item found
     in the backup folder replaces the live one; items not in the backup stay as they are.
-    Simple Image Gallery and TarotGen.io printed their rollback for the owner to run
-    instead. One connection.
+    One connection.
 
     .PARAMETER Root
     The folder on the host holding the items.
@@ -3476,7 +3546,7 @@ function Backup-RemoteDatabase {
 
     .DESCRIPTION
     The snapshot before the migrations that PHP sites take for themselves, since they are
-    not services (Simple Image Gallery, TarotGen.io), made to the standard
+    not services, made to the standard
     Install-ServiceBinary -Database keeps, with the same shell underneath. It runs nothing
     itself: embed the block in a step's hook, such as Switch-RemoteItemSet's -Prepare or
     -AfterSwap, ahead of the migrations, with Format-RemoteScript or by joining strings.
@@ -3550,7 +3620,7 @@ function Backup-RemoteDatabase {
     the restore command. Without it, the command assumes the writers are stopped.
 
     .EXAMPLE
-    # A PHP site whose host .env names the database (Simple Image Gallery's shape): the
+    # A Laravel site whose host .env names the database: the
     # snapshot in a .backups folder beside the database, five kept, its earlier
     # example-<yyyyMMdd-HHmmss>.db copies counted among them; then the migrations.
     $afterSwap = Format-RemoteScript -Value @{
@@ -3568,7 +3638,7 @@ function Backup-RemoteDatabase {
         -Root '/var/www/example.com' -Item 'app', 'config', 'public' -AfterSwap $afterSwap
 
     .EXAMPLE
-    # A site whose database belongs to www-data (TarotGen.io's shape): the snapshot made as
+    # A site whose database belongs to www-data: the snapshot made as
     # www-data under umask 077, beside the database as example.db.pre-<time>.gz, three kept,
     # before the swap; the migrations after it; the same command in the script's own message.
     $snapshot = Backup-RemoteDatabase -Database '/var/lib/example/db/example.db' -Owner 'www-data' -Umask '077'
@@ -3715,14 +3785,13 @@ function Export-PluginRepository {
     Lays out a Dalamud plugin repository folder locally: the package, its files and the repo index, with the versions checked and the download links cache-busted.
 
     .DESCRIPTION
-    The local half of plugin publishing, for all four plugins (decided 2026-11-05). It reads
-    the version DalamudPackager built into the manifest, and refuses to go on unless the
-    repo index carries the same version, since Dalamud refuses an update whose package does
-    not match its index. The index is either the project's own file (Senpan's and Venue
-    Tools' pluginmaster.json; Kindred Nights publishes the built manifest itself, which its
-    server reads) or written from the built manifest with download and icon links
-    (TarotGen.io's repo.json). Download links to the package get ?v=<version>, so an edge
-    cache serves each release under a new address (Senpan, Venue Tools, TarotGen.io).
+    The local half of plugin publishing. It reads the version DalamudPackager built into
+    the manifest, and refuses to go on unless the repo index carries the same version,
+    since Dalamud refuses an update whose package does not match its index. The index is
+    the project's own file (a pluginmaster.json), the built manifest itself (for a server
+    that reads it), or written from the built manifest with download and icon links (a
+    repo.json). Download links to the package get ?v=<version>, so an edge cache serves
+    each release under a new address.
 
     The result's Path goes into the deploy archive (Compress-DeployArchive), and its Version
     to Publish-PluginRepository, which also checks it is higher than the one published.
@@ -3735,8 +3804,8 @@ function Export-PluginRepository {
     (such as Example/latest.zip, icon.png, .htaccess), each value the local file.
 
     .PARAMETER IndexPath
-    The index's path in the repository: pluginmaster.json, repo.json, or (Kindred Nights)
-    the manifest's own name.
+    The index's path in the repository: pluginmaster.json, repo.json, or the manifest's own
+    name.
 
     .PARAMETER IndexSource
     The project's own index file to publish. Its AssemblyVersion must equal the built one.
@@ -3846,13 +3915,12 @@ function Publish-PluginRepository {
     From the checked upload: refuse a plugin version that is not higher than the published one, then swap the repository folder into place.
 
     .DESCRIPTION
-    The host half of plugin publishing, for all four plugins (decided 2026-11-05). Before
-    anything changes it reads the version in the uploaded index, which must equal -Version,
-    and the version in the live index, which -Version must be higher than (Kindred Nights'
-    check; Dalamud updates to nothing else). A first publish, with nothing live yet,
-    passes. Then the whole repository folder swaps in as Switch-RemoteDirectory does,
-    keeping the previous as <Live>.old, so no file is ever written straight onto a live one
-    (Venue Tools wrote onto them; Senpan renamed each file in after a hash check).
+    The host half of plugin publishing. Before anything changes it reads the version in the
+    uploaded index, which must equal -Version, and the version in the live index, which
+    -Version must be higher than, since Dalamud updates to nothing else. A first publish,
+    with nothing live yet, passes. Then the whole repository folder swaps in as
+    Switch-RemoteDirectory does, keeping the previous as <Live>.old, so no file is ever
+    written straight onto a live one.
 
     Swapping the whole folder replaces everything in it: check before the first run that
     the live folder holds only this plugin's files.
@@ -3870,14 +3938,13 @@ function Publish-PluginRepository {
     The repository folder inside the upload; by default Live's own name.
 
     .PARAMETER Owner
-    user or user:group given the new folder (Kindred Nights: the service's user, whose
-    server reads it).
+    user or user:group given the new folder, such as the user of a service that reads it.
 
     .PARAMETER AfterSwap
     Shell run after the swap, such as a check that the server now lists the version; a failure swaps back.
 
     .PARAMETER NoBackup
-    Remove <Live>.old once the swap is done (TarotGen.io keeps no previous plugin folder).
+    Remove <Live>.old once the swap is done, keeping no previous plugin folder.
 
     .PARAMETER Archive
     The uploaded archive, when this runs on its own rather than as one step of Invoke-DeployBundle.
@@ -3996,8 +4063,8 @@ function Install-BackupTimer {
     Installs or updates a project's daily database backup, a systemd timer and its oneshot service, and checks it with a first run whenever it changes.
 
     .DESCRIPTION
-    Kindred Nights' backup timer, made general and installed by the deploy instead of by
-    hand (decided 2026-11-06). In one remote run on the held connection:
+    A project's backup timer, installed by the deploy rather than by hand. In one remote
+    run on the held connection:
       - the units, and the shared job's script unless -Command names the project's own, are
         written here and compared with the live copies (cmp); if all match, nothing changes;
       - if any differs or is new, the previous copies are kept aside, the new ones
@@ -4009,15 +4076,15 @@ function Install-BackupTimer {
     The shared job copies the live SQLite database with VACUUM INTO, which reads it
     consistently while the app keeps writing, WAL included, to <copy>.partial. The copy is
     checked with PRAGMA integrity_check, then compressed with gzip, like every backup kept
-    on the droplet (decided 2026-11-06): gzip writes <copy>.gz.partial, gzip -t checks it,
+    on the host: gzip writes <copy>.gz.partial, gzip -t checks it,
     and only then does it take the day's name, <Prefix>YYYY-MM-DD<Suffix>.gz (UTC), in
     -Directory, with no uncompressed copy left behind. A second run the same day replaces
     that day's copy. If the copy fails its check, or sqlite3 or gzip is missing, the run
     fails and the earlier copies stay as they are.
 
     Then, dated copies older than -Keep days are removed, compressed or not, and each dated
-    copy still uncompressed (the job wrote them so before 2026-11-06) is compressed the same
-    way, keeping its time, so the first run after this change converts them all. Nothing
+    copy still uncompressed is compressed the same way, keeping its time, so a folder of
+    uncompressed copies is converted by one run. Nothing
     else in the folder is touched, so a deploy's own snapshots may share it as long as their
     names never take that dated form. The run's log line gives the day's copy, its size
     compressed and not, and how many copies were removed and converted.
@@ -4029,9 +4096,9 @@ function Install-BackupTimer {
     its paths.
 
     Call it after the smoke check, so a deploy that rolls back changes no backup. The
-    service carries Kindred Nights' hardening (ProtectSystem=strict, UMask=0077 and the
-    rest) and writes only to -ReadWritePath. The copies stay on the droplet; the copy off
-    it is the database pull at each deploy (Copy-LiveDatabase).
+    service carries the standard hardening (ProtectSystem=strict, UMask=0077 and the rest)
+    and writes only to -ReadWritePath. The copies stay on the host; the copy off it is the
+    database pull at each deploy (Copy-LiveDatabase).
 
     .PARAMETER Name
     The project's short name: the units are <Name>-backup.service and <Name>-backup.timer,
@@ -4052,11 +4119,11 @@ function Install-BackupTimer {
     extension, such as .sqlite.
 
     .PARAMETER Keep
-    Days of copies kept: 28 unless set, as in Kindred Nights.
+    Days of copies kept: 28 unless set.
 
     .PARAMETER Command
-    The project's own backup command, run instead of the shared job (Kindred Nights'
-    `kindred backup`), which then keeps its own copies, pruning and compression.
+    The project's own backup command, run instead of the shared job (such as
+    `myapp backup`), which then keeps its own copies, pruning and compression.
 
     .PARAMETER EnvironmentFile
     An env file the service reads, optional at run time (EnvironmentFile=-), for -Command.
@@ -4217,8 +4284,8 @@ for ending in "$suffix" "$suffix.gz"; do
     if [[ "$d" < "$cutoff" ]]; then rm -f -- "$f"; pruned=$((pruned + 1)); fi
   done
 done
-# Copies written uncompressed, before 2026-11-06, are compressed the same way, keeping their
-# time; one whose .gz is already whole (a run cut off before the rm) just loses the original.
+# Copies still uncompressed are compressed the same way, keeping their time; one whose .gz
+# is already whole (a run cut off before the rm) just loses the original.
 converted=0
 for f in "$dir/$prefix"[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]"$suffix"; do
   [ -f "$f" ] || continue
@@ -4278,7 +4345,7 @@ echo "Backup: $dest ($(du -h "$dest" | cut -f1) compressed, $size uncompressed);
     $service.Add('Nice=10')
     $service.Add('TimeoutStartSec=30min')
     $service.Add('')
-    $service.Add('# The same hardening as Kindred Nights'' backup.')
+    $service.Add('# The standard hardening for a service unit.')
     $service.Add('NoNewPrivileges=yes')
     $service.Add('ProtectSystem=strict')
     $service.Add("ReadWritePaths=$($ReadWritePath -join ' ')")
@@ -4380,16 +4447,14 @@ function Copy-LiveDatabase {
     Pulls a copy of the live SQLite database for development: an online snapshot on the host, a download, three timestamped local copies kept, the host's copy removed.
 
     .DESCRIPTION
-    The dev-database pull Kindred Nights, Home Library and Senpan each write, settled
-    (decided 2026-11-05):
+    The pull:
       - if the local database is open (a dev server is running), it warns and skips, before
         any connection;
       - sqlite3 .backup takes a consistent snapshot on the host while the service keeps
-        running (Kindred Nights, Home Library; Senpan stopped the service for a cp), under
-        umask 077, since it holds live accounts and secrets;
+        running, under umask 077, since it holds live accounts and secrets;
       - the snapshot is downloaded beside the local database, then the current local copy is
         moved to <Destination>.bak-<time> and the download takes its place, with any stale
-        -wal and -shm removed; the newest three .bak copies are kept (Senpan);
+        -wal and -shm removed; the newest three .bak copies are kept;
       - the host's snapshot is removed whether or not the download worked.
     Returns $true when the local database was refreshed. Every call rides the connection
     Open-DeployConnection holds, so the pull opens no connection of its own.
@@ -4515,20 +4580,14 @@ function Invoke-SmokeCheck {
     Fetches each listed URL from this machine, checks its status and optional text, and rolls back and throws if any fails.
 
     .DESCRIPTION
-    The shared smoke step, built from the checks the scripts already make after a deploy:
-      - IDE Resume Site fetches its page and contact.php from here (Invoke-WebRequest, 20
-        seconds, status not treated as an error), expects 200 and 405, and expects the
-        page to contain the Vue version it ships;
-      - Home Library asks /healthz on the host once a second for up to 30 seconds;
-      - Conlang Translator posts a test translation on the host and looks for the
-        expected words, also for up to 30 seconds;
-      - Kindred Nights' plugin publish looks for the new version in repo.json;
-      - Simple Image Gallery prints its health URL's status without acting on it.
+    The checks a deploy makes once the new release is in, such as a page that must name the
+    build it ships, a form endpoint that must answer 405 to a GET, a /healthz, a POST whose
+    answer must hold known words, or a plugin index that must list the new version.
     Each check is a URL with an expected status (200 unless given) and, optionally, text
     the body must contain (case-sensitive, as grep). A check is tried up to -Attempts
     times, -DelaySeconds apart. A line is printed for each.
 
-    A failed smoke check rolls back automatically (decided 2026-11-05): pass -Rollback with
+    A failed smoke check rolls back automatically: pass -Rollback with
     what puts the previous release back, or -NoRollback for a deploy with nothing to undo;
     it throws if given neither or both. When a check fails, -Rollback runs and the function
     throws, so the caller stops; with -PassThru it returns each result (Url, Method,
@@ -4540,7 +4599,7 @@ function Invoke-SmokeCheck {
     .PARAMETER Check
     One hashtable per check: Url (required), Status (a code or a list, default 200),
     Contains (text the body must hold), Method (default GET), Body and ContentType (for a
-    POST like Conlang Translator's).
+    POST).
 
     .PARAMETER Attempts
     How many times to try each URL before it counts as failed.
@@ -4549,7 +4608,7 @@ function Invoke-SmokeCheck {
     The wait between attempts.
 
     .PARAMETER TimeoutSec
-    The limit for each request; IDE Resume Site uses 20.
+    The limit for each request, in seconds.
 
     .PARAMETER Rollback
     What puts the previous release back, run when a check fails, such as
@@ -4596,7 +4655,7 @@ function Invoke-SmokeCheck {
     )
     if ($Rollback -and $NoRollback) { throw 'Pass -Rollback or -NoRollback, not both.' }
     if (-not $Rollback -and -not $NoRollback) {
-        throw 'A failed smoke check rolls back (decided 2026-11-05): pass -Rollback with what puts the previous release back, or -NoRollback for a deploy with nothing to undo.'
+        throw 'A failed smoke check rolls back: pass -Rollback with what puts the previous release back, or -NoRollback for a deploy with nothing to undo.'
     }
     $ProgressPreference = 'SilentlyContinue'
     $checks = if ($PSCmdlet.ParameterSetName -eq 'Url') { $Url | ForEach-Object { @{ Url = $_ } } } else { $Check }

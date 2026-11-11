@@ -6,8 +6,7 @@ import globals from 'globals'
 import tseslint from 'typescript-eslint'
 
 /**
- * Shared ESLint flat config for jwill89 React + TypeScript front ends (Family Card
- * Game). The same curated rules as the Vue config, on typescript-eslint's
+ * Shared ESLint flat config for React + TypeScript front ends. The same curated rules as the Vue config, on typescript-eslint's
  * strictTypeChecked, React's hooks rules and JSX accessibility.
  *
  *   import shared from '@jwill89/lint-web/react'

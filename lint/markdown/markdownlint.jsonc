@@ -8,8 +8,7 @@
 // The VS Code markdownlint extension reads the same files, so the editor agrees with CI.
 {
   "default": true,
-  // No hard wrap: Markdown sets no line length, and a paragraph is one line (decided
-  // 2026-11-05).
+  // No hard wrap: Markdown sets no line length, and a paragraph is one line.
   "MD013": false,
   // Table pipes needn't line up: aligning them rewrites every row when one cell grows.
   "MD060": false,

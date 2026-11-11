@@ -1,14 +1,13 @@
 name: .NET
 
 # The C# job for the Dalamud plugins: Dalamud's published build files, a Release build,
-# `dotnet format` with nothing to change, and the tests where there are any. Seeded from
-# Kindred Nights' and Senpan's plugin jobs.
+# `dotnet format` with nothing to change, and the tests where there are any.
 #
 #   plugin:
 #     uses: jwill89/shared-tooling/.github/workflows/dotnet.yml@v1.0.0
 #     with:
-#       projects: plugins/KindredCompanion plugins/KindredCompanion.Preview
-#       test-project: plugins/KindredCompanion.Tests
+#       projects: plugins/Example plugins/Example.Preview
+#       test-project: plugins/Example.Tests
 
 on:
   workflow_call:
@@ -82,7 +81,7 @@ jobs:
         env:
           TEST_PROJECT: ${{ inputs.test-project }}
         # From the test project's own folder, so a global.json beside it is read: one that
-        # picks Microsoft.Testing.Platform (Kindred Nights' plugins/global.json) makes
+        # picks Microsoft.Testing.Platform makes
         # `dotnet test` take --project; without one, the older runner takes a plain path.
         run: |
           dotnet format "$TEST_PROJECT" --verify-no-changes

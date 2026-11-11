@@ -9,7 +9,7 @@ Each rule ends with how it is checked. Where a name isn't covered here, match th
 - A Go package has one file per feature, named for it in lowercase (`raffles.go`, or `raffle_commands.go` when a big feature splits). A new feature gets a new file. [review]
 - A Vue front end keeps reusable UI in `components/`, route pages in `views/` and the `useX` functions in `composables/`, beside `stores/`, `router/`, `types/` and `constants/`. [review]
 - A new front-end feature adds a composable, a view or component, and a route. [review]
-- Server units and files are named `<app>-<purpose>` (`gallery-queue.service`, `gallery-backup.timer`), as the Gallery's are. [review]
+- Server units and files are named `<app>-<purpose>` (`myapp-queue.service`, `myapp-backup.timer`). [review]
 - shared-tooling's folders are named `<purpose>/<target>` (`lint/go`, `test/a11y`). [review]
 - A repo shared across projects has "shared" in its name (shared-tooling, shared-components-vue). [review]
 
@@ -26,7 +26,7 @@ Which components to reach for is in [components.md](components.md).
 
 ## Go modules and packages
 
-- An application module that nothing imports is named without a dot (`kindred`). [review]
+- An application module that nothing imports is named without a dot (`myapp`). [review]
 - goimports' local prefix is the module's name, so the module's own imports form a group of their own. [lint: golangci-lint goimports]
 - Packages are split by domain and named for it, in one short lowercase word (`media`, `tags`). [review]
 - A sentinel error is `ErrX` and an error type is `XError`. [lint: golangci-lint errname]
@@ -38,7 +38,7 @@ Which components to reach for is in [components.md](components.md).
 - An unused variable, parameter or caught error starts with `_`. [lint: ESLint @typescript-eslint/no-unused-vars]
 - A C# private field is camelCase, and a constant or static readonly field is PascalCase. [lint: .NET IDE1006]
 - A PowerShell function is an approved verb and a singular noun (`Publish-Bundle`). [lint: PSScriptAnalyzer PSUseApprovedVerbs, PSUseSingularNouns]
-- Environment variables start with the project's prefix (`KN_` in Kindred Nights). [review]
+- Environment variables start with the project's prefix (`MYAPP_`). [review]
 - Browser storage keys share one app namespace (`<app>.theme`), and sit in the constants module. [review]
 
 ## Tables and columns

@@ -28,7 +28,7 @@ Every project with a database uses SQLite. Snapshots, daily backups, restores an
 - A Go app migrates with goose: numbered SQL files, and a Go migration only where the change needs logic. [review]
 - goose files are numbered in sequence (`00001_`, `00002_`), not by timestamp, so each number fits in `PRAGMA user_version`. [review]
 - Each migration also sets `PRAGMA user_version` to its own number, so `user_version` always equals goose's version and shows a schema's version at a glance; a test migrates a fresh database and checks the two agree. [test]
-- A Laravel app uses Laravel's own migrations; any other PHP site uses Phinx (TarotGen.io is the model). [review]
+- A Laravel app uses Laravel's own migrations; any other PHP site uses Phinx. [review]
 - Migrations run in the deploy, never by hand. [review]
 - A PHP site's deploy runs them after the pre-migration snapshot, as the database's user. [review]
 - A Go service runs them at start, after the stop-time snapshot. [review]
@@ -43,7 +43,7 @@ Every project with a database uses SQLite. Snapshots, daily backups, restores an
 - Dead tables and indexes, and the env vars only they used, are dropped once nothing references them; schema is made again when a design needs it, not kept just in case. [review]
 - Seed rows a fresh database needs go in a migration, written `INSERT OR IGNORE`, so a re-run never overwrites a value changed since (a rotated password). [test]
 - Each project commits its schema and has a schema test that fails when the migrations build anything else, so every schema change shows in review. [test]
-- The committed schema is generated from the migrations on a throwaway database where the tool allows, and never edited by hand (TarotGen.io's `db/schema.sql` is the model). [review]
+- The committed schema is generated from the migrations on a throwaway database where the tool allows, and never edited by hand (`db/schema.sql`, say). [review]
 - After a migration on production, production's schema is compared object for object with a fresh build of the committed one. [review]
 
 ## Rebuilding a table

@@ -64,7 +64,7 @@ The accessibility rules every site with a UI meets, and how each is checked.
 - Where a framework's default falls short, a token overrides it. [axe]
 - Control boundaries, focus rings and meaningful icons reach 3:1 against what is next to them; WCAG sets no AAA level for these, and a project may hold them higher. [review]
 - A colour that reaches only 3:1 is for borders and accents, never for text. [review]
-- A test computes the contrast and level of every token pair from the live theme, and fails a pair below AAA unless it is a recorded exception; each new pair is added to it. Home Library's `contrast.test.ts`, Senpan's `themetool check` for its themes, and Kindred's style guide page are the models. [test]
+- A test computes the contrast and level of every token pair from the live theme, and fails a pair below AAA unless it is a recorded exception; each new pair is added to it. A project with several themes checks each one, and a style guide page that shows every pair lets a person see what the test measures. [test]
 - Colour is never the only cue: wherever colour marks a difference, a name or a symbol marks it too. [review]
 - The current page in the navigation is underlined as well as lit. [review]
 - Severity is shown by the background wash and the icon; an alert's text stays in the body text colour. [review]

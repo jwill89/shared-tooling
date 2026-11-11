@@ -2,8 +2,8 @@ import { AxeBuilder } from '@axe-core/playwright'
 
 /**
  * WCAG 2.2 A and AA, and axe's best practices (landmarks, one h1, heading order): the
- * bar every site with a UI holds. A site that aims higher passes its own tags, as the
- * résumé site does with the AAA ones (`[...WCAG_22_AA, 'wcag2aaa']`).
+ * bar every site with a UI holds. A site that aims higher passes its own tags, such as
+ * the AAA ones (`[...WCAG_22_AA, 'wcag2aaa']`).
  */
 export const WCAG_22_AA = [
   'wcag2a',
@@ -17,8 +17,7 @@ export const WCAG_22_AA = [
 
 /**
  * axe's findings on the page as it stands, one line per failing element, so a failed
- * `expect(await axeViolations(page)).toEqual([])` says what to fix and where. Seeded
- * from the résumé site's helper.
+ * `expect(await axeViolations(page)).toEqual([])` says what to fix and where.
  *
  * The page must belong to a browser context, as Playwright Test's `page` fixture does
  * (axe opens a second page beside it to finish the run); a bare `browser.newPage()`
@@ -26,8 +25,8 @@ export const WCAG_22_AA = [
  *
  * @param {import('@playwright/test').Page} page
  * @param {{ tags?: string[], exclude?: string[] }} [options]
- *   `exclude` takes selectors axe should skip, each with its reason at the call (the
- *   résumé site's aria-hidden gutter, say).
+ *   `exclude` takes selectors axe should skip, each with its reason at the call (an
+ *   aria-hidden decorative gutter, say).
  * @returns {Promise<string[]>}
  */
 export async function axeViolations(page, { tags = WCAG_22_AA, exclude = [] } = {}) {

@@ -131,7 +131,7 @@ function Test-VersionComparator {
 # peers into the ranges this release declares: a peer the project lists in its
 # devDependencies, at a version outside the range. The version is the lockfile's, else
 # the installed copy's, else the lowest the project's package.json allows. Exact says
-# the project pins the tool to one version (Kindred Nights does), so it stays pinned.
+# the project pins the tool to one version, so it stays pinned.
 function Get-PeerSpec {
     param([string] $Directory, [string[]] $Package)
 

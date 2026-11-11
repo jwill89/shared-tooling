@@ -1,6 +1,6 @@
 # PSScriptAnalyzer for every repo's PowerShell: its default rules, and the one-true-brace
-# formatting the scripts are written in (its CodeFormattingOTBS preset). Seeded from the
-# file Kindred Nights, Home Library and Marxbot already shared. Point -Settings here:
+# formatting the scripts are written in (its CodeFormattingOTBS preset). Point -Settings
+# here:
 #
 #   Invoke-ScriptAnalyzer -Path scripts/deploy.ps1 -Settings shared/lint/pwsh/PSScriptAnalyzerSettings.psd1
 @{

@@ -2,8 +2,7 @@ name: Web
 
 # The front-end job every repo with a Vue or React app calls: install (with the Font
 # Awesome Pro registry when the app uses it), audit, then the npm scripts the caller
-# lists, in order. Seeded from Kindred Nights', TarotGen.io's and Fantasy Dossier's
-# front-end jobs.
+# lists, in order.
 #
 #   web:
 #     uses: jwill89/shared-tooling/.github/workflows/web.yml@v1.0.0

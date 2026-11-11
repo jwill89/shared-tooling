@@ -1,7 +1,6 @@
 /**
- * The shared Vitest settings, seeded from the Gallery's and TarotGen.io's: jsdom for
- * tests that need a DOM (decided 2026-11-05), mocks and stubbed globals put back after
- * each test, and v8 coverage over all of src with a floor that only rises.
+ * The shared Vitest settings: jsdom for tests that need a DOM, mocks and stubbed
+ * globals put back after each test, and v8 coverage over all of src with a floor that only rises.
  *
  *   // vite.config.ts
  *   import { vitestDefaults } from '../shared/test/web/vitest.js'
@@ -12,7 +11,7 @@
  *     }),
  *   })
  *
- * A suite with no DOM (Fantasy Dossier's) passes `environment: 'node'`.
+ * A suite with no DOM passes `environment: 'node'`.
  * The floor starts a little under what the suite reaches today; raise it as tests
  * land, never lower it.
  *
@@ -30,9 +29,8 @@ export function vitestDefaults({
     include,
     setupFiles,
     // 15 s, not Vitest's 5: `task check` runs the tests beside lint and the scans, and a
-    // file's first test imports the app cold, which under that load has taken longer than 5 s
-    // (TarotGen.io's router and AdminListPage specs, 2026-11-07 and -09). A test that hangs
-    // still fails, later.
+    // file's first test imports the app cold, which under that load can take longer than
+    // 5 s. A test that hangs still fails, later.
     testTimeout: 15_000,
     restoreMocks: true,
     unstubGlobals: true,

@@ -1,5 +1,4 @@
-# The Dependabot shape every repo follows, from Kindred Nights' and TarotGen.io's:
-# weekly on Monday, one pull request per ecosystem for minors and patches together, and
+# The Dependabot shape every repo follows: weekly on Monday, one pull request per ecosystem for minors and patches together, and
 # majors one by one (they can need code changes). Copy the blocks a repo needs into its
 # .github/dependabot.yml and set each `directory`; this file isn't synced, since every
 # repo's folders differ.
@@ -13,7 +12,7 @@ registries:
   # The project's .npmrc names this registry for its scopes; Dependabot adds the token.
   # Give it no `scope:`: with one, Dependabot writes its own .npmrc in place of the
   # committed one, which loses install-links=true, so the lockfile records lint/web and
-  # test/a11y as links and npm ci fails (TarotGen.io, 2026-11-07).
+  # test/a11y as links and npm ci fails.
   fontawesome:
     type: npm-registry
     url: https://npm.fontawesome.com

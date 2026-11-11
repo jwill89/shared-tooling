@@ -10,7 +10,7 @@
 | `@jwill89/lint-web` named `vueConventions` | The Vue style-guide rules six front ends already state: `<script setup lang="ts">` only, typed refs, macros in order, buttons with a type, no inline styles, no unregistered components. |
 | `@jwill89/lint-web` named `tsStylistic` | typescript-eslint's `stylisticTypeChecked` rules, with `prefer-nullish-coalescing` leaving strings and booleans to `\|\|`. |
 | `@jwill89/lint-web` named `defineConfigWithVueTs`, `vueTsConfigs` | Re-exported from this package's install, for a project that needs more of them (see "One copy of each plugin"). |
-| `@jwill89/lint-web/react` | ESLint for React + TypeScript (Family Card Game): the same curated rules on `strictTypeChecked`, React's hooks rules, and JSX accessibility from `eslint-plugin-jsx-a11y-x` (rules named `jsx-a11y-x/…`). |
+| `@jwill89/lint-web/react` | ESLint for React + TypeScript: the same curated rules on `strictTypeChecked`, React's hooks rules, and JSX accessibility from `eslint-plugin-jsx-a11y-x` (rules named `jsx-a11y-x/…`). |
 | `@jwill89/lint-web/prettier` | `semi: false`, `singleQuote: true`, `printWidth: 100`, `trailingComma: 'all'`. |
 | `@jwill89/lint-web/stylelint` | `stylelint-config-standard` and `stylelint-config-recommended-vue`, BEM-style kebab-case classes, kebab-case custom properties, grouped tokens. Named export `paletteRules(message)` adds the palette rule. |
 | `@jwill89/lint-web/stylelint/tailwind` | Tailwind 4's at-rules and its `--color-*: initial` custom properties, layered on the above. |
@@ -39,7 +39,7 @@ The project holds shared-tooling as a submodule at `shared/`, so from a front en
    npm install -D ../shared/lint/web eslint prettier typescript stylelint
    ```
 
-   Once step 4 has removed the project's own copies of the plugins, run `npm dedupe`. A lockfile from before can keep an older copy nested under another package (Kindred Nights kept `eslint-plugin-vue` 10.11.1 under `@vue/eslint-config-typescript`), and ESLint warns that it is replacing one copy with the other.
+   Once step 4 has removed the project's own copies of the plugins, run `npm dedupe`. A lockfile from before can keep an older copy nested under another package (an older `eslint-plugin-vue` under `@vue/eslint-config-typescript`, say), and ESLint warns that it is replacing one copy with the other.
 
 3. Point the configs at it:
 
@@ -56,7 +56,7 @@ The project holds shared-tooling as a submodule at `shared/`, so from a front en
    ]
    ```
 
-   `tsStylistic` sits outside the base's Vue wrapper, which skips a template-only component (a `.vue` file with no `<script lang="ts">`) for the type-aware rules. Its own type-aware rules then fail to load on such a file. A project with one turns the set off for it (Fantasy Dossier's `SvgDefs.vue`):
+   `tsStylistic` sits outside the base's Vue wrapper, which skips a template-only component (a `.vue` file with no `<script lang="ts">`) for the type-aware rules. Its own type-aware rules then fail to load on such a file. A project with one turns the set off for it:
 
    ```ts
    {
@@ -124,10 +124,10 @@ From v2.0.0 the Stylelint configs are on Stylelint 18 (`stylelint-config-standar
 
 ## JSX accessibility
 
-The React variant uses `eslint-plugin-jsx-a11y-x`, the eslint-community fork of `eslint-plugin-jsx-a11y` (decided 2026-11-05). The original was last released in October 2024 and supports ESLint up to 9. The fork has all of the original's rules but three it had deprecated (`accessible-emoji`, `label-has-for`, `no-onchange`), under the `jsx-a11y-x/` prefix, with settings under a `jsx-a11y-x` key. It is still pre-1.0, so read its release notes when its version moves.
+The React variant uses `eslint-plugin-jsx-a11y-x`, the eslint-community fork of `eslint-plugin-jsx-a11y`. The original was last released in October 2024 and supports ESLint up to 9. The fork has all of the original's rules but three it had deprecated (`accessible-emoji`, `label-has-for`, `no-onchange`), under the `jsx-a11y-x/` prefix, with settings under a `jsx-a11y-x` key. It is still pre-1.0, so read its release notes when its version moves.
 
 Its recommended set doesn't report a bare `<input>` with no label (the original's didn't either); the Vue plugin's `form-control-has-label` does.
 
 ## Not here yet
 
-- **Knip.** Only the Gallery and TarotGen.io run it, and their configs are all project entries; nothing to share yet.
+- **Knip.** A project's Knip config is all its own entry points, so there is nothing to share yet.

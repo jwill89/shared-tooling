@@ -1,6 +1,6 @@
 # shared-tooling
 
-The lint, test, CI and deploy pieces every jwill89 project shares, held by each project as a git submodule at `shared/`. `PLAN.md` says why it exists and what is decided; this file says what is here and how a project uses it.
+The lint, test, CI and deploy pieces a set of projects share, held by each project as a git submodule at `shared/`, and the standards they follow. This file says what is here and how a project uses it.
 
 Folders are named `<purpose>/<target>`. A project uses only the folders for the stacks it has; the rest sit unused.
 
@@ -9,7 +9,7 @@ Folders are named `<purpose>/<target>`. A project uses only the folders for the 
 | [`lint/web`](lint/web/README.md) | `@jwill89/lint-web`: ESLint (Vue, with template accessibility, and a React variant), Prettier, Stylelint, base tsconfigs. Replaces the `eslint-config` submodule. | Every front end |
 | [`lint/go`](lint/go/README.md) | The golangci-lint template and `golangci-sync`, which writes each module's `.golangci.yml` from it | Every Go module |
 | `lint/php` | `phpstan.neon` (level 8), `php-cs-fixer-rules.php` (PER-CS 3.0), `rector-set.php` (dead code) | The PHP projects |
-| `lint/dotnet` | `analyzers.props` and `.globalconfig`: the .NET analyzers and the C# code style, checked in the build | The Dalamud plugins |
+| `lint/dotnet` | `analyzers.props` and `.globalconfig`: the .NET analyzers and the C# code style, checked in the build | Every C# project |
 | `lint/pwsh` | `PSScriptAnalyzerSettings.psd1`, and `Invoke-ScriptLint.ps1`, which runs it on every tracked script for `task` and CI alike | Every repo with scripts |
 | `lint/markdown` | `markdownlint.jsonc` | Every repo |
 | [`deploy/pwsh`](deploy/pwsh/README.md) | `SharedDeploy`, the PowerShell module the deploy scripts share: every deploy as one archive and two SSH connections | Every deploy script |
@@ -21,7 +21,6 @@ Folders are named `<purpose>/<target>`. A project uses only the folders for the 
 | `repo` | `editorconfig` and `gitattributes`, copied in by `Sync-RepoFiles.ps1`; `Taskfile.yml`, the tasks every repo includes; `Update-SharedTooling.ps1` and `Test-SharedVersion.ps1`, which move a project to a release and check it stayed there; `dependabot.example.yml` | Every repo |
 | `.github/workflows` | Reusable workflows: `web.yml`, `e2e.yml`, `go.yml`, `php.yml`, `dotnet.yml`, `pwsh.yml`, `docs.yml`, `osv.yml` | Every repo's CI |
 | [`standards`](standards/README.md) | The rules every project follows, by area, each marked with how it is checked; `README.md` is the index | Every repo's `CLAUDE.md` imports `@shared/standards/README.md` |
-| `plans` | Plans for changes that span projects, each named in `PLAN.md`'s steps: `sign-in-on-huma.md` | The projects each plan names |
 
 ## Adding it to a project
 
@@ -38,7 +37,7 @@ includes:
 
 tasks:
   deploy:
-    desc: Build and deploy to the droplet (pass flags after --)
+    desc: Build and deploy to the host (pass flags after --)
     cmds:
       - task: shared:deploy
 ```
@@ -132,7 +131,7 @@ It checks out the tag in `shared/`, then hands over to that release's own copy o
 - wherever `@jwill89/lint-web` or `@jwill89/test-a11y` is used, first raises the project's own copy of any of their peers (ESLint, Prettier, Stylelint and TypeScript for `lint/web`, Playwright for `test/a11y`) that falls outside the range the release declares, with `npm install -D <tool>@<range>`;
 - then re-installs the packages.
 
-A release that raises a peer's range, as v2.0.0 raises Stylelint to 18, would otherwise leave the project uninstallable: npm refuses the new package beside the old tool. Raised first, the tool only overrides the old package's peer, with an `ERESOLVE overriding peer dependency` warning, until the next install replaces that package. Only a tool the project lists in its own `devDependencies` is raised, and only when the version its lockfile holds is outside the range; one pinned to an exact version stays pinned (`--save-exact`), and the script names each one it raises. A project's own plugin that still needs the old tool (TarotGen.io's `stylelint-config-recommended-scss`, on Stylelint 17) fails that first install until the project drops or replaces it; the CHANGELOG says so for that release.
+A release that raises a peer's range, as v2.0.0 raises Stylelint to 18, would otherwise leave the project uninstallable: npm refuses the new package beside the old tool. Raised first, the tool only overrides the old package's peer, with an `ERESOLVE overriding peer dependency` warning, until the next install replaces that package. Only a tool the project lists in its own `devDependencies` is raised, and only when the version its lockfile holds is outside the range; one pinned to an exact version stays pinned (`--save-exact`), and the script names each one it raises. A project's own plugin that still needs the old tool (a Stylelint plugin with no release for the new major) fails that first install until the project drops or replaces it.
 
 Review the diff and commit it as one change. `-- v1.2.0 -SkipInstall` leaves npm, the peers included, and the Go configs alone. `task shared:version:check` runs the same check CI does.
 

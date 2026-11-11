@@ -1,8 +1,7 @@
 name: PHP
 
 # The PHP job: install, then the composer commands the caller lists, in order (audit,
-# style, Rector, PHPStan, tests). Seeded from TarotGen.io's, the Gallery's and Fantasy
-# Dossier's PHP jobs.
+# style, Rector, PHPStan, tests).
 #
 #   php:
 #     uses: jwill89/shared-tooling/.github/workflows/php.yml@v1.0.0

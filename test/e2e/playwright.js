@@ -1,7 +1,6 @@
 /**
- * The shared Playwright settings, seeded from TarotGen.io's and Home Library's: tests
- * in e2e/, one worker in order (the steps share one server and one database), a trace
- * kept when a test fails, and the browser already on the machine. Locally on Windows
+ * The shared Playwright settings: tests in e2e/, one worker in order (the steps share
+ * one server and one database), a trace kept when a test fails, and the browser already on the machine. Locally on Windows
  * that is Edge, so nothing is downloaded; CI uses the runner's Chrome.
  *
  *   // playwright.config.ts

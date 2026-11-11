@@ -2,9 +2,8 @@ is_global = true
 
 # C#: the .NET conventions, in the style the plugins are written in, which is Dalamud's
 # own: `this.` on members, `var`, file-scoped namespaces, usings outside them, braces on
-# any body of more than one line, private fields in camelCase. Seeded from Kindred Nights'
-# .editorconfig, which Senpan's plugin already copies. The build reports a departure as a
-# warning (EnforceCodeStyleInBuild, analyzers.props) and CI fails on any change
+# any body of more than one line, private fields in camelCase. The build reports a
+# departure as a warning (EnforceCodeStyleInBuild, analyzers.props) and CI fails on any change
 # `dotnet format` would make.
 #
 # A project's .editorconfig still wins over this file, so a rule a project turns off

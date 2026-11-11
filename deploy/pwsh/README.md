@@ -1,8 +1,6 @@
 # deploy/pwsh: the SharedDeploy module
 
-One PowerShell module for the pieces the 14 deploy scripts in Web Projects copied into each other: settings, the SSH connection, the one archive a deploy ships, the atomic swap of a folder, a code set, a binary or a plugin repository, the service restart and its check, rollback, the dev-database pull, and a smoke check after the deploy. Each function's help (`Get-Help <name> -Full`) names the scripts it came from.
-
-It was seeded from what the scripts already do, not written fresh. The owner settled where they disagreed on November 5, 2026; those decisions are what the functions do now, and their help says so where it matters.
+One PowerShell module for the pieces every deploy script needs: settings, the SSH connection, the one archive a deploy ships, the atomic swap of a folder, a code set, a binary or a plugin repository, the service restart and its check, rollback, the dev-database pull, and a smoke check after the deploy. Each function's help (`Get-Help <name> -Full`) gives the detail.
 
 The module holds no host names, users, keys, tokens or addresses. Those stay in each project's git-ignored `scripts/deploy.config.ps1`, read through `Resolve-DeploySetting`.
 
@@ -15,10 +13,10 @@ Everything a deploy needs goes into ONE archive: the binary, systemd units, env 
 3. `Invoke-Upload` streams it to the host.
 4. One remote run unpacks it to a staging folder, checks the SHA-256 and file count, and only then runs the steps: `Install-ServiceBinary`, `Switch-RemoteDirectory`, `Switch-RemoteItemSet` or `Publish-PluginRepository` on their own, or several of them as `-AsStep` blocks of one `Invoke-DeployBundle`.
 5. `Invoke-SmokeCheck` fetches the site and, if it fails, runs the rollback.
-6. For a project with a database: `Install-BackupTimer` keeps its daily backup installed and checked, and `Copy-LiveDatabase` pulls a copy to the dev machine, the one copy that leaves the droplet.
+6. For a project with a database: `Install-BackupTimer` keeps its daily backup installed and checked, and `Copy-LiveDatabase` pulls a copy to the dev machine, the one copy that leaves the host.
 7. `Close-DeployConnection` in a `finally` block.
 
-The droplet runs `ufw limit ssh`, which refuses an address after six connections in 30 seconds. This shape opens one: every command, upload and download rides the held connection, so a deploy with several targets (Senpan's backend, frontend and plugin) is one connection and one remote run, with no pauses between targets.
+A host that runs `ufw limit ssh` refuses an address after six connections in 30 seconds. This shape opens one: every command, upload and download rides the held connection, so a deploy with several targets (a backend, its frontend and a plugin) is one connection and one remote run, with no pauses between targets.
 
 Single-file uploads (`Send-File`, `Send-FileVerified`) stay for the rare case that cannot ship one archive.
 
@@ -27,17 +25,21 @@ Single-file uploads (`Send-File`, `Send-FileVerified`) stay for the rare case th
 - PowerShell 7.4 or later (`CompatiblePSEditions = 'Core'`), on Windows.
 - PuTTY's `plink` 0.85 or later (connection sharing), on PATH or in `C:\Program Files\PuTTY`, with the key loaded in Pageant if it has a passphrase. pscp is not used.
 - Windows' own `tar.exe` for `Compress-DeployArchive`.
-- On the host: bash, systemd, GNU coreutils (`sha256sum`, `sort -V`, `stat`), `sqlite3` and `gzip` for database snapshots and backups, `runuser` (util-linux) for an `-Owner` on `Backup-RemoteDatabase` or `Copy-LiveDatabase`, `curl` for `-HealthUrl`, and `apachectl` for a vhost.
+- On the host: bash as the SSH user's shell, systemd, GNU coreutils (`sha256sum`, `cat`, `sort -V`, `stat`), `sqlite3` and `gzip` for database snapshots and backups, `runuser` (util-linux) for an `-Owner` on `Backup-RemoteDatabase` or `Copy-LiveDatabase`, `curl` for `-HealthUrl`, and `apachectl` for a vhost.
 
 ## The one connection
 
-`Open-DeployConnection` starts a hidden `plink -batch -share -N` that logs in and holds the connection, and waits until `plink -share -shareexists` reports it is up. Every remote call then runs as `plink -batch -share`, which rides that connection and opens none of its own. Uploads and downloads stream through plink too: the archive is the standard input of `cat > <file>` on the host, and a download is the standard output of `cat <file>`, checked against the host's `sha256sum`.
+`Open-DeployConnection` starts a hidden `plink -batch -share -N` that logs in and holds the connection, and waits until `plink -share -shareexists` reports it is up. Every remote call then runs as `plink -batch -share`, which rides that connection and opens none of its own.
+
+A remote script goes to the host on plink's standard input, never as plink's command: the shared connection ends a command over about 16 KB (`FATAL ERROR: Error 109: The pipe has been ended`) before the host runs any of it, while the connection itself stays up. plink's command is a short, fixed one that reads the script, checks its SHA-256, prints a line saying it started, and runs it as sshd would have (`$SHELL -c`), with an empty standard input and its errors merged into its output in order. So a script runs whole or not at all, up to the 128 KB Linux takes in one argument; a longer one is refused before anything is sent. A step that never started (plink could not connect, or the script arrived incomplete) fails saying none of it ran, rather than as a failure on the host, and is not retried unless the connection dropped.
+
+Uploads and downloads stream through plink too: the archive is the standard input of `cat > <file>` on the host, and a download is the standard output of `cat <file>`, checked against the host's `sha256sum`.
 
 Before each remote step the holder is checked; if it has exited, a new one starts (one new connection) and a line says it reconnected. A step that failed because the connection dropped is retried once after reconnecting. A reconnect is tried at once, and only if it is refused (the ufw window) does it wait 35 seconds and try once more. Marker files in the SSH user's `~/.shared-deploy` let a retried remote run resume: steps that already finished are skipped, and a run that already completed says so and succeeds.
 
 Nothing leaves a plink holding the connection: `Close-DeployConnection` stops it, `Fail` closes it before it exits, PowerShell's exit stops it, and the holder runs in a Windows job object that ends it with the PowerShell process, even one that was killed.
 
-Connection sharing works against the droplet: Kindred Nights' v0.29.4 deploy (2026-11-05, the pilot) ran on one held connection, from the upload through the smoke check and the dev-database pull. The reconnect paths are still tested only against a stand-in plink.
+Connection sharing has run real deploys on one held connection, from the upload through the smoke check and the dev-database pull. The remote-script path above and the reconnect after the holder has exited are tested against a local OpenSSH server; a connection that drops in the middle of a step is still tested only against a stand-in plink.
 
 ## Importing it
 
@@ -105,7 +107,7 @@ The remote run:
 Service binaries:
 
 - `Install-ServiceBinary`: for one service or a set: checks first (the binary and units are in the upload, the health URL can be built, a changed vhost passes `apachectl configtest`), then stops them, keeps `<binary>.old`, snapshots the database with `sqlite3 .backup`, checked and compressed with gzip before anything is installed (newest three kept), installs the units that differ (compared with `cmp`) and the binary, restarts, checks (every service active, or `-HealthUrl` answers, with parts read from the env file), and rolls everything back together on failure.
-- `Restore-ServiceBinary`: puts the previous binary, units, vhost and optionally the newest database snapshot back after a failed smoke check, compressed or, from before 2026-11-06, not.
+- `Restore-ServiceBinary`: puts the previous binary, units, vhost and optionally the newest database snapshot back after a failed smoke check.
 
 Folder swaps:
 
@@ -125,7 +127,7 @@ Plugins:
 
 Scheduled backup:
 
-- `Install-BackupTimer`: a daily systemd timer and its oneshot service, with Kindred Nights' hardening. It renders the units and the shared job, installs them only where they differ from the live copies (`cmp`), runs the service once to check them, and puts the previous copies back if that run fails. The shared job writes a `VACUUM INTO` copy of the live database, checks it with `PRAGMA integrity_check`, compresses it with gzip and checks that (`gzip -t`), names it `<prefix>YYYY-MM-DD<suffix>.gz` (UTC) and keeps 28 days, leaving every other file in its folder alone. `-Command` runs a project's own job instead (Kindred Nights' `kindred backup`). Call it after the smoke check.
+- `Install-BackupTimer`: a daily systemd timer and its oneshot service, with the standard hardening. It renders the units and the shared job, installs them only where they differ from the live copies (`cmp`), runs the service once to check them, and puts the previous copies back if that run fails. The shared job writes a `VACUUM INTO` copy of the live database, checks it with `PRAGMA integrity_check`, compresses it with gzip and checks that (`gzip -t`), names it `<prefix>YYYY-MM-DD<suffix>.gz` (UTC) and keeps 28 days, leaving every other file in its folder alone. `-Command` runs a project's own job instead (`myapp backup`, say). Call it after the smoke check.
 
 Development database:
 
@@ -135,65 +137,34 @@ Smoke check:
 
 - `Invoke-SmokeCheck`: fetches each URL from this machine, checks its status (200 unless given) and optional text, tries each up to `-Attempts` times; on a failure runs `-Rollback` and throws. It needs `-Rollback`, or `-NoRollback` for a deploy with nothing to undo.
 
-## Backups on the droplet
+## Backups on the host
 
-Every backup the module keeps on the droplet is compressed with gzip (decided 2026-11-06). Each is written to a `.partial` file, checked with `PRAGMA integrity_check`, compressed to another `.partial`, checked with `gzip -t`, and only then renamed into place, with no uncompressed copy left behind.
+Every backup the module keeps on the host is compressed with gzip. Each is written to a `.partial` file, checked with `PRAGMA integrity_check`, compressed to another `.partial`, checked with `gzip -t`, and only then renamed into place, with no uncompressed copy left behind.
 
-| What | Name before 2026-11-06 | Name now | Kept |
-| --- | --- | --- | --- |
-| `Install-ServiceBinary -Database`'s snapshot, taken after the stop | `<SnapshotPrefix><yyyyMMdd-HHmmss><SnapshotSuffix>` | the same, then `.gz` (UTC) | the newest three, across both forms |
-| `Backup-RemoteDatabase`'s snapshot, taken where the step puts it (before the migrations) | a site's own copies of that form, such as `.backups/example-<yyyyMMdd-HHmmss>.db` | the same, then `.gz` (UTC) | the newest `-Keep` (three), across both forms |
-| `Install-BackupTimer`'s shared job, daily | `<Prefix>YYYY-MM-DD<Suffix>` | the same, then `.gz` | 28 days, both forms pruned by date |
+| What | Name | Kept |
+| --- | --- | --- |
+| `Install-ServiceBinary -Database`'s snapshot, taken after the stop | `<SnapshotPrefix><yyyyMMdd-HHmmss><SnapshotSuffix>.gz` (UTC) | the newest three |
+| `Backup-RemoteDatabase`'s snapshot, taken where the step puts it (before the migrations) | `<SnapshotPrefix><yyyyMMdd-HHmmss><SnapshotSuffix>.gz` (UTC), such as `.backups/example-<yyyyMMdd-HHmmss>.db.gz` | the newest `-Keep` (three) |
+| `Install-BackupTimer`'s shared job, daily | `<Prefix>YYYY-MM-DD<Suffix>.gz` | 28 days |
 
-The prefix defaults are `<Database>.pre-` and `<Name>-`; `Backup-RemoteDatabase` takes a relative `-SnapshotPrefix` from the database's folder. Only names of exactly these forms are pruned, compressed or restored; nothing else in the folders is touched, apart from a run's own `.partial` files. So a site that kept uncompressed snapshots under such names before, like the Gallery's `gallery-<yyyyMMdd-HHmmss>.db` in `.backups/`, passes that prefix and suffix, and its old copies count among the kept and age out.
+The prefix defaults are `<Database>.pre-` and `<Name>-`; `Backup-RemoteDatabase` takes a relative `-SnapshotPrefix` from the database's folder. Only names of exactly these forms are pruned, compressed or restored; nothing else in the folders is touched, apart from a run's own `.partial` files.
 
-Older copies need nothing done by hand. The daily job's first run after the change, which the next deploy triggers since the job changed, compresses every uncompressed dated copy and keeps its time. Old snapshots stay as they are: a restore takes the newest snapshot of either form, and they age out over the next three deploys.
+An uncompressed copy under one of these names, without the `.gz`, counts among the kept, so a site whose own snapshots already took that form passes the same prefix and suffix and its old copies age out. The daily job compresses each uncompressed dated copy it finds, keeping its time, and a restore takes the newest snapshot of either form.
 
 To put one back by hand, stop the service, remove the database's `-wal` and `-shm`, and decompress into the database file in place, which keeps its owner and mode:
 
 ```sh
 systemctl stop example
 rm -f /opt/example/data/example.sqlite-wal /opt/example/data/example.sqlite-shm
-gunzip -c /opt/example/data/backups/example-2026-11-06.sqlite.gz > /opt/example/data/example.sqlite
+gunzip -c /opt/example/data/backups/example-2026-01-31.sqlite.gz > /opt/example/data/example.sqlite
 systemctl start example
 ```
 
 `Install-ServiceBinary` prints these commands, with its snapshot's paths, after a rollback in a project that has not opted into `-RestoreDatabaseOnRollback`, `Backup-RemoteDatabase` sets them as `$snapshot_restore` (with `systemctl stop` and `start` of its `-Service`) for the step's own message, and the shared job's script on the host carries them, with its paths, in its header. A project's own backup command (`-Command`) keeps its own copies, so compressing them is up to that command.
 
-## Before and after
+## A deploy script on the module
 
-Fantasy Dossier's script is 238 lines, and about half is the code every script copies. A sample of it:
-
-```powershell
-function Write-Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
-function Write-Ok($msg) { Write-Host "    $msg" -ForegroundColor Green }
-function Fail($msg) { Write-Host "`nERROR: $msg" -ForegroundColor Red; exit 1 }
-trap { Write-Host "`nERROR: $($_.Exception.Message)" -ForegroundColor Red; exit 1 }
-
-$localConfig = Join-Path $PSScriptRoot 'deploy.config.ps1'
-if (Test-Path $localConfig) { . $localConfig }
-if (-not $VpsHost) { $VpsHost = if ($env:DEPLOY_VPS_HOST) { $env:DEPLOY_VPS_HOST } else { $DeployVpsHost } }
-# ...three more settings, three more checks...
-
-function Resolve-PuttyTool($name) {
-    $cmd = Get-Command $name -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
-    # ...
-}
-
-function Invoke-RemoteWithRetry([string]$cmd) {
-    $out = & $plink -batch -i $KeyPath $remoteTarget $cmd 2>&1
-    # ...retry once after 35s if the connection was refused...
-}
-
-function Invoke-Upload([string]$WorkingDir, [string]$LocalItem, [string]$RemoteDest, [string]$Label, [int]$FileCount) {
-    # ...27 lines: Start-Process pscp -r, progress bar, time limit...
-}
-
-# ...build, stage, prepare a folder, upload the files with their own retry, then an 18-line shell swap...
-```
-
-Three SSH connections, and an upload of every file one by one. The same deploy on the module, with the smoke step the plan adds (the site's address goes in `deploy.config.ps1` as `$DeploySiteUrl`):
+A front end swapped whole, with its `.htaccess`, then a smoke check that rolls back on failure (the site's address goes in `deploy.config.ps1` as `$DeploySiteUrl`):
 
 ```powershell
 [CmdletBinding()]
@@ -237,11 +208,11 @@ Write-Ok "$($archive.FileCount) files, one archive"
 $connection = $settings | Open-DeployConnection
 try {
     Write-Step 'Uploading...'
-    $upload = Invoke-Upload -Path $archive.Path -Destination 'xivdossier-deploy.tgz' -Activity 'Uploading dossier' -FileCount $archive.FileCount
+    $upload = Invoke-Upload -Path $archive.Path -Destination 'example-deploy.tgz' -Activity 'Uploading example' -FileCount $archive.FileCount
     if (-not $upload.Ok) { Fail "Upload failed. Live site untouched.`n$($upload.Err)" }
 
     Write-Step 'Checking the upload and swapping it in...'
-    Switch-RemoteDirectory -Archive 'xivdossier-deploy.tgz' -Sha256 $archive.Sha256 -ExpectedFileCount $archive.FileCount `
+    Switch-RemoteDirectory -Archive 'example-deploy.tgz' -Sha256 $archive.Sha256 -ExpectedFileCount $archive.FileCount `
         -Live $live -File @{ '.htaccess' = "$webRoot/.htaccess" } -NoBackup:$NoBackup
 
     Write-Step "Checking $($settings.SiteUrl)..."
@@ -261,7 +232,7 @@ One connection, one upload, one remote run, plus one more remote call only if th
 
 Each of these sits inside the same `Open-DeployConnection` / `try` / `finally { Close-DeployConnection }` and follows a `Compress-DeployArchive` and `Invoke-Upload` like the one above. The names and paths are examples, not any project's.
 
-A service binary and its unit (Marxbot, Nophica, Family Card Game). Everything uploads first; nothing stops until the archive on the host has been checked:
+A service binary and its unit, such as a bot's. Everything uploads first; nothing stops until the archive on the host has been checked:
 
 ```powershell
 $archive = Compress-DeployArchive -Content ([ordered]@{
@@ -273,7 +244,7 @@ Install-ServiceBinary -Archive 'example-deploy.tgz' -Sha256 $archive.Sha256 -Exp
     -ServiceName $settings.ServiceName -Binary "$($settings.RemoteOptDir)/example" -Unit 'example.service' -UnitMode '600'
 ```
 
-Several targets in one archive and one remote run (Senpan's backend, frontend and plugin; TarotGen.io's frontend, backend and plugin), API first:
+Several targets in one archive and one remote run (a backend, its frontend and a plugin), API first:
 
 ```powershell
 Invoke-DeployBundle -Archive 'example-deploy.tgz' -Sha256 $archive.Sha256 -ExpectedFileCount $archive.FileCount -Step @(
@@ -283,7 +254,7 @@ Invoke-DeployBundle -Archive 'example-deploy.tgz' -Sha256 $archive.Sha256 -Expec
 )
 ```
 
-A Grav plugin or theme folder swapped whole, then the cache cleared (What Do I Know):
+A Grav plugin or theme folder swapped whole, then the cache cleared:
 
 ```powershell
 $archive = Compress-DeployArchive -Content @{ 'unlisted' = Join-Path $repoRoot 'user\plugins\unlisted' }
@@ -293,14 +264,14 @@ Switch-RemoteDirectory -Archive 'grav-deploy.tgz' -Sha256 $archive.Sha256 -Expec
     -AfterSwap "sudo -u www-data php '$webRoot/bin/grav' clearcache --all >/dev/null"
 ```
 
-A PHP site in a folder of its own, its PHP checked on the host's PHP before the swap (IDE Résumé Site, whose files move into their own folder, with Apache's DocumentRoot pointed at it, at its rollout):
+A PHP site in a folder of its own, with Apache's DocumentRoot pointed at it, its PHP checked on the host's PHP before the swap:
 
 ```powershell
 Switch-RemoteDirectory -Archive 'site-deploy.tgz' -Sha256 $archive.Sha256 -ExpectedFileCount $archive.FileCount `
     -Live "$webRoot/site" -BeforeSwap 'for f in $(find "$new" -name "*.php" -type f); do php -l "$f" >/dev/null || exit 4; done'
 ```
 
-A Dalamud plugin repository (Venue Tools; Senpan, Kindred Nights and TarotGen.io the same way):
+A Dalamud plugin repository:
 
 ```powershell
 Invoke-PluginBuild -Project (Join-Path $repoRoot 'Example.csproj')
@@ -319,7 +290,7 @@ Publish-PluginRepository -Archive 'plugin-deploy.tgz' -Sha256 $archive.Sha256 -E
 
 Swapping the whole folder replaces everything in it, so check before the first run that the live folder holds only this plugin's files.
 
-A set of services with their units, a vhost and a health URL read from the env file (Home Library):
+A set of services with their units, a vhost and a health URL read from the env file:
 
 ```powershell
 Install-ServiceBinary -Archive 'example-deploy.tgz' -Sha256 $archive.Sha256 -ExpectedFileCount $archive.FileCount `
@@ -330,7 +301,7 @@ Install-ServiceBinary -Archive 'example-deploy.tgz' -Sha256 $archive.Sha256 -Exp
     -Database '/opt/example/data/example.sqlite' -SnapshotPrefix '/opt/example/backups/example-pre-' -SnapshotSuffix '.sqlite' -RestoreDatabaseOnRollback
 ```
 
-A PHP site's snapshot before its migrations, the path read from the host's `.env` (Simple Image Gallery's shape), five kept in a `.backups` folder beside the database. A failed migration prints the command that puts the snapshot back, and `Switch-RemoteItemSet`'s trap puts the previous code back:
+A PHP site's snapshot before its migrations, the path read from the host's `.env` (a Laravel site), five kept in a `.backups` folder beside the database. A failed migration prints the command that puts the snapshot back, and `Switch-RemoteItemSet`'s trap puts the previous code back:
 
 ```powershell
 $afterSwap = Format-RemoteScript -Value @{
@@ -348,7 +319,7 @@ Switch-RemoteItemSet -Archive 'example-deploy.tgz' -Sha256 $archive.Sha256 -Expe
     -Root '/var/www/example.com' -Item 'app', 'config', 'public' -AfterSwap $afterSwap
 ```
 
-A site whose database belongs to `www-data` (TarotGen.io's shape): the snapshot made as `www-data` under umask 077 before the swap, `<Database>.pre-<time>.gz` with three kept, and the same restore command in the deploy script's own message:
+A site whose database belongs to `www-data`: the snapshot made as `www-data` under umask 077 before the swap, `<Database>.pre-<time>.gz` with three kept, and the same restore command in the deploy script's own message:
 
 ```powershell
 $snapshot = Backup-RemoteDatabase -Database '/var/lib/example/db/example.db' -Owner 'www-data' -Umask '077'

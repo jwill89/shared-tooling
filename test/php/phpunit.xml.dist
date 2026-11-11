@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-    The shared PHPUnit base, from TarotGen.io's: a warning, notice or deprecation fails
+    The shared PHPUnit base: a warning, notice or deprecation fails
     the run, PHPUnit's own included. PHPUnit has no way to extend another config, so copy
     this to the project's phpunit.xml and set its suites and <source>. Pest reads the same
     file.

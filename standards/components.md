@@ -23,7 +23,7 @@ Template accessibility rules are in [accessibility.md](accessibility.md), and th
 
 - Every icon is Vue's Font Awesome component, `<font-awesome-icon>`: `icon="fa-solid fa-house"` in a template, or `:icon` with that string or `['fas', 'house']` when code holds the icon. Never an `<i class="fa-…">` element, a kit script or `dom.watch()`, which need Font Awesome's CSS or CDN in the page. [review]
 - Only what Vue doesn't render, such as `index.html`'s boot screen, an email or a server-rendered error page, draws an icon another way: the icon's SVG inline, never the CDN. [review]
-- An app registers its icons in one file (`src/fontawesome.ts`), imported from the styles its kit holds, and a test fails on an icon the source names that isn't registered. The Gallery's `icons.spec.ts` and Fantasy Dossier's `integrity.spec.ts` are the models. [review]
+- An app registers its icons in one file (`src/fontawesome.ts`), imported from the styles its kit holds, and a test fails on an icon the source names that isn't registered. [review]
 
 The kit covers dialog and confirm, toast, button and icon button, text, number and tag fields, form field, page header and panel, lightbox, select and combobox, switch and segmented control, tooltip, spinner and loading overlay, alert and empty state, and the Turnstile widget. Its second wave adds a data table, drawers, menus, a date picker, pagination and popovers. The kit's own design is in its repo's `PLAN.md`.
 

@@ -4,9 +4,8 @@ declare(strict_types=1);
 
 /**
  * Fails the run when line or method coverage in PHPUnit's clover report falls below
- * the floor. PHPUnit (and Pest) have no threshold of their own. Generalised from
- * TarotGen.io's bin/coverage-check.php: the floor comes from the command line, so
- * each project keeps its own in composer.json.
+ * the floor. PHPUnit (and Pest) have no threshold of their own. The floor comes from the
+ * command line, so each project keeps its own in composer.json.
  *
  *     "test:coverage": [
  *         "@php -d xdebug.mode=coverage vendor/bin/phpunit --coverage-clover .phpunit.cache/clover.xml",

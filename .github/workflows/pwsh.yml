@@ -2,8 +2,8 @@ name: PowerShell
 
 # Every tracked PowerShell file, with PSScriptAnalyzer as shared/lint/pwsh sets it,
 # pinned so local runs and CI agree. It runs shared/lint/pwsh/Invoke-ScriptLint.ps1,
-# the same script `task shared:lint:scripts` runs locally. Seeded from Senpan's scripts
-# job, which already linted every tracked script rather than a list.
+# the same script `task shared:lint:scripts` runs locally. It lints every tracked
+# script rather than a list, so a new script is never left out.
 #
 #   scripts:
 #     uses: jwill89/shared-tooling/.github/workflows/pwsh.yml@v1.0.0

@@ -2,8 +2,7 @@ name: Go
 
 # The Go job every repo with a Go module calls: the shared golangci config is current,
 # vet, golangci-lint, govulncheck, the tests under the race detector in shuffled order
-# with a coverage floor, and an optional build. Seeded from Kindred Nights', Home
-# Library's and Senpan's Go steps.
+# with a coverage floor, and an optional build.
 #
 #   go:
 #     needs: web   # when the binary embeds the front end's build
@@ -13,7 +12,7 @@ name: Go
 #       download-path: web/dist
 #       coverage-floor: 62.5
 #       coverage-exclude: /internal/db/
-#       build: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o dist/kindred-linux-amd64 ./cmd/kindred
+#       build: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o dist/myapp-linux-amd64 ./cmd/myapp
 
 on:
   workflow_call:
@@ -27,8 +26,8 @@ on:
         type: string
         default: v2.15.0
       # Keep it recent: an old release analyses code with an old golang.org/x/tools, which
-      # crashes on newer Go (v1.1.4's x/tools v0.29.0 panicked on Kindred Nights under Go
-      # 1.27). shared-tooling's own CI runs this same version on lint/go.
+      # crashes on newer Go (v1.1.4's x/tools v0.29.0 panics under Go 1.27).
+      # shared-tooling's own CI runs this same version on lint/go.
       govulncheck-version:
         description: The govulncheck release.
         type: string

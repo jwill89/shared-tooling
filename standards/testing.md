@@ -25,7 +25,7 @@ What every project tests, how it tests it, and where each stack keeps and runs i
 - A floor only rises: when a change drops coverage under it, add tests, never lower the floor. [review]
 - Sign-in and passkeys, permissions, migrations, imports, and deploy and rollback hold a higher bar than the floor, since mistakes there cost most. [review]
 - Generated code (sqlc, OpenAPI types) and startup wiring stay out of the coverage count. [review]
-- Tests run through real HTTP handlers on a real SQLite database built from the committed schema or the real migrations, in memory or in a scratch file, not through mocks; TarotGen.io's HTTP tests are the model. [review]
+- Tests run through real HTTP handlers on a real SQLite database built from the committed schema or the real migrations, in memory or in a scratch file, not through mocks. [review]
 - Status codes, error bodies, auth and anything that crosses layers are tested over HTTP. [review]
 - Tests exercise the real code, never a copy of it written inside the spec. [review]
 - Failure paths use real errors: a real SQLite UNIQUE violation, not a hand-built one. [review]
@@ -90,7 +90,7 @@ What every project tests, how it tests it, and where each stack keeps and runs i
 ## C# (Dalamud plugins)
 
 - Everything that doesn't touch the game lives in `Core/`, compiled into a test project with no Dalamud. [CI]
-- The plugin's windows are drawn to pictures without the game and looked at before handover, and CI builds that preview; Kindred Nights' plugin is the model. [CI]
+- The plugin's windows are drawn to pictures without the game, by a preview project that renders each one with stand-in data, and looked at before handover; CI builds that preview. [CI]
 - CI builds the Windows-targeted plugin on Linux, through `dotnet.yml`. [CI]
 
 ## After a deploy

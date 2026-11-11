@@ -1,9 +1,8 @@
 <Project>
   <!--
     The .NET analyzers at their recommended level, and the code style in .globalconfig
-    checked in the build, for every C# project. Seeded from Kindred Nights'
-    plugins/Directory.Build.props, with Senpan's note on the documentation file. Import it
-    from the project's own Directory.Build.props:
+    checked in the build, for every C# project. Import it from the project's own
+    Directory.Build.props:
 
       <Import Project="$(MSBuildThisFileDirectory)..\shared\lint\dotnet\analyzers.props" />
 
