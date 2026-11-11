@@ -81,7 +81,7 @@ Which packages each stack uses and avoids, and how dependencies are added, pinne
 - Tool versions are pinned exactly, and the shared workflows' inputs hold the pins: golangci-lint, govulncheck, markdownlint-cli2 and PSScriptAnalyzer. [CI]
 - golangci-lint is built with the project's own Go toolchain. [CI]
 - A generator run through `npx` names a fixed version. [review]
-- A runtime's version lives in one file that CI reads: Node's in `.nvmrc`, with `engines.node` matching, and Go's in the `toolchain` line of `go.mod`. [CI]
+- A runtime's version lives in one file that CI reads: Node's in `.nvmrc`, with `engines.node` matching, and Go's in the `go` line of `go.mod`, which names the release the module requires and is raised when a Go security release lands; a `toolchain` line equal to it is left out, since `go mod tidy` drops it. [CI]
 - A version held on purpose is held in config (a `~` pin, a Dependabot ignore or a Composer `conflict`), and AGENTS.md records why it is held and what ends the hold. [review]
 - A hold stays until its reason is gone. [review]
 - A major of a tool `lint/web` owns (ESLint and its plugins, Prettier, Stylelint and its configs) moves in shared-tooling first and reaches a project with `task shared:update`. [review]

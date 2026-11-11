@@ -8,6 +8,11 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Changed
+
+- `standards/packages.md`: a Go module's version is the `go` line of `go.mod`, the release it requires, raised when a Go security release lands; no separate `toolchain` line.
+- `lint/go` requires Go 1.27.4, which fixes a crash in Go's HTTP server (GO-2026-6859).
+
 ## [2.7.0] - 2026-11-10
 
 ### Added
