@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-11-10
+
 ### Added
 
 - `standards/docs-and-agents.md`: what a changelog entry says. A CHANGELOG lists changes a user could notice, a sentence or two each; it is project-agnostic like a comment, gives no instructions, leaves out internal work, and released entries are held to the same rules.
