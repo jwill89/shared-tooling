@@ -2,12 +2,7 @@
   "changelists": [
     {
       "name": "Default",
-      "files": [
-        "CHANGELOG.md",
-        "PLAN.md",
-        "standards/components.md",
-        "standards/packages.md"
-      ]
+      "files": []
     }
   ],
   "active": "Default"
