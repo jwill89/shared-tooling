@@ -8,6 +8,18 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Added
+
+- `deploy/pwsh/README.md`: one name for each deploy setting every project reads (`CertName`, `WebRoot`, `AppPort`, `ServiceUser`, `ServerName` and `ServerAlias`, and the rest), and what is deliberately not a setting.
+- `Switch-RemoteDirectory` and `Switch-RemoteItemSet` ship a site's vhost (`-Vhost`, `-ServerName`) as `Install-ServiceBinary` does, and `Restore-RemoteDirectory` and `Restore-RemoteItemSet` put it back (`-ServerName`).
+
+### Changed
+
+- A site's vhost is one file holding both ports, `/etc/apache2/sites-available/<name>.conf`, named after the service or, for a site served from a folder, its `ServerName`. `Install-ServiceBinary -VhostPath` is optional and defaults to that name, and `VhostPath` is not a deploy setting.
+- A deploy that ships a vhost disables every other enabled site serving its names, such as certbot's `-le-ssl` file, in the same configtest and reload, and a rollback enables them again. It refuses, changing nothing, when one of those sites serves another name or the new file drops a port. When nothing else serves the names, Apache is left as it was.
+- `Restore-ServiceBinary` puts back a vhost the last deploy changed without being given `-VhostPath`.
+- `standards/deploy-and-ops.md`: one vhost file per site, shipped by the deploy and never edited by certbot, and what to do if certbot writes a `-le-ssl` file beside it.
+
 ## [2.7.1] - 2026-11-10
 
 ### Changed

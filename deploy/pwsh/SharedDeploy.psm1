@@ -791,6 +791,270 @@ snapshot_put_back() {
 '@
 }
 
+function Get-VhostVariable {
+    <#
+    .SYNOPSIS
+    The shell variables the vhost functions read: the file in the upload, its live path in sites-available, its link in sites-enabled, and the ServerName it must declare (for a site served from a folder).
+    #>
+    param([string]$Path, [string]$Vhost, [string]$ServerName)
+    if ($Path -notmatch '^/etc/apache2/sites-available/[A-Za-z0-9._@-]+\.conf$') {
+        throw "The vhost '$Path' must be a .conf file directly in /etc/apache2/sites-available, where the deploy enables it."
+    }
+    if ($Vhost) { Assert-SafeRemoteName -Value $Vhost -What 'Vhost' -AllowSlash }
+    $base = ($Path -split '/')[-1]
+    [ordered]@{
+        vhost        = $Vhost
+        vhost_live   = $Path
+        vhost_link   = "/etc/apache2/sites-enabled/$base"
+        vhost_target = "../sites-available/$base"
+        vhost_server = "$ServerName".ToLowerInvariant()
+    }
+}
+
+function Get-VhostPath {
+    <#
+    .SYNOPSIS
+    The live vhost file for a name: /etc/apache2/sites-available/<name>.conf, the name in lower case.
+    #>
+    param([string]$Name, [string]$What)
+    if ($Name -notmatch '^[A-Za-z0-9]([A-Za-z0-9_.@-]*[A-Za-z0-9])?$') {
+        throw "$What '$Name' must be a host or service name (letters, digits, . _ - @), to name the vhost file after."
+    }
+    "/etc/apache2/sites-available/$($Name.ToLowerInvariant()).conf"
+}
+
+function Get-VhostShell {
+    <#
+    .SYNOPSIS
+    Shell functions for a site's one vhost file: putting back what a deploy changed in Apache, and with -Install, installing the file and retiring the sites it replaces.
+    #>
+    param([switch]$Install)
+    $undo = @'
+# vhost_undo: puts back what <vhost_live>.rollback says the deploy changed in Apache: the
+# previous file from its .old copy (or no file, where there was none), and each link in
+# sites-enabled as it was. Apache reloads only if it had already taken the new file.
+vhost_undo() {
+  if [ -f "$vhost_live.rollback" ]; then
+    while read -r kind what was; do
+      case "$kind" in
+        file)
+          if [ "$what" = new ]; then
+            rm -f "$vhost_live" || echo "Could not remove $vhost_live." >&2
+          elif [ -f "$vhost_live.old" ]; then
+            cp -p "$vhost_live.old" "$vhost_live" || echo "Could not put $vhost_live.old back." >&2
+          fi
+          ;;
+        link)
+          if [ "$was" = - ]; then
+            rm -f "$what" || echo "Could not remove $what." >&2
+          else
+            ln -sfn "$was" "$what" || echo "Could not put the link $what back." >&2
+          fi
+          ;;
+      esac
+    done < "$vhost_live.rollback"
+    rm -f "$vhost_live.rollback"
+  fi
+  vhost_changed=
+  if [ -n "${vhost_loaded:-}" ]; then
+    vhost_loaded=
+    if systemctl reload "$reload_svc"; then echo 'Apache is back on the previous vhost.' >&2; else echo "$reload_svc did not reload after the vhost went back." >&2; fi
+  fi
+}
+# vhost_restore: after a failed smoke check, the vhost and the sites the last deploy retired
+# go back as they were, and Apache reloads. A deploy that changed nothing in Apache left
+# no record, and this does nothing.
+vhost_restore() {
+  if [ ! -f "$vhost_live.rollback" ]; then return 0; fi
+  vhost_loaded=1
+  vhost_undo
+}
+'@
+    if (-not $Install) { return $undo }
+    $installShell = @'
+# vhost_names <file>: the names a site file declares in ServerName and ServerAlias lines,
+# one a line, in lower case, without a scheme or port. CRs are dropped: a file saved with
+# Windows line endings would otherwise end each name with one.
+vhost_names() {
+  tr -d '\r' < "$1" | sed -n -E 's/^[[:space:]]*Server(Name|Alias)[[:space:]]+//Ip' | tr -s ' \t' '\n\n' |
+    sed -E -e '/^$/d' -e 's#^[A-Za-z][A-Za-z0-9+.-]*://##' -e 's/:[0-9]+$//' | tr 'A-Z' 'a-z' | sort -u
+}
+# vhost_sites: apachectl -S's dump on standard input, as "<port> <name> <file>" lines, one
+# for each name a virtual host answers to, names in lower case. The dump lists aliases
+# without a file, under the virtual host they belong to.
+vhost_sites() {
+  tr -d '\r' | awk '
+    function fileof(s) {
+      if (!match(s, /\(\/[^()]*:[0-9]+\)$/)) return ""
+      s = substr(s, RSTART + 1, RLENGTH - 2)
+      sub(/:[0-9]+$/, "", s)
+      return s
+    }
+    function put(n) { if (file != "" && n != "") print port, tolower(n), file }
+    { sub(/[ \t]+$/, "") }
+    /^[^ \t]/ {
+      file = ""
+      if ($1 !~ /.:([0-9]+|\*)$/) next
+      port = $1
+      sub(/^.*:/, "", port)
+      if ($2 != "is") { file = fileof($0); put($2) }
+      next
+    }
+    $1 == "default" && $2 == "server" { file = fileof($0); put($3); next }
+    $1 == "port" && $3 == "namevhost" { if ($2 != "*") port = $2; file = fileof($0); put($4); next }
+    $1 == "alias" { put($2); next }
+    $1 == "wild" && $2 == "alias" { put($3); next }
+  '
+}
+# vhost_try <links>: Apache's verdict on a copy of its config, through APACHE_CONFDIR, with
+# the new file enabled and the given sites-enabled links gone; nothing live changes. Prints
+# the ports the new file serves there. A refusal writes Apache's output to
+# $vhost_tmp/verdict and exits 5. Called from an if, so set -e does not hold here, and
+# each step checks itself.
+vhost_try() (
+  t=$(mktemp -d) || exit 5
+  trap 'rm -rf "$t"' EXIT
+  cp -a /etc/apache2 "$t/apache2" 2> "$vhost_tmp/verdict" || exit 5
+  for f in $1; do rm -f "$t/apache2/sites-enabled/${f##*/}" || exit 5; done
+  cp "$bundle/$vhost" "$t/apache2/sites-available/${vhost_live##*/}" 2> "$vhost_tmp/verdict" || exit 5
+  ln -sfn "$vhost_target" "$t/apache2/sites-enabled/${vhost_link##*/}" 2> "$vhost_tmp/verdict" || exit 5
+  if ! APACHE_CONFDIR="$t/apache2" apachectl -t > "$vhost_tmp/verdict" 2>&1; then exit 5; fi
+  if ! APACHE_CONFDIR="$t/apache2" apachectl -S > "$t/dump" 2> "$vhost_tmp/verdict"; then exit 5; fi
+  vhost_sites < "$t/dump" | while read -r p n f; do
+    if [ "$f" = "$t/apache2/sites-enabled/${vhost_link##*/}" ]; then echo "$p"; fi
+  done | sort -u
+)
+vhost_refuse() {
+  rm -rf "$vhost_tmp"
+  echo "$2" >&2
+  exit "$1"
+}
+vhost_fail() {
+  vhost_undo
+  rm -rf "$vhost_tmp"
+  echo 'Installing the vhost failed part way, so what it changed is back and nothing else was changed.' >&2
+  exit 4
+}
+# vhost_install: before anything else changes. Every other enabled site serving one of the
+# new file's names (from apachectl -S) must serve no other name, and the new file must
+# keep every port those names are served on now; Apache is tried with the new file in
+# their place on a copy of its config; then the file goes in
+# (the previous kept as .old), is enabled, those sites are disabled, and Apache's own
+# config must pass configtest. Each change is written to <vhost_live>.rollback before it
+# is made, so a failure here or later in the deploy puts all of it back (vhost_undo), as
+# does a retry of this run after a dropped connection. Sets vhost_changed when it changed
+# anything: a file already in place, enabled and alone on its names leaves Apache as it is.
+vhost_install() {
+  if [ -n "${token:-}" ] && [ -f "$vhost_live.rollback" ] && [ "$(head -n 1 "$vhost_live.rollback")" = "run $token" ]; then
+    echo 'An earlier attempt of this deploy was cut off after changing Apache; putting that back first.'
+    vhost_undo
+  fi
+  if [ ! -f "$bundle/$vhost" ]; then echo "The upload has no $vhost." >&2; exit 3; fi
+  for t in apachectl awk; do
+    if ! command -v "$t" >/dev/null; then echo "$t is not installed on the host, so the vhost cannot be checked; nothing was changed." >&2; exit 3; fi
+  done
+  vhost_tmp=$(mktemp -d)
+  vhost_names "$bundle/$vhost" > "$vhost_tmp/names"
+  if [ -n "$vhost_server" ]; then
+    declared=$(tr -d '\r' < "$bundle/$vhost" | sed -n -E 's/^[[:space:]]*ServerName[[:space:]]+([^[:space:]]+).*/\1/Ip' |
+      sed -E -e 's#^[A-Za-z][A-Za-z0-9+.-]*://##' -e 's/:[0-9]+$//' | tr 'A-Z' 'a-z' | sort -u | tr '\n' ' ')
+    if [ "$declared" != "$vhost_server " ]; then
+      declared=${declared% }
+      vhost_refuse 3 "The vhost's ServerName is ${declared:-missing}, not $vhost_server, which names its file; nothing was changed."
+    fi
+  fi
+  if [ -e "$vhost_link" ] && [ ! -L "$vhost_link" ]; then
+    vhost_refuse 3 "$vhost_link is a file, not a link to $vhost_live; nothing was changed."
+  fi
+  if ! apachectl -S > "$vhost_tmp/dump" 2> "$vhost_tmp/verdict"; then
+    cat "$vhost_tmp/verdict" >&2
+    vhost_refuse 3 'apachectl -S failed, so the sites serving the vhost'\''s names cannot be found; nothing was changed.'
+  fi
+  vhost_sites < "$vhost_tmp/dump" > "$vhost_tmp/sites"
+  # The other sites serving one of the new file's names, each in sites-enabled, serving
+  # no name the new file does not. The ports those names are served on now, by them or by
+  # the file being replaced, go in old_ports, for the new file to keep.
+  sites=
+  : > "$vhost_tmp/old_ports"
+  while read -r p n f; do
+    if ! grep -qxF -- "$n" "$vhost_tmp/names"; then continue; fi
+    echo "$p $f" >> "$vhost_tmp/old_ports"
+    if [ "$f" = "$vhost_link" ]; then continue; fi
+    case " $sites " in *" $f "*) continue ;; esac
+    case "$f" in
+      *[[:space:]]*) vhost_refuse 3 "$f serves $n, and its path holds a space; nothing was changed." ;;
+      /etc/apache2/sites-enabled/*) ;;
+      *) vhost_refuse 3 "$f serves $n but is not a site in /etc/apache2/sites-enabled, so the deploy cannot disable it; nothing was changed." ;;
+    esac
+    if [ ! -L "$f" ]; then vhost_refuse 3 "$f serves $n but is a file, not a link to sites-available, so the deploy cannot disable it; nothing was changed."; fi
+    { vhost_names "$f"; while read -r q m g; do if [ "$g" = "$f" ]; then echo "$m"; fi; done < "$vhost_tmp/sites"; } | sort -u > "$vhost_tmp/served"
+    other=$(grep -vxF -f "$vhost_tmp/names" "$vhost_tmp/served" | tr '\n' ' ')
+    if [ -n "$other" ]; then vhost_refuse 3 "$f also serves ${other% }, which the new vhost does not; nothing was changed."; fi
+    sites="$sites $f"
+  done < "$vhost_tmp/sites"
+  same=
+  if cmp -s "$bundle/$vhost" "$vhost_live"; then same=1; fi
+  enabled=
+  if [ -L "$vhost_link" ] && [ "$(readlink -f "$vhost_link")" = "$(readlink -f "$vhost_live")" ]; then enabled=1; fi
+  if [ -n "$same" ] && [ -n "$enabled" ] && [ -z "$sites" ]; then
+    rm -f "$vhost_live.old" "$vhost_live.rollback"
+    rm -rf "$vhost_tmp"
+    echo "The vhost $vhost_live is unchanged."
+    return 0
+  fi
+  if ! vhost_try "$sites" > "$vhost_tmp/ports"; then
+    cat "$vhost_tmp/verdict" >&2
+    vhost_refuse 5 "Apache would refuse the new vhost${sites:+ in place of$sites}, so nothing was changed."
+  fi
+  sort -u "$vhost_tmp/old_ports" > "$vhost_tmp/old_ports.sorted"
+  while read -r p f; do
+    if ! grep -qxF -- "$p" "$vhost_tmp/ports"; then
+      vhost_refuse 3 "$f serves the vhost's names on port $p, and the new vhost has no site on port $p; nothing was changed."
+    fi
+  done < "$vhost_tmp/old_ports.sorted"
+  printf 'run %s\n' "${token:-}" > "$vhost_live.rollback" || vhost_refuse 4 "Cannot write $vhost_live.rollback; nothing was changed."
+  if [ -z "$same" ]; then
+    if [ -f "$vhost_live" ]; then
+      echo 'file changed' >> "$vhost_live.rollback" || vhost_fail
+      cp -p "$vhost_live" "$vhost_live.old" || vhost_fail
+    else
+      echo 'file new' >> "$vhost_live.rollback" || vhost_fail
+      rm -f "$vhost_live.old" || vhost_fail
+    fi
+    install -m 644 -o root -g root "$bundle/$vhost" "$vhost_live" || vhost_fail
+  else
+    rm -f "$vhost_live.old"
+  fi
+  if [ -z "$enabled" ]; then
+    echo "link $vhost_link $(readlink "$vhost_link" || echo -)" >> "$vhost_live.rollback" || vhost_fail
+    ln -sfn "$vhost_target" "$vhost_link" || vhost_fail
+  fi
+  for f in $sites; do
+    echo "link $f $(readlink "$f")" >> "$vhost_live.rollback" || vhost_fail
+    rm -f "$f" || vhost_fail
+  done
+  if ! verdict=$(apachectl configtest 2>&1); then
+    vhost_undo
+    echo 'Apache refused the new vhost, so the previous one is back and nothing else was changed:' >&2
+    vhost_refuse 5 "$verdict"
+  fi
+  rm -rf "$vhost_tmp"
+  vhost_changed=1
+  if [ -n "$sites" ]; then echo "The vhost $vhost_live is in, in place of$sites; Apache takes it once the deploy succeeds."; else echo "The vhost $vhost_live is in; Apache takes it once the deploy succeeds."; fi
+}
+# vhost_reload: Apache takes the new vhost, once the rest of the deploy has succeeded.
+vhost_reload() {
+  if systemctl reload "$reload_svc"; then
+    vhost_loaded=1
+    echo 'Apache took the new vhost.'
+  else
+    echo "$reload_svc did not reload; the new vhost is in place but not live." >&2
+  fi
+}
+'@
+    $undo + "`n" + $installShell
+}
+
 function Get-DirectorySwapStep {
     <#
     .SYNOPSIS
@@ -805,12 +1069,15 @@ function Get-DirectorySwapStep {
         [string]$AfterSwap,
         [switch]$NoBackup,
         [System.Collections.Specialized.OrderedDictionary]$ExtraVariable,
-        [string]$Check
+        [string]$Check,
+        [string]$Vhost,
+        [string]$ServerName
     )
     $Live = $Live.TrimEnd('/')
     Assert-RemotePath -Value $Live -What 'Live'
     if (-not $Item) { $Item = Split-Path -Path $Live -Leaf }
     Assert-SafeRemoteName -Value $Item -What 'Item' -AllowSlash
+    if ([bool]$Vhost -ne [bool]$ServerName) { throw 'Pass -Vhost and -ServerName together: the vhost file is named after the site''s ServerName.' }
     $user, $group = Split-Owner -Owner $Owner
     $variable = [ordered]@{
         live      = $Live
@@ -821,6 +1088,22 @@ function Get-DirectorySwapStep {
     }
     if ($ExtraVariable) {
         foreach ($name in $ExtraVariable.Keys) { $variable[$name] = $ExtraVariable[$name] }
+    }
+    $vhostShell = ''
+    $vhostInstall = ''
+    $vhostUndo = ''
+    $vhostReload = ''
+    $vhostDrop = ''
+    if ($Vhost) {
+        $vhostVariable = Get-VhostVariable -Path (Get-VhostPath -Name $ServerName -What 'ServerName') -Vhost $Vhost -ServerName $ServerName
+        foreach ($name in $vhostVariable.Keys) { $variable[$name] = $vhostVariable[$name] }
+        $variable['reload_svc'] = 'apache2'
+        $vhostShell = Get-VhostShell -Install
+        # From here to the swap, a failure puts the vhost back; the swap's own undo then does.
+        $vhostInstall = "vhost_changed=`nvhost_install`ntrap vhost_undo EXIT"
+        $vhostUndo = '  if [ -n "$vhost_changed" ]; then vhost_undo; fi'
+        $vhostReload = 'if [ -n "$vhost_changed" ]; then vhost_reload; fi'
+        $vhostDrop = 'if [ -n "$no_backup" ] && [ -n "$vhost_changed" ]; then rm -f "$vhost_live.old" "$vhost_live.rollback"; fi'
     }
     $begin = @'
 old="$live.old"
@@ -870,7 +1153,7 @@ echo "Swapped the new folder into $live."
         $moveFiles.Add(('if [ -f {0} ]; then if [ -f {1} ]; then cp -p {1} {1}.old; else rm -f {1}.old; fi; cp {0} {1}.next; if [ -n "$owner" ]; then chown "$owner:$group" {1}.next; fi; mv -f {1}.next {1}; fi' -f $source, $to))
         $dropOld.Add(('if [ -n "$no_backup" ]; then rm -f {0}.old; fi' -f $to))
     }
-    Join-ShellScript -Variable $variable -Body (@($begin, $Check, $stage, $BeforeSwap, $swap) + @($undoFiles) + @($undoEnd) + @($moveFiles) + @($AfterSwap) + @($end) + @($dropOld))
+    Join-ShellScript -Variable $variable -Body (@($vhostShell, $begin, $Check, $stage, $BeforeSwap, $vhostInstall, $swap) + @($undoFiles) + @($vhostUndo, $undoEnd) + @($moveFiles) + @($AfterSwap, $vhostReload, $end) + @($dropOld) + @($vhostDrop))
 }
 
 #endregion
@@ -2455,9 +2738,9 @@ function Install-ServiceBinary {
     The binary swap for one service or a set of them. The binary, units and vhost travel in
     the deploy's one archive, uploaded before anything stops. In order:
       - checks before anything stops: the binary and units are in the upload; with
-        -Database, sqlite3 and gzip are installed; the health URL can be built; the vhost,
-        where it differs, is installed and must pass apachectl configtest, or it is put
-        back and the deploy stops with nothing else changed;
+        -Database, sqlite3 and gzip are installed; the health URL can be built; the vhost
+        goes in (below) and must pass apachectl configtest, or it and the sites it replaced
+        are put back and the deploy stops with nothing else changed;
       - every listed service stops (a missing one is tolerated), and from here to the start
         a trap brings them back up on what is in place if a step fails;
       - <Binary>.old keeps the current binary; with -Database, the database is snapshotted
@@ -2470,11 +2753,30 @@ function Install-ServiceBinary {
       - the check: every started service active after -SettleSeconds, or, with -HealthUrl,
         the first service answering it within -HealthTimeoutSeconds;
       - on failure, everything goes back together: the journal's last 30 lines of each
-        failed service, the old binary, units (a unit new in this deploy is removed) and
-        vhost, the database snapshot if -RestoreDatabaseOnRollback (or the command to do
-        it), then the services restart and the step fails;
+        failed service, the old binary, units (a unit new in this deploy is removed), the
+        vhost and the sites it replaced, the database snapshot if -RestoreDatabaseOnRollback
+        (or the command to do it), then the services restart and the step fails;
       - on success, Apache reloads if the vhost changed, changed units that are not services
         (timers) get try-restart, and -NoBackup removes the .old copies.
+
+    The vhost is the site's one file, holding its port-80 redirect and its port-443 site:
+    /etc/apache2/sites-available/<first ServiceName>.conf. On every deploy:
+      - every other enabled site serving one of the file's ServerName and ServerAlias names
+        is found from apachectl -S (aliases included), such as certbot's <site>-le-ssl.conf
+        or an old pair of files under other names. Each must be a link in sites-enabled and
+        serve no name the new file does not, and the new file must serve every port those
+        names are served on now, by those sites or by the file it replaces; otherwise the
+        deploy stops, changing nothing. Names are read with any CRs dropped;
+      - Apache is tried with the new file enabled and those sites gone on a copy of its
+        config (APACHE_CONFDIR, apachectl -t), changing nothing live;
+      - the file goes in where it differs (the previous kept as <file>.old), is enabled
+        where it is not, those sites are disabled, and apachectl configtest must pass;
+      - each change is first written to <file>.rollback, from which a failure in this
+        deploy, a retry after a dropped connection, or Restore-ServiceBinary after a failed
+        smoke check puts the file and every site back as they were;
+      - a file already in place, enabled and alone on its names leaves Apache as it is, and
+        removes the .old and .rollback of an earlier deploy.
+    The sites disabled stay in sites-available, so a rollback can enable them again.
 
     The snapshot is <SnapshotPrefix><yyyyMMdd-HHmmss><SnapshotSuffix>.gz, the time in UTC,
     compressed like every backup kept on the host. sqlite3 .backup writes it whole
@@ -2520,11 +2822,13 @@ function Install-ServiceBinary {
     Where the previous units are kept as <name>.old; by default the binary's folder.
 
     .PARAMETER Vhost
-    An Apache vhost inside the upload, installed as -VhostPath when it differs and checked
-    with apachectl configtest before anything stops.
+    The site's vhost file inside the upload, rendered from the project's template, holding
+    both its port-80 and port-443 sites. Installed as
+    /etc/apache2/sites-available/<first ServiceName>.conf and checked before anything stops.
 
     .PARAMETER VhostPath
-    The live vhost file, such as /etc/apache2/sites-available/example.conf.
+    Optional, and only for a deploy written before the vhost was named after the service:
+    the live file, in /etc/apache2/sites-available, in place of <first ServiceName>.conf.
 
     .PARAMETER ReloadService
     What reloads once the new vhost is in: apache2.
@@ -2609,7 +2913,7 @@ function Install-ServiceBinary {
     .EXAMPLE
     Install-ServiceBinary -AsStep -ServiceName 'example', 'example-worker' -Binary '/opt/example/example' `
         -Unit 'units/example.service', 'units/example-worker.service', 'units/example-backup.timer' `
-        -Vhost 'example.conf' -VhostPath '/etc/apache2/sites-available/example.conf' `
+        -Vhost 'apache-vhost.conf' `
         -EnvFile '/etc/example/example.env' -HealthUrl 'http://{EXAMPLE_ADDR}/healthz' -Umask '077' `
         -Database '/opt/example/data/example.sqlite' -SnapshotPrefix '/opt/example/backups/example-pre-' -SnapshotSuffix '.sqlite' -RestoreDatabaseOnRollback
     #>
@@ -2708,10 +3012,11 @@ function Install-ServiceBinary {
     }
     $unitNames = @($Unit | ForEach-Object { ($_ -split '/')[-1] })
     if (@($unitNames | Select-Object -Unique).Count -ne $unitNames.Count) { throw 'Two -Unit files have the same name.' }
-    if ([bool]$Vhost -ne [bool]$VhostPath) { throw 'Pass -Vhost and -VhostPath together.' }
+    if ($VhostPath -and -not $Vhost) { throw '-VhostPath goes with -Vhost.' }
+    $vhostVariable = [ordered]@{}
     if ($Vhost) {
-        Assert-SafeRemoteName -Value $Vhost -What 'Vhost' -AllowSlash
-        Assert-RemotePath -Value $VhostPath -What 'VhostPath'
+        if (-not $VhostPath) { $VhostPath = Get-VhostPath -Name $ServiceName[0] -What 'ServiceName' }
+        $vhostVariable = Get-VhostVariable -Path $VhostPath -Vhost $Vhost
     }
     if ($EnvFile) { Assert-RemotePath -Value $EnvFile -What 'EnvFile' }
     if (-not $UnitBackupDirectory) { $UnitBackupDirectory = ($Binary -replace '/[^/]*$', '') }
@@ -2737,7 +3042,6 @@ function Install-ServiceBinary {
         unit_mode   = $UnitMode
         unit_dir    = $UnitBackupDirectory
         vhost       = $Vhost
-        vhost_live  = $VhostPath
         reload_svc  = $ReloadService
         env_file    = $EnvFile
         health_wait = "$HealthTimeoutSeconds"
@@ -2751,6 +3055,8 @@ function Install-ServiceBinary {
         restore_db  = if ($RestoreDatabaseOnRollback) { '1' } else { '' }
         no_backup   = if ($NoBackup) { '1' } else { '' }
     }
+    foreach ($name in $vhostVariable.Keys) { $variable[$name] = $vhostVariable[$name] }
+    $vhostShell = if ($Vhost) { Get-VhostShell -Install } else { '' }
     $health = ConvertTo-HealthScript -Template $HealthUrl -Default $HealthDefault -EnvFile $EnvFile
 
     $check = @'
@@ -2769,30 +3075,14 @@ rev=
 service_units=
 for s in $services; do rev="$s $rev"; service_units="$service_units $s.service"; done
 vhost_changed=
-if [ -n "$vhost" ]; then
-  if [ ! -f "$bundle/$vhost" ]; then echo "The upload has no $vhost." >&2; exit 3; fi
-  if cmp -s "$bundle/$vhost" "$vhost_live"; then
-    rm -f "$vhost_live.old"
-  else
-    if [ -f "$vhost_live" ]; then cp -p "$vhost_live" "$vhost_live.old"; else rm -f "$vhost_live.old"; fi
-    install -m 644 -o root -g root "$bundle/$vhost" "$vhost_live"
-    if ! verdict=$(apachectl configtest 2>&1); then
-      if [ -f "$vhost_live.old" ]; then mv -f "$vhost_live.old" "$vhost_live"; else rm -f "$vhost_live"; fi
-      echo "Apache refused the new vhost, so the previous one is back and nothing else was changed:" >&2
-      echo "$verdict" >&2
-      exit 5
-    fi
-    vhost_changed=1
-  fi
-fi
+if [ -n "$vhost" ]; then vhost_install; fi
 for s in $rev; do systemctl stop "$s" 2>/dev/null || true; done
 # Whatever fails from here to the start, the services come back up on what is in place,
-# a vhost Apache has not loaded yet goes back, and a snapshot cut short is removed.
+# a vhost Apache has not loaded yet goes back with the sites it replaced, and a snapshot
+# cut short is removed.
 abort_restart() {
   if [ -n "${snapshot_raw:-}" ]; then rm -f "$snapshot_raw" "$snapshot_part"; fi
-  if [ -n "$vhost_changed" ]; then
-    if [ -f "$vhost_live.old" ]; then cp -p "$vhost_live.old" "$vhost_live"; else rm -f "$vhost_live"; fi
-  fi
+  if [ -n "$vhost_changed" ]; then vhost_undo; fi
   for s in $services; do
     if [ "$s" = "$main" ] || systemctl is-enabled --quiet "$s" 2>/dev/null; then systemctl start "$s" >/dev/null 2>&1 || true; fi
   done
@@ -2863,9 +3153,7 @@ if [ -n "$failed" ]; then
     if [ -f "$saved" ]; then cp -p "$saved" "/etc/systemd/system/$name"; else rm -f "/etc/systemd/system/$name"; fi
   done
   if [ -n "$changed_units" ]; then systemctl daemon-reload; fi
-  if [ -n "$vhost_changed" ]; then
-    if [ -f "$vhost_live.old" ]; then cp -p "$vhost_live.old" "$vhost_live"; else rm -f "$vhost_live"; fi
-  fi
+  if [ -n "$vhost_changed" ]; then vhost_undo; fi
   if [ -n "$snap" ] && [ -f "$snap" ]; then
     if [ -n "$restore_db" ]; then
       if snapshot_put_back "$snap" "$db"; then
@@ -2882,9 +3170,7 @@ if [ -n "$failed" ]; then
   if [ -f "$old" ]; then for s in $started; do systemctl restart "$s" || true; done; fi
   exit 1
 fi
-if [ -n "$vhost_changed" ]; then
-  if systemctl reload "$reload_svc"; then echo 'Apache took the new vhost.'; else echo "$reload_svc did not reload; the new vhost is in place but not live." >&2; fi
-fi
+if [ -n "$vhost_changed" ]; then vhost_reload; fi
 for name in $changed_units; do
   case " $service_units " in *" $name "*) ;; *) systemctl try-restart "$name" || true ;; esac
 done
@@ -2893,11 +3179,11 @@ done
 if [ -n "$no_backup" ]; then
   rm -f "$old"
   for name in $changed_units; do rm -f "$unit_dir/$name.old"; done
-  if [ -n "$vhost_changed" ]; then rm -f "$vhost_live.old"; fi
+  if [ -n "$vhost_changed" ]; then rm -f "$vhost_live.old" "$vhost_live.rollback"; fi
 fi
 echo "Active:$started"
 '@
-    $step = Join-ShellScript -Variable $variable -Body @($health, $snapshotShell, $check, $AfterStop, $install, $BeforeStart, $start, $OnRollback, $restart, $AfterSuccess, $finish)
+    $step = Join-ShellScript -Variable $variable -Body @($health, $snapshotShell, $vhostShell, $check, $AfterStop, $install, $BeforeStart, $start, $OnRollback, $restart, $AfterSuccess, $finish)
     if ($AsStep) { return $step }
     Invoke-DeployBundle -Archive $Archive -Sha256 $Sha256 -ExpectedFileCount $ExpectedFileCount -Step $step -AsScript:$AsScript -Connection $Connection -NoRetry:$NoRetry
 }
@@ -2910,10 +3196,11 @@ function Restore-ServiceBinary {
     .DESCRIPTION
     The rollback Install-ServiceBinary does on its own when a service fails to start, as a
     step of its own for when the services start but the site is wrong. It stops the
-    services, puts <Binary>.old back, puts back each listed unit and the vhost that have a
-    .old copy from the last deploy, optionally the newest database snapshot, then starts
-    the services and checks they are active. Needs the .old file, so it does nothing useful
-    after Install-ServiceBinary -NoBackup. One connection.
+    services, puts <Binary>.old back, puts back each listed unit that has a .old copy from
+    the last deploy, the vhost and the sites it replaced if the last deploy changed them
+    (as its <vhost>.rollback says, after which Apache reloads), optionally the newest
+    database snapshot, then starts the services and checks they are active. Needs the .old
+    file, so it does nothing useful after Install-ServiceBinary -NoBackup. One connection.
 
     The newest snapshot is the one written last of those Install-ServiceBinary names
     <SnapshotPrefix><yyyyMMdd-HHmmss><SnapshotSuffix>.gz, or the same names without .gz;
@@ -2941,7 +3228,8 @@ function Restore-ServiceBinary {
     Where the previous units are kept; by default the binary's folder.
 
     .PARAMETER VhostPath
-    The live vhost; its .old copy, if any, goes back and Apache reloads.
+    Optional, as given to Install-ServiceBinary -VhostPath; by default
+    /etc/apache2/sites-available/<first ServiceName>.conf.
 
     .PARAMETER ReloadService
     What reloads after the vhost goes back: apache2.
@@ -3017,7 +3305,8 @@ function Restore-ServiceBinary {
     )
     Assert-RemotePath -Value $Binary -What 'Binary'
     foreach ($path in $Unit) { Assert-SafeRemoteName -Value $path -What 'Unit' -AllowSlash }
-    if ($VhostPath) { Assert-RemotePath -Value $VhostPath -What 'VhostPath' }
+    if (-not $VhostPath) { $VhostPath = Get-VhostPath -Name $ServiceName[0] -What 'ServiceName' }
+    $vhostVariable = Get-VhostVariable -Path $VhostPath
     if (-not $UnitBackupDirectory) { $UnitBackupDirectory = ($Binary -replace '/[^/]*$', '') }
     if (-not $UnitBackupDirectory) { $UnitBackupDirectory = '/' }
     $user, $group = Split-Owner -Owner $Owner
@@ -3031,7 +3320,8 @@ function Restore-ServiceBinary {
         group       = $group
         unit_names  = ($Unit | ForEach-Object { ($_ -split '/')[-1] }) -join ' '
         unit_dir    = $UnitBackupDirectory
-        vhost_live  = $VhostPath
+        vhost_live  = $vhostVariable.vhost_live
+        vhost_link  = $vhostVariable.vhost_link
         reload_svc  = $ReloadService
         db          = $Database
         snap_prefix = $SnapshotPrefix
@@ -3051,10 +3341,7 @@ for name in $unit_names; do
   if [ -f "$saved" ]; then cp -p "$saved" "/etc/systemd/system/$name"; reload=1; fi
 done
 if [ -n "$reload" ]; then systemctl daemon-reload; fi
-if [ -n "$vhost_live" ] && [ -f "$vhost_live.old" ]; then
-  cp -p "$vhost_live.old" "$vhost_live"
-  systemctl reload "$reload_svc" || echo "$reload_svc did not reload after the vhost went back." >&2
-fi
+vhost_restore
 db_failed=
 if [ -n "$db" ]; then
   snap=$(snapshot_list "$snap_prefix" "$snap_suffix" | head -n 1)
@@ -3083,7 +3370,7 @@ if [ -n "$db_failed" ]; then echo "Back on the previous binary:$started, but the
 echo "Back on the previous binary:$started"
 '@
     $snapshotShell = if ($Database) { Get-SnapshotShell } else { '' }
-    $script = Join-ShellScript -Variable $variable -Body @($snapshotShell, $restore, $OnRollback, $start)
+    $script = Join-ShellScript -Variable $variable -Body @($snapshotShell, (Get-VhostShell), $restore, $OnRollback, $start)
     if ($AsScript) { return $script }
     Invoke-RemoteFlow -Connection $Connection -Script $script -NoRetry:$NoRetry -FailureMessage "Rolling $($ServiceName -join ', ') back failed on the host"
 }
@@ -3104,11 +3391,23 @@ function Switch-RemoteDirectory {
       - the new folder moves beside the live one as <Live>.new (so the swap itself is two
         renames on one filesystem) and, with -Owner, is given to that owner;
       - -BeforeSwap runs on it; a failure leaves the live folder untouched;
+      - with -Vhost, the site's vhost goes in as Install-ServiceBinary installs one (below);
+        a refusal leaves the live folder untouched;
       - <Live> becomes <Live>.old and the new folder becomes <Live>; if that last rename
-        fails, the old folder is put back;
+        fails, the old folder and the vhost are put back;
       - each -File moves into place too, its previous copy kept as .old (a site's .htaccess);
-      - -AfterSwap runs; if it fails, the previous folder and files go back.
+      - -AfterSwap runs; if it fails, the previous folder, files and vhost go back;
+      - Apache reloads if the vhost changed.
     A run cut off between the two renames is noticed by the next and the live folder put back first.
+
+    The vhost is the site's one file, holding its port-80 redirect and its port-443 site,
+    installed as /etc/apache2/sites-available/<ServerName>.conf and enabled. Every other
+    enabled site serving one of its names (a certbot -le-ssl file, an old pair under other
+    names) is disabled in the same configtest and reload, and enabled again on a rollback.
+    The deploy refuses, changing nothing, when one of those sites also serves a name the
+    new file does not, when the new file drops a port those names are served on now, or
+    when the file's ServerName is not -ServerName. Install-ServiceBinary's help has the
+    detail.
 
     Hooks run under set -e with these shell variables set: live, new, old, bundle.
 
@@ -3131,9 +3430,17 @@ function Switch-RemoteDirectory {
     .PARAMETER AfterSwap
     Shell run after the swap, such as clearing the site's cache; a failure swaps back.
 
+    .PARAMETER Vhost
+    The site's vhost file inside the upload, rendered from the project's template. Goes
+    with -ServerName.
+
+    .PARAMETER ServerName
+    The site's ServerName, which names the vhost file:
+    /etc/apache2/sites-available/<ServerName>.conf, in lower case. The file must declare it.
+
     .PARAMETER NoBackup
-    Remove <Live>.old and the files' .old copies once the swap is done. Restore-RemoteDirectory
-    then has nothing to go back to.
+    Remove <Live>.old, the files' .old copies and the vhost's rollback copies once the swap
+    is done. Restore-RemoteDirectory then has nothing to go back to.
 
     .PARAMETER Archive
     The uploaded archive, when this runs on its own rather than as one step of Invoke-DeployBundle.
@@ -3159,6 +3466,9 @@ function Switch-RemoteDirectory {
     .EXAMPLE
     Switch-RemoteDirectory -Archive 'example-deploy.tgz' -Sha256 $archive.Sha256 -ExpectedFileCount $archive.FileCount `
         -Live '/var/www/example.com/dist' -File @{ '.htaccess' = '/var/www/example.com/.htaccess' }
+
+    .EXAMPLE
+    Switch-RemoteDirectory -AsStep -Live '/var/www/example.com/site' -Vhost 'apache-vhost.conf' -ServerName 'example.com'
     #>
     [CmdletBinding(DefaultParameterSetName = 'Archive')]
     [OutputType([string])]
@@ -3175,6 +3485,10 @@ function Switch-RemoteDirectory {
         [string]$BeforeSwap,
 
         [string]$AfterSwap,
+
+        [string]$Vhost,
+
+        [string]$ServerName,
 
         [switch]$NoBackup,
 
@@ -3209,6 +3523,8 @@ function Switch-RemoteDirectory {
         BeforeSwap = $BeforeSwap
         AfterSwap  = $AfterSwap
         NoBackup   = $NoBackup
+        Vhost      = $Vhost
+        ServerName = $ServerName
     }
     $step = Get-DirectorySwapStep @swap
     if ($AsStep) { return $step }
@@ -3223,14 +3539,18 @@ function Restore-RemoteDirectory {
     .DESCRIPTION
     Done by renames: the failed folder is moved aside and removed only once the old one is
     back. (A plain mv '<Live>.old' '<Live>' would move the old folder inside the live one
-    while that exists.) Each -File gets its .old copy back too.
-    One connection.
+    while that exists.) Each -File gets its .old copy back too. With -ServerName, the vhost
+    and the sites the deploy disabled go back as they were, if the deploy changed them, and
+    Apache reloads. One connection.
 
     .PARAMETER Live
     The live folder on the host.
 
     .PARAMETER File
     Live files whose .old copies go back, such as an .htaccess swapped with the folder.
+
+    .PARAMETER ServerName
+    The ServerName given to Switch-RemoteDirectory -ServerName, whose vhost goes back.
 
     .PARAMETER AsScript
     Return the shell block instead of running it, to join with others in Invoke-RemoteStep.
@@ -3243,6 +3563,9 @@ function Restore-RemoteDirectory {
 
     .EXAMPLE
     Restore-RemoteDirectory -Live '/var/www/example.com/dist' -File '/var/www/example.com/.htaccess'
+
+    .EXAMPLE
+    Restore-RemoteDirectory -Live '/var/www/example.com/site' -ServerName 'example.com'
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -3251,6 +3574,8 @@ function Restore-RemoteDirectory {
         [string]$Live,
 
         [string[]]$File = @(),
+
+        [string]$ServerName,
 
         [switch]$AsScript,
 
@@ -3262,6 +3587,15 @@ function Restore-RemoteDirectory {
     Assert-RemotePath -Value $Live -What 'Live'
     foreach ($path in $File) { Assert-RemotePath -Value $path -What 'File' }
     $variable = [ordered]@{ live = $Live }
+    $vhostShell = ''
+    $vhostRestore = ''
+    if ($ServerName) {
+        $vhostVariable = Get-VhostVariable -Path (Get-VhostPath -Name $ServerName -What 'ServerName')
+        foreach ($name in $vhostVariable.Keys) { $variable[$name] = $vhostVariable[$name] }
+        $variable['reload_svc'] = 'apache2'
+        $vhostShell = Get-VhostShell
+        $vhostRestore = 'vhost_restore'
+    }
     $restore = @'
 old="$live.old"
 failed="$live.failed"
@@ -3275,7 +3609,7 @@ rm -rf "$failed"
         $q = ConvertTo-ShellLiteral -Value $path
         "if [ -f $q.old ]; then mv -f $q.old $q; fi"
     }
-    $script = Join-ShellScript -Variable $variable -Body (@($restore) + @($files) + @('echo "Rolled $live back to the previous copy."'))
+    $script = Join-ShellScript -Variable $variable -Body (@($vhostShell, $restore) + @($files) + @($vhostRestore, 'echo "Rolled $live back to the previous copy."'))
     if ($AsScript) { return $script }
     Invoke-RemoteFlow -Connection $Connection -Script $script -NoRetry:$NoRetry -FailureMessage "Rolling $Live back failed on the host"
 }
@@ -3294,9 +3628,12 @@ function Switch-RemoteItemSet {
         run composer);
       - every listed entry must then be in the staging folder, or the deploy stops with the
         live site untouched;
+      - with -Vhost, the site's vhost goes in as Switch-RemoteDirectory installs one; a
+        refusal leaves the live site untouched;
       - each live entry moves into the backup folder and its new one takes its place;
       - -AfterSwap runs (migrate, optimize); if it or anything after the swap fails, a trap
-        moves the previous entries back and runs -OnRestore.
+        puts the vhost back, moves the previous entries back and runs -OnRestore;
+      - Apache reloads if the vhost changed.
 
     Hooks run from Root under set -e with these shell variables set: root, stage, backup, bundle.
 
@@ -3324,8 +3661,16 @@ function Switch-RemoteItemSet {
     .PARAMETER OnRestore
     Shell run after the previous entries are put back, such as restarting a queue worker.
 
+    .PARAMETER Vhost
+    The site's vhost file inside the upload, rendered from the project's template. Goes
+    with -ServerName.
+
+    .PARAMETER ServerName
+    The site's ServerName, which names the vhost file:
+    /etc/apache2/sites-available/<ServerName>.conf, in lower case. The file must declare it.
+
     .PARAMETER NoBackup
-    Remove the backup folder once everything has succeeded.
+    Remove the backup folder and the vhost's rollback copies once everything has succeeded.
 
     .PARAMETER Archive
     The uploaded archive, when this runs on its own rather than as one step of Invoke-DeployBundle.
@@ -3351,6 +3696,9 @@ function Switch-RemoteItemSet {
     .EXAMPLE
     Switch-RemoteItemSet -Archive 'example-deploy.tgz' -Sha256 $archive.Sha256 -ExpectedFileCount $archive.FileCount `
         -Root '/var/www/example.com' -Item 'app', 'config', 'public', 'composer.json' -AfterSwap 'php artisan migrate --force'
+
+    .EXAMPLE
+    Switch-RemoteItemSet -AsStep -Root '/var/www/example.com' -Item 'app', 'public' -Vhost 'apache-vhost.conf' -ServerName 'example.com'
     #>
     [CmdletBinding(DefaultParameterSetName = 'Archive')]
     [OutputType([string])]
@@ -3372,6 +3720,10 @@ function Switch-RemoteItemSet {
         [string]$AfterSwap,
 
         [string]$OnRestore,
+
+        [string]$Vhost,
+
+        [string]$ServerName,
 
         [switch]$NoBackup,
 
@@ -3403,6 +3755,7 @@ function Switch-RemoteItemSet {
     if ($Source) { Assert-SafeRemoteName -Value $Source -What 'Source' -AllowSlash }
     Assert-SafeRemoteName -Value $Staging -What 'Staging' -AllowSlash
     Assert-SafeRemoteName -Value $Backup -What 'Backup' -AllowSlash
+    if ([bool]$Vhost -ne [bool]$ServerName) { throw 'Pass -Vhost and -ServerName together: the vhost file is named after the site''s ServerName.' }
 
     $variable = [ordered]@{
         root      = $Root
@@ -3412,15 +3765,30 @@ function Switch-RemoteItemSet {
         items     = $Item -join ' '
         no_backup = if ($NoBackup) { '1' } else { '' }
     }
+    $vhostShell = ''
+    $vhostInstall = ''
+    $vhostReload = ''
+    $vhostDrop = ''
+    if ($Vhost) {
+        $vhostVariable = Get-VhostVariable -Path (Get-VhostPath -Name $ServerName -What 'ServerName') -Vhost $Vhost -ServerName $ServerName
+        foreach ($name in $vhostVariable.Keys) { $variable[$name] = $vhostVariable[$name] }
+        $variable['reload_svc'] = 'apache2'
+        $vhostShell = Get-VhostShell -Install
+        $vhostInstall = 'vhost_install'
+        $vhostReload = 'if [ -n "$vhost_changed" ]; then vhost_reload; fi'
+        $vhostDrop = 'if [ -n "$no_backup" ] && [ -n "$vhost_changed" ]; then rm -f "$vhost_live.old" "$vhost_live.rollback"; fi'
+    }
     $begin = @'
 src="$bundle/$source"
 cd "$root" || { echo "Cannot enter $root." >&2; exit 2; }
 swapped=
 success=
+vhost_changed=
 finish() {
   rc=$?
   rm -rf "$stage"
   if [ -n "$success" ]; then exit 0; fi
+  if [ -n "$vhost_changed" ]; then vhost_undo; fi
   if [ -n "$swapped" ]; then
     echo "The deploy failed (exit $rc); putting the previous items back from $backup." >&2
     for p in $items; do
@@ -3440,10 +3808,12 @@ for p in $items; do
   if [ -e "$src/$p" ] || [ -L "$src/$p" ]; then mv "$src/$p" "$stage/$p"; fi
 done
 '@
-    $swap = @'
+    $check = @'
 for p in $items; do
   if [ ! -e "$stage/$p" ] && [ ! -L "$stage/$p" ]; then echo "Missing from the new set: $p" >&2; exit 3; fi
 done
+'@
+    $swap = @'
 rm -rf "$backup"
 mkdir -p "$backup"
 swapped=1
@@ -3457,7 +3827,7 @@ success=1
 if [ -n "$no_backup" ]; then rm -rf "$backup"; fi
 echo "Swapped the new items into $root."
 '@
-    $step = Join-ShellScript -Variable $variable -Body @($begin, $OnRestore, $restoreEnd, $Prepare, $swap, $AfterSwap, $finish)
+    $step = Join-ShellScript -Variable $variable -Body @($vhostShell, $begin, $OnRestore, $restoreEnd, $Prepare, $check, $vhostInstall, $swap, $AfterSwap, $vhostReload, $finish, $vhostDrop)
     if ($AsStep) { return $step }
     Invoke-DeployBundle -Archive $Archive -Sha256 $Sha256 -ExpectedFileCount $ExpectedFileCount -Step $step -AsScript:$AsScript -Connection $Connection -NoRetry:$NoRetry
 }
@@ -3470,7 +3840,8 @@ function Restore-RemoteItemSet {
     .DESCRIPTION
     The rollback Switch-RemoteItemSet's trap does, as a step of its own. Each item found
     in the backup folder replaces the live one; items not in the backup stay as they are.
-    One connection.
+    With -ServerName, the vhost and the sites the deploy disabled go back as they were, if
+    the deploy changed them, and Apache reloads, before -OnRestore. One connection.
 
     .PARAMETER Root
     The folder on the host holding the items.
@@ -3480,6 +3851,9 @@ function Restore-RemoteItemSet {
 
     .PARAMETER Backup
     The backup folder, relative to Root.
+
+    .PARAMETER ServerName
+    The ServerName given to Switch-RemoteItemSet -ServerName, whose vhost goes back.
 
     .PARAMETER OnRestore
     Shell run, from Root, after the items are back.
@@ -3507,6 +3881,8 @@ function Restore-RemoteItemSet {
 
         [string]$Backup = '.deploy-backup',
 
+        [string]$ServerName,
+
         [string]$OnRestore,
 
         [switch]$AsScript,
@@ -3523,6 +3899,15 @@ function Restore-RemoteItemSet {
         backup = $Backup
         items  = $Item -join ' '
     }
+    $vhostShell = ''
+    $vhostRestore = ''
+    if ($ServerName) {
+        $vhostVariable = Get-VhostVariable -Path (Get-VhostPath -Name $ServerName -What 'ServerName')
+        foreach ($name in $vhostVariable.Keys) { $variable[$name] = $vhostVariable[$name] }
+        $variable['reload_svc'] = 'apache2'
+        $vhostShell = Get-VhostShell
+        $vhostRestore = 'vhost_restore'
+    }
     $restore = @'
 cd "$root" || { echo "Cannot enter $root." >&2; exit 2; }
 if [ ! -d "$backup" ]; then echo "No previous items at $root/$backup; nothing to roll back to." >&2; exit 3; fi
@@ -3530,7 +3915,7 @@ for p in $items; do
   if [ -e "$backup/$p" ] || [ -L "$backup/$p" ]; then rm -rf "$p"; mv "$backup/$p" "$p"; fi
 done
 '@
-    $script = Join-ShellScript -Variable $variable -Body @($restore, $OnRestore, 'echo "Put the previous items back in $root."')
+    $script = Join-ShellScript -Variable $variable -Body @($vhostShell, $restore, $vhostRestore, $OnRestore, 'echo "Put the previous items back in $root."')
     if ($AsScript) { return $script }
     Invoke-RemoteFlow -Connection $Connection -Script $script -NoRetry:$NoRetry -FailureMessage "Rolling the items in $Root back failed on the host"
 }

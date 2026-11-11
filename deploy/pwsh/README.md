@@ -4,6 +4,32 @@ One PowerShell module for the pieces every deploy script needs: settings, the SS
 
 The module holds no host names, users, keys, tokens or addresses. Those stay in each project's git-ignored `scripts/deploy.config.ps1`, read through `Resolve-DeploySetting`.
 
+## Setting names
+
+Every project names the same thing the same way, as `$Deploy<Name>` in `deploy.config.ps1` and `$env:DEPLOY_<NAME>` in the environment. A project reads only the settings it needs, and its `scripts/deploy.config.example.ps1` lists them.
+
+| Name | What it holds |
+| --- | --- |
+| `VpsHost`, `VpsUser`, `KeyPath` | The SSH connection: the host, the user, the PuTTY key. Always required. |
+| `HostKey` | Optional: the host key plink checks, `SHA256:<fingerprint>`. Unset, PuTTY's cached key is used. |
+| `SiteUrl` | The address the smoke check fetches, as visitors reach it. |
+| `ServiceName` | The systemd service. |
+| `ServiceUser` | The account the service or site runs as. |
+| `RemoteOptDir` | The folder that holds a service's binary. |
+| `AppPort` | The loopback port the service listens on, which its vhost proxies to. |
+| `EnvFile` | The service's root-only env file; `/etc/<service>/<service>.env` if unset. |
+| `WebRoot` | The folder a site or PHP app lives in on the host. |
+| `ServerName`, `ServerAlias` | The vhost's names; `ServerAlias` may hold several, space-separated. |
+| `ServerAdmin` | The vhost's admin address. |
+| `CertName` | The certificate: its folder's name under `/etc/letsencrypt/live`, not a path. |
+| `BackupDir` | Where a backup the deploy installs writes, outside the web root. |
+
+Some things are deliberately not settings:
+
+- **Fixed paths:** the Cloudflare ranges file `mod_remoteip` reads is `/etc/apache2/cloudflare-ips.txt` on every host.
+- **The vhost's file:** it is named after the service or the site's `ServerName` (see [The vhost](#the-vhost)), and the sites it replaces are disabled by the deploy, not by hand.
+- **One-time changes on the host,** such as moving an env file: these are written steps in the project's `docs/ops.md`, under `Upgrading to x.y.z`.
+
 ## The shape of every deploy
 
 Everything a deploy needs goes into ONE archive: the binary, systemd units, env templates, `.htaccess`, plugin files, the static `dist`. Then:
@@ -25,7 +51,7 @@ Single-file uploads (`Send-File`, `Send-FileVerified`) stay for the rare case th
 - PowerShell 7.4 or later (`CompatiblePSEditions = 'Core'`), on Windows.
 - PuTTY's `plink` 0.85 or later (connection sharing), on PATH or in `C:\Program Files\PuTTY`, with the key loaded in Pageant if it has a passphrase. pscp is not used.
 - Windows' own `tar.exe` for `Compress-DeployArchive`.
-- On the host: bash as the SSH user's shell, systemd, GNU coreutils (`sha256sum`, `cat`, `sort -V`, `stat`), `sqlite3` and `gzip` for database snapshots and backups, `runuser` (util-linux) for an `-Owner` on `Backup-RemoteDatabase` or `Copy-LiveDatabase`, `curl` for `-HealthUrl`, and `apachectl` for a vhost.
+- On the host: bash as the SSH user's shell, systemd, GNU coreutils (`sha256sum`, `cat`, `sort -V`, `stat`), `sqlite3` and `gzip` for database snapshots and backups, `runuser` (util-linux) for an `-Owner` on `Backup-RemoteDatabase` or `Copy-LiveDatabase`, `curl` for `-HealthUrl`, and for a vhost, Apache in Debian's layout (`/etc/apache2` with `sites-available` and `sites-enabled`, and an `apachectl` that reads `APACHE_CONFDIR`).
 
 ## The one connection
 
@@ -106,15 +132,15 @@ The remote run:
 
 Service binaries:
 
-- `Install-ServiceBinary`: for one service or a set: checks first (the binary and units are in the upload, the health URL can be built, a changed vhost passes `apachectl configtest`), then stops them, keeps `<binary>.old`, snapshots the database with `sqlite3 .backup`, checked and compressed with gzip before anything is installed (newest three kept), installs the units that differ (compared with `cmp`) and the binary, restarts, checks (every service active, or `-HealthUrl` answers, with parts read from the env file), and rolls everything back together on failure.
-- `Restore-ServiceBinary`: puts the previous binary, units, vhost and optionally the newest database snapshot back after a failed smoke check.
+- `Install-ServiceBinary`: for one service or a set: checks first (the binary and units are in the upload, the health URL can be built, the vhost goes in as [The vhost](#the-vhost) says), then stops them, keeps `<binary>.old`, snapshots the database with `sqlite3 .backup`, checked and compressed with gzip before anything is installed (newest three kept), installs the units that differ (compared with `cmp`) and the binary, restarts, checks (every service active, or `-HealthUrl` answers, with parts read from the env file), and rolls everything back together on failure.
+- `Restore-ServiceBinary`: puts the previous binary, units, vhost (with the sites it replaced) and optionally the newest database snapshot back after a failed smoke check.
 
 Folder swaps:
 
-- `Switch-RemoteDirectory`: swaps a folder from the upload into place by renames, keeping `<live>.old`, with hooks before and after the swap.
-- `Restore-RemoteDirectory`: puts `<live>.old` back.
-- `Switch-RemoteItemSet`: swaps several top-level entries of one folder (a PHP app's code) through a staging folder, and puts the old ones back if a later step fails.
-- `Restore-RemoteItemSet`: puts that backup back.
+- `Switch-RemoteDirectory`: swaps a folder from the upload into place by renames, keeping `<live>.old`, with hooks before and after the swap; with `-Vhost` and `-ServerName`, the site's vhost goes in with it.
+- `Restore-RemoteDirectory`: puts `<live>.old` back, and with `-ServerName` the vhost.
+- `Switch-RemoteItemSet`: swaps several top-level entries of one folder (a PHP app's code) through a staging folder, and puts the old ones back if a later step fails; it takes `-Vhost` and `-ServerName` too.
+- `Restore-RemoteItemSet`: puts that backup back, and with `-ServerName` the vhost.
 
 Database snapshots:
 
@@ -161,6 +187,23 @@ systemctl start example
 ```
 
 `Install-ServiceBinary` prints these commands, with its snapshot's paths, after a rollback in a project that has not opted into `-RestoreDatabaseOnRollback`, `Backup-RemoteDatabase` sets them as `$snapshot_restore` (with `systemctl stop` and `start` of its `-Service`) for the step's own message, and the shared job's script on the host carries them, with its paths, in its header. A project's own backup command (`-Command`) keeps its own copies, so compressing them is up to that command.
+
+## The vhost
+
+A site has one vhost file, holding its port-80 redirect to HTTPS and its port-443 site: `/etc/apache2/sites-available/<name>.conf`. `<name>` is the service's name (the first `-ServiceName`) for an app that runs a service, and the site's `ServerName` (`-ServerName`) for a site Apache serves from a folder, in lower case. The file is a template in the project's repo, filled from the deploy config when the deploy packs the archive (`Format-RemoteScript`); `-Vhost` names it inside the upload. `Install-ServiceBinary`, `Switch-RemoteDirectory` and `Switch-RemoteItemSet` all take it.
+
+Every deploy that ships the file does this before anything else on the host changes:
+
+1. It finds every other enabled site serving one of the file's `ServerName` and `ServerAlias` names, from `apachectl -S` with aliases included: certbot's `<name>-le-ssl.conf`, say, or an old pair under other names.
+2. It refuses, changing nothing, when one of those sites is not a link in `sites-enabled` or serves a name the new file doesn't, or when the new file drops a port those names are served on now, by those sites or by the file it replaces (a template without its port-80 block would drop the redirect). A site file's names are read with its CRs dropped, since a file saved with Windows line endings would otherwise end each name with one. For a site served from a folder, the file must also declare `ServerName <name>`.
+3. It tries Apache with the new file enabled and those sites gone, on a copy of `/etc/apache2` (`APACHE_CONFDIR`, `apachectl -t`), and refuses, changing nothing, if Apache would.
+4. It installs the file where it differs (the previous kept as `<name>.conf.old`), enables it where it isn't, disables those sites, and runs `apachectl configtest`.
+
+Apache reloads once the rest of the deploy has succeeded. Each change is written to `<name>.conf.rollback` before it is made, so a failure later in the run, a retry after a dropped connection, or the `Restore-` function after a failed smoke check puts the file and every site back as they were; the disabled sites stay in `sites-available` for that. `-NoBackup` removes both copies once the deploy succeeds.
+
+When the file is already in place, enabled and alone on its names, the deploy runs `apachectl -S` and leaves Apache as it is. So a project that already ships one file sees nothing new, and a stray site (a `-le-ssl` file certbot wrote, a site enabled by hand) is retired by the next deploy.
+
+`Install-ServiceBinary -VhostPath` is still taken from deploys written before the file was named after the service, for a `.conf` file in `sites-available`. Certbot never edits these files; [deploy-and-ops.md](../../standards/deploy-and-ops.md#apache-and-cloudflare) says what to do if it does.
 
 ## A deploy script on the module
 
@@ -290,13 +333,28 @@ Publish-PluginRepository -Archive 'plugin-deploy.tgz' -Sha256 $archive.Sha256 -E
 
 Swapping the whole folder replaces everything in it, so check before the first run that the live folder holds only this plugin's files.
 
-A set of services with their units, a vhost and a health URL read from the env file:
+A static site whose vhost ships with it, rendered from the template in the release's checkout, and its rollback. The vhost becomes `example.com.conf`:
+
+```powershell
+$template = Get-Content -Raw -LiteralPath (Join-Path $tree 'deploy\apache-vhost.conf')
+$vhost = Join-Path $tree 'deploy\apache-vhost.rendered.conf'
+Set-Content -LiteralPath $vhost -NoNewline -Value (Format-RemoteScript $template @{ SERVER_NAME = $settings.ServerName; CERT = $settings.CertName })
+$archive = Compress-DeployArchive -Content ([ordered]@{ 'site' = Join-Path $tree 'dist'; 'apache-vhost.conf' = $vhost })
+# ...Invoke-Upload to 'example-deploy.tgz'...
+Switch-RemoteDirectory -Archive 'example-deploy.tgz' -Sha256 $archive.Sha256 -ExpectedFileCount $archive.FileCount `
+    -Live "$($settings.WebRoot)/site" -Vhost 'apache-vhost.conf' -ServerName $settings.ServerName
+Invoke-SmokeCheck -Url $settings.SiteUrl -Rollback {
+    Restore-RemoteDirectory -Live "$($settings.WebRoot)/site" -ServerName $settings.ServerName
+}
+```
+
+A set of services with their units, a vhost and a health URL read from the env file. The vhost becomes `example.conf`:
 
 ```powershell
 Install-ServiceBinary -Archive 'example-deploy.tgz' -Sha256 $archive.Sha256 -ExpectedFileCount $archive.FileCount `
     -ServiceName 'example', 'example-worker' -Binary '/opt/example/example' -Owner 'root' -Umask '077' `
     -Unit 'deploy/example.service', 'deploy/example-worker.service', 'deploy/example-backup.service', 'deploy/example-backup.timer' `
-    -Vhost 'deploy/apache-vhost.conf' -VhostPath '/etc/apache2/sites-available/example.conf' `
+    -Vhost 'deploy/apache-vhost.conf' `
     -EnvFile '/etc/example/example.env' -HealthUrl 'http://{EXAMPLE_ADDR}/healthz' -HealthDefault @{ EXAMPLE_ADDR = 'localhost:8080' } `
     -Database '/opt/example/data/example.sqlite' -SnapshotPrefix '/opt/example/backups/example-pre-' -SnapshotSuffix '.sqlite' -RestoreDatabaseOnRollback
 ```
