@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.7.1] - 2026-11-10
+
 ### Changed
 
 - `standards/packages.md`: a Go module's version is the `go` line of `go.mod`, the release it requires, raised when a Go security release lands; no separate `toolchain` line.
