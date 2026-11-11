@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-11-11
+
 ### Added
 
 - `deploy/pwsh/README.md`: one name for each deploy setting every project reads (`CertName`, `WebRoot`, `AppPort`, `ServiceUser`, `ServerName` and `ServerAlias`, and the rest), and what is deliberately not a setting.
