@@ -12,6 +12,7 @@ Each rule ends with how it is checked. Where a name isn't covered here, match th
 - Server units and files are named `<app>-<purpose>` (`myapp-queue.service`, `myapp-backup.timer`). [review]
 - shared-tooling's folders are named `<purpose>/<target>` (`lint/go`, `test/a11y`). [review]
 - A repo shared across projects has "shared" in its name (shared-tooling, shared-components-vue). [review]
+- Every other repo is named `<type>-<name>`. The type is `app` (a web app people use), `site` (pages people read), `game`, `discord-bot`, `dalamud-plugin` or `tool` (a program that runs on one's own machine), and the name is the project's in kebab-case, without the words the type already says (`discord-bot-mathbot`, `site-zealot-gaming`). [review]
 
 Units, timers and the rest of the server side are in [deploy-and-ops.md](deploy-and-ops.md).
 

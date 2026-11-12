@@ -8,6 +8,10 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Added
+
+- `standards/naming.md`: a project's repo is named for its type and then the project, such as `discord-bot-mathbot` or `site-zealot-gaming`.
+
 ## [2.8.0] - 2026-11-11
 
 ### Added
