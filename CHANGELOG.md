@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-11-13
+
 ### Added
 
 - `standards/naming.md`: a project's repo is named for its type and then the project, such as `discord-bot-quizbot` or `site-harbour-books`.
@@ -306,7 +308,8 @@ A major: a project's own Stylelint moves to 18.
 - `repo/`: the shared `.editorconfig` and `.gitattributes`, the Taskfile include, the Dependabot example, and `task shared:update` with its version check.
 - `.github/workflows`: reusable workflows for each stack (`web`, `go`, `php`, `dotnet`, `pwsh`, `docs`, `osv`).
 
-[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.8.0...HEAD
+[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.9.0...HEAD
+[2.9.0]: https://github.com/jwill89/shared-tooling/compare/v2.8.0...v2.9.0
 [2.8.0]: https://github.com/jwill89/shared-tooling/compare/v2.7.1...v2.8.0
 [2.7.1]: https://github.com/jwill89/shared-tooling/compare/v2.7.0...v2.7.1
 [2.7.0]: https://github.com/jwill89/shared-tooling/compare/v2.6.0...v2.7.0
