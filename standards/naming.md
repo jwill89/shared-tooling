@@ -8,11 +8,12 @@ Each rule ends with how it is checked. Where a name isn't covered here, match th
 
 - A Go package has one file per feature, named for it in lowercase (`raffles.go`, or `raffle_commands.go` when a big feature splits). A new feature gets a new file. [review]
 - A Vue front end keeps reusable UI in `components/`, route pages in `views/` and the `useX` functions in `composables/`, beside `stores/`, `router/`, `types/` and `constants/`. [review]
+- App-wide pieces that are none of those, such as the API client, the app's setup or its error handling, may sit together in `src/app/`, beside `composables/`. [review]
 - A new front-end feature adds a composable, a view or component, and a route. [review]
 - Server units and files are named `<app>-<purpose>` (`myapp-queue.service`, `myapp-backup.timer`). [review]
 - shared-tooling's folders are named `<purpose>/<target>` (`lint/go`, `test/a11y`). [review]
 - A repo shared across projects has "shared" in its name (shared-tooling, shared-components-vue). [review]
-- Every other repo is named `<type>-<name>`. The type is `app` (a web app people use), `site` (pages people read), `game`, `discord-bot`, `dalamud-plugin` or `tool` (a program that runs on one's own machine), and the name is the project's in kebab-case, without the words the type already says (`discord-bot-mathbot`, `site-zealot-gaming`). [review]
+- Every other repo is named `<type>-<name>`. The type is `app` (a web app people use), `site` (pages people read), `game`, `discord-bot`, `dalamud-plugin` or `tool` (a program that runs on one's own machine), and the name is the project's in kebab-case, without the words the type already says (`discord-bot-quizbot`, `site-harbour-books`). [review]
 
 Units, timers and the rest of the server side are in [deploy-and-ops.md](deploy-and-ops.md).
 

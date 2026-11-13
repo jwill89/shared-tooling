@@ -10,8 +10,9 @@
     The whole repo carries one version. This sets it in VERSION (which projects' CI reads
     to check their workflow refs), in lint/web's and test/a11y's package.json (so a
     project's `npm install` always takes the new copy) and in the deploy module's
-    manifest. It turns CHANGELOG.md's Unreleased section into the release's, commits
-    those files and tags the commit v<version>. It doesn't push: it prints the command.
+    manifest. It turns CHANGELOG.md's Unreleased section into the release's, writes the
+    compare link of each heading (repo/Update-ChangelogLinks.ps1), commits those files and
+    tags the commit v<version>. It doesn't push: it prints the command.
 
     It refuses when the working tree isn't clean, the branch isn't main, the tag exists,
     the version isn't higher than the last one, or Unreleased lists nothing.
@@ -64,6 +65,11 @@ try {
     $date = Get-Date -Format 'yyyy-MM-dd'
     $changelog = $changelog.Remove($match.Index, '## [Unreleased]'.Length).Insert($match.Index, "## [Unreleased]`n`n## [$Version] - $date")
     [IO.File]::WriteAllText((Join-Path $root 'CHANGELOG.md'), $changelog)
+    # The new heading and Unreleased get their compare links, from the origin remote.
+    & (Join-Path $root 'repo/Update-ChangelogLinks.ps1') -Path 'CHANGELOG.md'
+    if ($LASTEXITCODE) {
+        throw "Couldn't write CHANGELOG.md's compare links."
+    }
 
     [IO.File]::WriteAllText((Join-Path $root 'VERSION'), "$Version`n")
 

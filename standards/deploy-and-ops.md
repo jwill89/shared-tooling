@@ -1,6 +1,6 @@
 # Deploy and operations
 
-How a project ships to the droplet and runs there: the deploy, smoke checks and rollback, host setup, systemd services, Apache and PHP hosting, logs, caching, backups, restores and the database pull.
+How a project ships to the droplet and runs there: the deploy, smoke checks and rollback, host setup, systemd services, Apache and PHP hosting, logs, caching, backups, restores, the database pull, and what each project's `docs/ops.md` holds.
 
 The shared deploy module (SharedDeploy, in `deploy/pwsh`) does most of a deploy. A rule marked [module] is one the module already does; its [README](../deploy/pwsh/README.md) has the mechanics, and a project's deploy script calls it rather than doing that step its own way. SQLite settings, migrations and schema are in [database.md](database.md).
 
@@ -15,10 +15,11 @@ The shared deploy module (SharedDeploy, in `deploy/pwsh`) does most of a deploy.
 - Every deploy config names its SSH user; nothing defaults to root. [module]
 - Missing settings fail the deploy before it builds or connects, all listed in one error. [module]
 - Nothing tracked reveals the server's layout: the example config holds placeholders only (see [security.md](security.md)). [review]
+- In a public repo, these are placeholders wherever they would appear: the certificate's name, paths on the server, service users, ports and admin email addresses. That covers the docs (`docs/ops.md` included), cron files, unit and vhost templates and `.env.example`, each filled from the deploy config or written as `<cert>`, `<web root>`, `<port>` and the like. The site's public hostnames may be written out. [review]
 - A deploy ships the newest release: the newest tag CI made on main, with the tags fetched first (`Get-DeployRelease`). HEAD need not carry it, and commits after it (a shared-tooling update, work not yet released) are not part of it. [module]
 - The release is checked out into a folder of its own, with its submodules and an `npm ci` from its lockfiles, and built and packed from there (`New-ReleaseTree`, then `Remove-ReleaseTree` in a `finally`). Nothing uncommitted and no package installed for HEAD reaches it. npm takes the packages from its cache by the lockfile's integrity, so nothing already downloaded, a Font Awesome kit included, is fetched again. Untracked files a deploy needs (a bot's unit, a local `.env`) are read from the checkout. [module]
 - The host records the release each deploy leaves running, in `~/.shared-deploy/<name>` of the SSH user, once the site has passed its checks (`Set-DeployedRelease`); a rolled-back deploy leaves the record as it was. A deploy reads it first (`Get-DeployedRelease`) and does nothing when the host already runs the release; `-Force` deploys it again. [review]
-- An untagged tree ships only as a preview, behind the deploy script's `-Preview` switch, which builds the working tree and stamps the build `preview-<date-time>` in place of a tag. The host records the stamp, so the next release deploy goes out. `-SkipBuild`, where a script has it, goes with `-Preview` alone: a release is always built from its tag. [review]
+- An untagged tree never ships as a release. A deploy script may offer a `-Preview` switch, which builds the working tree and stamps the build `preview-<date-time>` in place of a tag; the host records the stamp, so the next release deploy goes out. A script without one ships releases only. `-SkipBuild`, where a script has it, goes with `-Preview` alone: a release is always built from its tag. [review]
 - The switch that skips the database pull is `-NoDbPull`. [review]
 - A local copy never runs with production credentials (a bot's token) while production is running, since both would handle every event. [review]
 
@@ -30,7 +31,7 @@ The shared deploy module (SharedDeploy, in `deploy/pwsh`) does most of a deploy.
 - Live files never change in place: the new tree is built whole beside the live one, swapped in by renames, and the previous copy is kept for rollback (`Switch-RemoteDirectory`, `Switch-RemoteItemSet`). A release folder behind a `current` link follows the same rule. [module]
 - Upload folders sit beside the swapped folder (siblings of `dist/`), so a swap never wipes them. [review]
 - When one run deploys several parts, the API goes first, then the SPA, then the plugin, since a new backend still serves the old SPA while a new SPA may call endpoints an old backend lacks. [review]
-- A release that needs steps beyond the deploy (a new host setting, a manual backup, a backfill) lists them in order in the project's `docs/ops.md`, under an `Upgrading to x.y.z` heading, and they run in that order. Its CHANGELOG entry says only that it needs a step at deploy, and where the steps are ([docs-and-agents.md](docs-and-agents.md)). [review]
+- A release that needs steps beyond the deploy (a new host setting, a manual backup, a backfill) lists them in order in the project's `docs/ops.md`, under an `Upgrading to x.y.z` heading ([What docs/ops.md holds](#what-docsopsmd-holds)), and they run in that order. Its CHANGELOG entry says only that it needs a step at deploy, and where the steps are ([docs-and-agents.md](docs-and-agents.md)). [review]
 
 ## Builds
 
@@ -44,29 +45,30 @@ The shared deploy module (SharedDeploy, in `deploy/pwsh`) does most of a deploy.
 ## Smoke checks and rollback
 
 - A service deploy uploads everything before it stops anything. It then stops the service, keeps `<binary>.old`, snapshots the database, installs, starts, and waits up to 30 seconds for every service to be active or its health URL to answer, putting the old binary back if not (`Install-ServiceBinary`). [module]
-- Every web service has `GET /healthz`, which answers 200 with its version when it and its database work, and 503 when the database doesn't. [review]
+- Every web app that runs as a systemd service has `GET /healthz`, which answers 200 with its version when it and its database work, and 503 when the database doesn't. A PHP or static site needs none: the deploy's smoke check of its pages stands in for it. [review]
 - The deploy's start check waits for `/healthz`. [module]
 - `/healthz` answers publicly, through Cloudflare, so an uptime check can poll it and the smoke check can fetch it; it returns nothing private. [review]
 - A service with no health URL (a bot) is `Type=notify` and reports ready only once it is (logged in), so a start that can't connect fails the deploy and rolls back. [module]
-- After the swap the deploy smoke-checks the public site from the dev machine, through Cloudflare, trying each URL several times: the API answers with data or names the new version, `/` names this build's entry script, and a plugin index carries this release's `?v=` (`Invoke-SmokeCheck`). [module]
-- Each smoke-check URL carries a fresh `?deploy=` token, so no edge-cached answer can pass. [review]
+- After the swap the deploy smoke-checks the public site from the dev machine, through Cloudflare, trying each URL several times: the API answers with data or `/healthz` reports the new version (`-Version`), `/` names this build's entry script (`-EntryScript`), and a plugin index carries this release's `?v=` (`Invoke-SmokeCheck`). [module]
+- Each smoke-check request carries a fresh `?deploy=` token, so no edge-cached answer can pass. [module]
 - A failed smoke check rolls back on its own. [module]
 - A rollback undoes the run in reverse order: the plugin and front end first, then the backend. [review]
 - A failed start or smoke check puts the pre-deploy database snapshot back only where the project opts in with `-RestoreDatabaseOnRollback`. [module]
 - A project that takes uploads during a deploy doesn't opt in: its database stays as the migrations left it, and the module prints the snapshot's restore command. [module]
-- Each project lists what can only be checked on production, and checks it right after each deploy in a fresh browser tab with the console open. [review]
+- Each project lists what can only be checked on production in its `docs/ops.md`, and checks it right after each deploy in a fresh browser tab with the console open. [review]
 
 ## Host setup and server config
 
-- One-time host setup (the service user, folders, env file, certificate, DNS) is an idempotent script, run once as root and written in the project's `docs/ops.md`. [review]
+- One-time host setup (the service user, folders, env file, certificate, DNS) is an idempotent script, run once as root and written in the project's `docs/ops.md`; a static or PHP site on the shared host writes its smaller setup as commands instead ([What docs/ops.md holds](#what-docsopsmd-holds)). [review]
 - A later deploy appends a host-only env line only when the env file lacks it. [review]
-- A service's systemd units and its Apache vhost live in the repo as templates, and every deploy ships them, so the host always runs what the repo says. Host-specific values (server names, the certificate, ports, paths, the service user) are placeholders in the template, filled from the git-ignored deploy config when the deploy script packs the archive (`Format-RemoteScript`). [review]
+- A service's systemd units and its Apache vhost live in the repo as templates, and every deploy ships them, so the host always runs what the repo says. Host-specific values (the certificate, ports, paths, the service user, the admin address) are placeholders in the template, filled from the git-ignored deploy config when the deploy script packs the archive (`Format-RemoteScript`); the site's public names may be written in it or filled the same way. [review]
 - The deploy installs a unit or the vhost only where it differs from the live copy, checks the vhost with `apachectl configtest` before anything stops, and puts every previous copy back if the start or a check fails (`Install-ServiceBinary -Unit`, `-Vhost`). The backup timer's units are installed the same way, by `Install-BackupTimer`, and a site's vhost as [Apache and Cloudflare](#apache-and-cloudflare) says. [module]
 - Nobody edits a unit or a vhost on the host: a change goes into its template and ships with the next deploy. [review]
 - A unit holds no secret, so it can be tracked: secrets go in the service's `EnvironmentFile` ([security.md](security.md)). [review]
 - `.htaccess` files, cron files and every script a timer or cron runs live in the repo and ship with the deploy; nobody edits them on the host or copies them there by hand. [review]
 - A config file the deploy ships is installed only where it differs, checked after (the expected paths, then status and header checks), and put back from its previous copy if a check fails. [review]
 - Scheduled jobs other than the backup timer go in the site's own file in `/etc/cron.d` (`root:root`, mode 644, LF line endings, a trailing newline), and no other site's crontab is touched. [review]
+- The deploy installs that cron file, and the units of a worker that runs the site's own code rather than a binary (a PHP queue worker, a timer that runs one of its scripts), as it installs a service's units: only where they differ, checked first (each cron job names a user that exists), the workers restarted on the new code and checked, and every previous copy put back if anything fails or the smoke check rolls back (`Install-HostConfig`, `Restore-HostConfig`). [module]
 - System libraries come from the distro, never self-built into `/usr/local/lib`, where they would shadow the distro's copy for every program and miss its security updates. [review]
 
 ## Services and systemd
@@ -83,14 +85,14 @@ The shared deploy module (SharedDeploy, in `deploy/pwsh`) does most of a deploy.
 
 ## Apache and Cloudflare
 
-- A web app listens on the loopback address only, on its own port from the droplet's one port list. [review]
+- A web app listens on the loopback address only, on a port of its own that no other site on the host uses; the project's `docs/ops.md` records it. [review]
 - Cloudflare fronts every name. [review]
 - Each site has one vhost file, `/etc/apache2/sites-available/<name>.conf`, holding its port-80 redirect to HTTPS and its port-443 site. `<name>` is the service's name (`ServiceName`) for an app that runs a service, and the site's `ServerName` for a site Apache serves from a folder, in lower case. The name follows this rule, so it is not a deploy setting. [module]
 - The vhost is a template in the repo, and every deploy ships it: filled from the deploy config, checked with `apachectl configtest`, the previous file kept for rollback (`-Vhost` on `Install-ServiceBinary`, `Switch-RemoteDirectory` or `Switch-RemoteItemSet`). [module]
 - The deploy retires what the file replaces: every other enabled site serving one of its names (certbot's `<name>-le-ssl.conf`, an old pair under other names) is disabled in the same configtest and reload, and enabled again on a rollback. It refuses, changing nothing, when one of those sites also serves a name the file doesn't, or when the file drops a port those names are served on. Nobody disables a site by hand for it. [module]
 - Certbot never edits a vhost. The droplet's shared certificate renews by DNS, so a renewal only replaces the certificate files and reloads Apache. If a `certbot --apache` run ever writes a `<name>-le-ssl.conf` beside a shipped file, delete it (`a2dissite`, then remove the file): the template already holds the 443 site, and the next deploy would disable it anyway. If it edits the shipped file, the next deploy puts the template back. [review]
 - Apache terminates TLS with the droplet's shared certificate and proxies with `ProxyPreserveHost` and `X-Forwarded-Proto`. [review]
-- Apache takes the visitor's address from `CF-Connecting-IP`, trusted only from Cloudflare's published ranges ([security.md](security.md) has the detail). [review]
+- Each site's own vhost, in its port-443 block, takes the visitor's address from `CF-Connecting-IP`, trusted only from Cloudflare's published ranges (`RemoteIPHeader CF-Connecting-IP` and `RemoteIPTrustedProxyList /etc/apache2/cloudflare-ips.txt`), and sends HSTS (`Header always set Strict-Transport-Security`), so the site carries both wherever it moves, with nothing server-wide to rely on. The module's [README](../deploy/pwsh/README.md#the-vhost) has a template, and [security.md](security.md) the detail. [review]
 - An event stream gets a long proxy timeout, and `text/event-stream` is never compressed, since compressing it holds events back in a buffer. [review]
 
 ## PHP sites
@@ -124,9 +126,11 @@ The cache headers a site sends; [performance.md](performance.md) has the rest of
 
 ## Backups
 
-- Every backup kept on the droplet, daily copy or deploy snapshot, is checked with `PRAGMA integrity_check`, compressed with gzip and checked with `gzip -t` before it takes its place. [module]
+- Every backup kept on the droplet is compressed with gzip and checked with `gzip -t` before it takes its place: a database's daily copy or deploy snapshot also passes `PRAGMA integrity_check` first, and a folder's archive a full `tar` listing. [module]
 - Every project with a database has a daily backup timer, which the deploy installs and checks after the smoke check (`Install-BackupTimer`). [module]
 - The daily job writes a dated `VACUUM INTO` copy beside the database, as the database's own user, and keeps 28 days. [module]
+- A folder that only the host holds, such as a site's uploads, has a daily backup timer of its own (`Install-BackupTimer -Folder`): a dated `.tar.gz` of the folder, made as its owner into a folder outside it and outside the web root, 28 days kept unless the project keeps fewer for a large folder. [module]
+- Each deploy pulls a fresh archive of such a folder to the dev machine, as it pulls the database, unless run with `-NoDbPull`: three kept, the host's copy removed (`Copy-LiveFolder`). [module]
 - A new or changed timer runs once before it is kept; if that run fails, the deploy fails, saying the site is live but its backup isn't. [module]
 - A project whose app has its own backup command runs it from the same timer (`-Command`), and that command checks and compresses its copies the same way. [review]
 - A deploy that touches a database snapshots it first with `sqlite3 .backup`: after the service stops, or before a PHP site's migrations (`Install-ServiceBinary -Database`, `Backup-RemoteDatabase`). [module]
@@ -141,7 +145,8 @@ The cache headers a site sends; [performance.md](performance.md) has the rest of
 ## Restores
 
 - A restore stops the site's writes first (the service, or `php artisan down`), removes the `-wal` and `-shm` files, and decompresses the backup over the database in place as the database's user (`gunzip -c <backup> > <db>`), which keeps its owner and mode. The module prints the exact command. [review]
-- Each project restore-drills its backup for real before launch, from steps in its `docs/ops.md`: restore into a scratch file, check `PRAGMA integrity_check`, and match row counts or known figures against live. [review]
+- A folder's restore stops what writes to it, moves the live folder aside and unpacks the archive beside it as root, which keeps every file's owner (`tar -xzf <archive> -C <parent>`); the backup job's header on the host gives the line with its paths. [review]
+- Each project restore-drills its backup for real before launch, from steps in its `docs/ops.md`: restore into a scratch file or folder, check `PRAGMA integrity_check`, and match row counts, file counts or known figures against live. A project already live owes one drill on the host, the same way. The date the drill last ran goes in `docs/ops.md`. [review]
 - A change to a production database outside the app's migrations follows the rules in [database.md](database.md). [review]
 
 ## The database pull
@@ -149,3 +154,16 @@ The cache headers a site sends; [performance.md](performance.md) has the rest of
 - Each backend deploy pulls the live database to the dev machine unless run with `-NoDbPull`: an online backup, a checked download, three timestamped local copies kept, the host's copy removed, and a warning and a skip while a local server holds the file (`Copy-LiveDatabase`). [module]
 - That pull is the one copy that leaves the droplet; adding an off-box store is the owner's call. [review]
 - Development runs against that local copy at an absolute path, never against a database another app is using. [review]
+
+## What docs/ops.md holds
+
+Each project's `docs/ops.md` is the runbook for its live site, and holds each of these under a heading of its own. A section that doesn't apply says so in a line, with the reason (a static site with nothing only the host holds has no backups to restore).
+
+- **Host setup.** The one-time setup as an idempotent script, run once as root and safe to run again: the service user, the folders with their owners and modes, the env file, the certificate's names and DNS. A static or PHP site on the shared host, which has no service user or env file of its own, writes the commands it needs instead, each safe to run again: its folders with their owner and mode, its `.env` from `.env.example` (PHP), the PHP extensions it needs, its DNS, and a check that the shared certificate covers its names. Either way it records the site's port and the paths the deploy config names, as placeholders in a public repo. [review]
+- **Backups.** What is backed up, by which timer, where the copies go and how many are kept. [review]
+- **Restore steps.** For each backup, the commands that put it back, starting with stopping the site's writes. [review]
+- **Restore drill.** The drill's steps, and the date it last ran on the host. [review]
+- **Production-only checks.** What can only be checked on production, run after every deploy. [review]
+- **Upgrading to x.y.z.** One heading per release that needs steps beyond the deploy, with its steps in order; the release's CHANGELOG entry points here. [review]
+- **Rolling back.** How to put the previous release back when the deploy's own rollback didn't: the `.old` copies and the `Restore-` steps the deploy uses, and the database snapshot's restore command. [review]
+- **Logs.** Where each log is and how to read it: `journalctl -u <service>`, each scheduled job's tag (`journalctl -t <name>`), and the site's Apache and PHP error logs. [review]

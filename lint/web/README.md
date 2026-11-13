@@ -11,11 +11,13 @@
 | `@jwill89/lint-web` named `tsStylistic` | typescript-eslint's `stylisticTypeChecked` rules, with `prefer-nullish-coalescing` leaving strings and booleans to `\|\|`. |
 | `@jwill89/lint-web` named `defineConfigWithVueTs`, `vueTsConfigs` | Re-exported from this package's install, for a project that needs more of them (see "One copy of each plugin"). |
 | `@jwill89/lint-web/react` | ESLint for React + TypeScript: the same curated rules on `strictTypeChecked`, React's hooks rules, and JSX accessibility from `eslint-plugin-jsx-a11y-x` (rules named `jsx-a11y-x/…`). |
-| `@jwill89/lint-web/prettier` | `semi: false`, `singleQuote: true`, `printWidth: 100`, `trailingComma: 'all'`. |
+| `@jwill89/lint-web/js` | ESLint for plain JavaScript, a static site's own scripts with no Vue, React or TypeScript: ESLint's recommended rules and the curated rules that apply to JavaScript, with browser globals, and Node's for the config files at the root. |
+| `@jwill89/lint-web/prettier` | `semi: false`, `singleQuote: true`, `printWidth: 100`, `trailingComma: 'all'`, with type declarations for a `prettier.config.ts`. |
 | `@jwill89/lint-web/stylelint` | `stylelint-config-standard` and `stylelint-config-recommended-vue`, BEM-style kebab-case classes, kebab-case custom properties, grouped tokens. Named export `paletteRules(message)` adds the palette rule. |
 | `@jwill89/lint-web/stylelint/tailwind` | Tailwind 4's at-rules and its `--color-*: initial` custom properties, layered on the above. |
 | `@jwill89/lint-web/tsconfig.app.json` | `@vue/tsconfig`'s DOM base with unused locals and parameters and switch fallthrough checked. |
 | `@jwill89/lint-web/tsconfig.node.json` | The Node-side files: Vite, Vitest and Playwright configs. |
+| `@jwill89/lint-web/tsconfig.vitest.json` | What the Vitest specs add to the app's config: Node's and Vite's types, and an empty `exclude` so the specs the app config leaves out are taken in. A project's `tsconfig.vitest.json` extends the app's config and then this. |
 
 The curated rules: `prefer-const`, `no-param-reassign`, `eqeqeq` (smart), `curly` (all), `object-shorthand`, `no-console` (warn and error allowed), `consistent-type-imports`, `no-unused-vars` (a leading `_` opts out), `naming-convention` (PascalCase for types and enum members only, so API types stay as each API's JSON has them: camelCase by the standards, snake_case in older APIs until they move), `restrict-template-expressions` (numbers and booleans allowed), `no-confusing-void-expression` (arrow shorthand allowed), and `label-has-for` satisfied by nesting or by `for`/`id`.
 
@@ -84,6 +86,23 @@ The project holds shared-tooling as a submodule at `shared/`, so from a front en
    ```jsonc
    // tsconfig.app.json
    { "extends": "@jwill89/lint-web/tsconfig.app.json", "include": ["src"] }
+   ```
+
+   ```jsonc
+   // tsconfig.vitest.json, where the app has Vitest specs; web.yml fails without it
+   {
+     "extends": ["./tsconfig.app.json", "@jwill89/lint-web/tsconfig.vitest.json"],
+     "include": ["src/**/*.ts", "src/**/*.vue"]
+   }
+   ```
+
+   A static site with no Vue, React or TypeScript takes the plain-JavaScript config and Prettier's, and installs `eslint prettier` (npm adds TypeScript beside them, as the package's peer):
+
+   ```js
+   // eslint.config.js
+   import shared from '@jwill89/lint-web/js'
+
+   export default [{ ignores: ['dist/**', 'vendor/**'] }, ...shared]
    ```
 
 4. Remove what the package now supplies from the project's own `devDependencies`: `eslint-plugin-vue`, `eslint-plugin-vuejs-accessibility`, `@vue/eslint-config-typescript`, `@vue/eslint-config-prettier`, `stylelint-config-standard`, `stylelint-config-recommended-vue`, `postcss-html`, `@vue/tsconfig`, and the old `@jwill89/eslint-config`.

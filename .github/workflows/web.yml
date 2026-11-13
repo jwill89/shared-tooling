@@ -1,8 +1,10 @@
 name: Web
 
-# The front-end job every repo with a Vue or React app calls: install (with the Font
-# Awesome Pro registry when the app uses it), audit, then the npm scripts the caller
-# lists, in order.
+# The front-end job every repo with a front end calls: install (with the Font Awesome
+# Pro registry when the app uses it), audit, then the npm scripts the caller lists, in
+# order. An app with Vitest specs then has them type-checked under its
+# tsconfig.vitest.json, which must extend lint/web's (test/web/typecheck-specs.mjs).
+# PHP is set up first when a script needs it (php-version).
 #
 #   web:
 #     uses: jwill89/shared-tooling/.github/workflows/web.yml@v1.0.0
@@ -45,6 +47,14 @@ on:
         description: The uploaded artifact's name.
         type: string
         default: web-dist
+      php-version:
+        description: The PHP version to set up, for a script that runs PHP (a build that renders pages, say). Empty leaves the runner's own.
+        type: string
+        default: ''
+      php-extensions:
+        description: The PHP extensions to add, with php-version.
+        type: string
+        default: ''
     secrets:
       FONTAWESOME_TOKEN:
         description: The Font Awesome package token.
@@ -138,6 +148,13 @@ jobs:
         if: inputs.audit
         run: npm audit --audit-level=high --omit=dev
 
+      - uses: shivammathur/setup-php@v2
+        if: inputs.php-version != ''
+        with:
+          php-version: ${{ inputs.php-version }}
+          extensions: ${{ inputs.php-extensions }}
+          coverage: none
+
       - name: Scripts
         env:
           SCRIPTS: ${{ inputs.scripts }}
@@ -147,6 +164,10 @@ jobs:
             npm run "$script"
             echo "::endgroup::"
           done
+
+      # After the scripts, so a spec that imports generated code finds it.
+      - name: Specs type-check
+        run: node "$GITHUB_WORKSPACE/shared/test/web/typecheck-specs.mjs" .
 
       - name: Upload ${{ inputs.artifact-name }}
         if: inputs.artifact-path != ''

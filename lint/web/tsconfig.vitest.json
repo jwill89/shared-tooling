@@ -1,0 +1,21 @@
+{
+  // The Vitest specs, checked apart from the app so that the app's own code never sees
+  // Node's types. It adds only what the specs need on top of the app's own config, so a
+  // project's tsconfig.vitest.json lists its app config first and this after it, then
+  // adds its `include`:
+  //
+  //   {
+  //     "extends": ["./tsconfig.app.json", "@jwill89/lint-web/tsconfig.vitest.json"],
+  //     "include": ["src/**/*.ts", "src/**/*.vue"]
+  //   }
+  //
+  // Specs import describe, it, expect and vi from vitest (globals: false), so no global
+  // test types are added. vite/client stays, since the code under test reads
+  // import.meta.env. The empty exclude replaces the app config's, which usually leaves
+  // the specs out.
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node", "vite/client"]
+  },
+  "exclude": []
+}

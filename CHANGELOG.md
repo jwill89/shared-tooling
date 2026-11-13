@@ -10,7 +10,40 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ### Added
 
-- `standards/naming.md`: a project's repo is named for its type and then the project, such as `discord-bot-mathbot` or `site-zealot-gaming`.
+- `standards/naming.md`: a project's repo is named for its type and then the project, such as `discord-bot-quizbot` or `site-harbour-books`.
+- `standards/README.md`: an `AGENTS.md` keeps a "Not yet meeting the standards" list, each item saying what falls short of which rule and since when. A departure counts only when it states its reason, and a project meets the standards once that list is empty and holds every gap.
+- `standards/deploy-and-ops.md`: one list of what `docs/ops.md` holds: host setup (a script, or the commands a static or PHP site on the shared host needs), backups, restore steps, the restore drill and the date it last ran, production-only checks, `Upgrading to x.y.z`, rolling back and logs.
+- `codeql.yml`: CodeQL for a public repo, over its JavaScript and TypeScript, C# and workflows.
+- `task shared:changelog:links` writes the compare link of every CHANGELOG heading, and `task shared:changelog:check` checks them as `docs.yml` does.
+- `task shared:go:coverage` runs a Go module's tests and holds the coverage floor `go.yml` holds, and `task shared:web:specs` type-checks a front end's Vitest specs as `web.yml` does.
+- `@jwill89/lint-web/js`: ESLint for plain JavaScript, for a static site with no framework or TypeScript.
+- `@jwill89/lint-web/tsconfig.vitest.json`: the base a front end's `tsconfig.vitest.json` extends, adding Node's types and taking in the specs.
+- `web.yml`: `php-version` and `php-extensions`, for a script that runs PHP.
+- `Install-BackupTimer -Folder` backs up a folder, such as a site's uploads, as a daily compressed archive, and `Copy-LiveFolder` pulls a fresh archive of it to the dev machine.
+- `Install-HostConfig` installs a site's cron file and the units of a worker that isn't a binary, restarts the workers and puts everything back if they don't stay up; `Restore-HostConfig` puts them back after a failed smoke check.
+- `Invoke-SmokeCheck -SiteUrl` with `-Version` checks the version `/healthz` reports, and with `-EntryScript` the entry script `/` names.
+- `deploy/pwsh/README.md`: a project may add a deploy setting beyond the shared names once its `AGENTS.md` names it, and the vhost template shows HSTS and the Cloudflare visitor-address lines.
+
+### Changed
+
+- `web.yml` fails an app with Vitest specs unless its `tsconfig.vitest.json` extends `@jwill89/lint-web/tsconfig.vitest.json` and takes in every spec, then type-checks the specs with it.
+- `docs.yml` fails when a CHANGELOG heading has no compare link; its `changelogs` input names a second part's CHANGELOG.
+- `Invoke-SmokeCheck` sends every request with a fresh `?deploy=` token, so no cached copy can pass; a check with `CacheBust = $false` goes out as written.
+- `standards/deploy-and-ops.md`: in a public repo the certificate name, server paths, service users, ports and admin addresses are placeholders everywhere, docs, cron files and `.env.example` included, while public hostnames may stay. `-Preview` is optional, `/healthz` is required only of an app run as a systemd service, each project's `docs/ops.md` records its port, a project already live owes one restore drill on the host, and a folder only the host holds is backed up daily.
+- `standards/security.md` and `standards/deploy-and-ops.md`: HSTS and the Cloudflare visitor-address lines go in each site's own vhost, and a public repo calls the shared `codeql.yml`.
+- `standards/testing.md`: a React app's specs use `test/web`'s preset too, and `task check` holds every coverage floor CI holds.
+- `standards/docs-and-agents.md`: `task check` runs every coverage floor and generated-file check CI runs, compare links are written by tooling, and a repo with two parts versioned apart keeps one CHANGELOG per part, each tagged with its own prefix.
+- `standards/naming.md`: app-wide front-end pieces may sit in `src/app/`.
+- `standards/performance.md`: served images may be AVIF as well as WebP.
+
+### Removed
+
+- `lint/go/go.exe`, a 4 MB Windows build shipped by mistake since 2.7.1.
+
+### Fixed
+
+- `@jwill89/lint-web/prettier` had no type declarations, so a `prettier.config.ts` importing it had no types.
+- `test/e2e`'s `playwrightDefaults` looked for `@playwright/test`'s types outside the front end's own install, so a Playwright config could check against another copy or none.
 
 ## [2.8.0] - 2026-11-11
 
@@ -272,3 +305,34 @@ A major: a project's own Stylelint moves to 18.
 - `test/`: the Vitest settings, axe checks for Playwright, the Playwright settings, and coverage floors for Go and PHP.
 - `repo/`: the shared `.editorconfig` and `.gitattributes`, the Taskfile include, the Dependabot example, and `task shared:update` with its version check.
 - `.github/workflows`: reusable workflows for each stack (`web`, `go`, `php`, `dotnet`, `pwsh`, `docs`, `osv`).
+
+[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.8.0...HEAD
+[2.8.0]: https://github.com/jwill89/shared-tooling/compare/v2.7.1...v2.8.0
+[2.7.1]: https://github.com/jwill89/shared-tooling/compare/v2.7.0...v2.7.1
+[2.7.0]: https://github.com/jwill89/shared-tooling/compare/v2.6.0...v2.7.0
+[2.6.0]: https://github.com/jwill89/shared-tooling/compare/v2.5.0...v2.6.0
+[2.5.0]: https://github.com/jwill89/shared-tooling/compare/v2.4.0...v2.5.0
+[2.4.0]: https://github.com/jwill89/shared-tooling/compare/v2.3.2...v2.4.0
+[2.3.2]: https://github.com/jwill89/shared-tooling/compare/v2.3.1...v2.3.2
+[2.3.1]: https://github.com/jwill89/shared-tooling/compare/v2.3.0...v2.3.1
+[2.3.0]: https://github.com/jwill89/shared-tooling/compare/v2.2.3...v2.3.0
+[2.2.3]: https://github.com/jwill89/shared-tooling/compare/v2.2.2...v2.2.3
+[2.2.2]: https://github.com/jwill89/shared-tooling/compare/v2.2.1...v2.2.2
+[2.2.1]: https://github.com/jwill89/shared-tooling/compare/v2.2.0...v2.2.1
+[2.2.0]: https://github.com/jwill89/shared-tooling/compare/v2.1.7...v2.2.0
+[2.1.7]: https://github.com/jwill89/shared-tooling/compare/v2.1.6...v2.1.7
+[2.1.6]: https://github.com/jwill89/shared-tooling/compare/v2.1.5...v2.1.6
+[2.1.5]: https://github.com/jwill89/shared-tooling/compare/v2.1.4...v2.1.5
+[2.1.4]: https://github.com/jwill89/shared-tooling/compare/v2.1.3...v2.1.4
+[2.1.3]: https://github.com/jwill89/shared-tooling/compare/v2.1.2...v2.1.3
+[2.1.2]: https://github.com/jwill89/shared-tooling/compare/v2.1.1...v2.1.2
+[2.1.1]: https://github.com/jwill89/shared-tooling/compare/v2.1.0...v2.1.1
+[2.1.0]: https://github.com/jwill89/shared-tooling/compare/v2.0.0...v2.1.0
+[2.0.0]: https://github.com/jwill89/shared-tooling/compare/v1.3.0...v2.0.0
+[1.3.0]: https://github.com/jwill89/shared-tooling/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/jwill89/shared-tooling/compare/v1.1.2...v1.2.0
+[1.1.2]: https://github.com/jwill89/shared-tooling/compare/v1.1.1...v1.1.2
+[1.1.1]: https://github.com/jwill89/shared-tooling/compare/v1.1.0...v1.1.1
+[1.1.0]: https://github.com/jwill89/shared-tooling/compare/v1.0.1...v1.1.0
+[1.0.1]: https://github.com/jwill89/shared-tooling/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/jwill89/shared-tooling/releases/tag/v1.0.0

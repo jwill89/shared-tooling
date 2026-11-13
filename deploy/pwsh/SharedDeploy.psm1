@@ -4429,6 +4429,428 @@ echo "Publishing $version (published now: ${published:-none})."
 
 #endregion
 
+#region Cron files and worker units
+
+function Get-HostConfigShell {
+    <#
+    .SYNOPSIS
+    Shell functions for a site's cron file and units, shared by Install-HostConfig and Restore-HostConfig: where each previous copy is kept, and putting back every change the rollback record lists.
+    #>
+    @'
+# The previous copy of a live file, kept in the site's state folder under its path with
+# each / made _ (/etc/cron.d/example becomes _etc_cron.d_example.old).
+cfg_saved() { printf '%s/%s.old' "$cfg_state" "$(printf '%s' "$1" | tr '/' '_')"; }
+# Puts back every change $cfg_record lists, newest first: a changed file from its previous
+# copy, a new one removed (a new unit stopped and disabled first). systemd reloads if a
+# unit went back. The record goes once it is done.
+cfg_undo() {
+  if [ ! -f "$cfg_record" ]; then return 0; fi
+  cfg_units_back=
+  while read -r kind path state; do
+    if [ "$kind" != file ]; then continue; fi
+    saved=$(cfg_saved "$path")
+    case "$path" in
+      /etc/systemd/system/*)
+        cfg_units_back=1
+        if [ "$state" = new ]; then systemctl disable --now --quiet "$(basename "$path")" 2>/dev/null || true; fi
+        ;;
+    esac
+    if [ "$state" = changed ] && [ -f "$saved" ]; then cp -p "$saved" "$path"; else rm -f "$path"; fi
+    echo "Put back $path ($state in the deploy)."
+  done <<CFG_RECORD
+$(tac "$cfg_record")
+CFG_RECORD
+  if [ -n "$cfg_units_back" ]; then systemctl daemon-reload; fi
+  rm -f "$cfg_record"
+}
+'@
+}
+
+function Install-HostConfig {
+    <#
+    .SYNOPSIS
+    From the checked upload: install a site's cron file and units where they differ, restart its workers, check them, and put everything back if anything fails.
+
+    .DESCRIPTION
+    For what a site runs beside its code that is not a binary: its cron file in
+    /etc/cron.d, and the systemd units of a worker that runs the site's own code, such as a
+    PHP queue worker (ExecStart=/usr/bin/php artisan queue:work) or a timer that runs one
+    of its scripts. A service with a binary of its own uses Install-ServiceBinary instead.
+    In order:
+      - checks before anything changes: each file is in the upload; the cron file has only
+        comments, NAME=value lines and jobs (five time fields or an @keyword, a user, a
+        command), and every user it names exists;
+      - each file is made LF-only with a trailing newline, then compared with the live
+        copy (cmp); one that differs is installed (root:root, 644 for the cron file,
+        -UnitMode for units), its previous copy kept in /var/lib/shared-deploy/<Name>;
+      - if a unit changed, systemd reloads; a new timer is enabled and started, a changed
+        one restarted if it runs, and a new -Service enabled;
+      - each -Service restarts, so the worker runs the code now in place, and must be
+        active after -SettleSeconds;
+      - on any failure, every file goes back as it was (a new unit stopped, disabled and
+        removed), systemd reloads, each -Service that was running before restarts and the
+        others stop, and the step fails.
+    Each change is written to /var/lib/shared-deploy/<Name>/rollback before it is made, so
+    a retry after a dropped connection undoes a cut-off attempt first, and
+    Restore-HostConfig puts the files back after a failed smoke check. A deploy that
+    changes nothing restarts the workers and leaves the files alone.
+
+    Run it as -AfterSwap of the swap that ships the site's code (Switch-RemoteItemSet or
+    Switch-RemoteDirectory), so the workers restart on the new code and a failure here
+    also swaps the code back; give that swap -OnRestore with the workers' restart, so
+    they run the old code again once it is back.
+
+    .PARAMETER Name
+    The site's short name, which names the state folder /var/lib/shared-deploy/<Name>.
+
+    .PARAMETER CronFile
+    The site's cron file inside the upload, installed as /etc/cron.d/<CronName>.
+
+    .PARAMETER CronName
+    The cron file's name in /etc/cron.d: letters, digits, - and _ only, since cron skips
+    any other name. By default -Name.
+
+    .PARAMETER Unit
+    Systemd unit files inside the upload, each installed as /etc/systemd/system/<its name>.
+
+    .PARAMETER UnitMode
+    The units' mode: 600 for a unit that holds a secret.
+
+    .PARAMETER Service
+    The services restarted and checked once the files are in: the workers.
+
+    .PARAMETER SettleSeconds
+    How long to wait before the is-active check; 2 by default.
+
+    .PARAMETER NoBackup
+    Remove the previous copies and the rollback record once the step succeeds.
+    Restore-HostConfig then has nothing to go back to.
+
+    .PARAMETER Archive
+    The uploaded archive, when this runs on its own rather than as one step of Invoke-DeployBundle.
+
+    .PARAMETER Sha256
+    The archive's SHA-256.
+
+    .PARAMETER ExpectedFileCount
+    How many files the archive holds.
+
+    .PARAMETER AsStep
+    Return the step for Invoke-DeployBundle, or for a swap's -AfterSwap, instead of running it.
+
+    .PARAMETER AsScript
+    Return the whole remote script instead of running it.
+
+    .PARAMETER Connection
+    The connection to use; by default the one Open-DeployConnection stored.
+
+    .PARAMETER NoRetry
+    Never retry, even after a dropped connection.
+
+    .EXAMPLE
+    $config = Install-HostConfig -AsStep -Name 'example' -CronFile 'deploy/example.cron' `
+        -Unit 'deploy/example-queue.service' -Service 'example-queue'
+    Switch-RemoteItemSet -AsStep -Root '/var/www/example.com' -Item 'app', 'public', 'vendor' `
+        -AfterSwap $config -OnRestore 'systemctl try-restart example-queue'
+    #>
+    [CmdletBinding(DefaultParameterSetName = 'Archive')]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidatePattern('^[a-z0-9][a-z0-9-]*$', Options = 'None')]
+        [string]$Name,
+
+        [string]$CronFile,
+
+        [ValidatePattern('^[A-Za-z0-9_-]+$')]
+        [string]$CronName,
+
+        [string[]]$Unit = @(),
+
+        [ValidatePattern('^[0-7]{3,4}$')]
+        [string]$UnitMode = '644',
+
+        [ValidatePattern('^[A-Za-z0-9_.@-]+$')]
+        [string[]]$Service = @(),
+
+        [ValidateRange(0, 3600)]
+        [int]$SettleSeconds = 2,
+
+        [switch]$NoBackup,
+
+        [Parameter(Mandatory, ParameterSetName = 'Archive')]
+        [string]$Archive,
+
+        [Parameter(Mandatory, ParameterSetName = 'Archive')]
+        [ValidatePattern('^[0-9a-fA-F]{64}$')]
+        [string]$Sha256,
+
+        [Parameter(Mandatory, ParameterSetName = 'Archive')]
+        [ValidateRange(1, [int]::MaxValue)]
+        [int]$ExpectedFileCount,
+
+        [Parameter(ParameterSetName = 'Step')]
+        [switch]$AsStep,
+
+        [Parameter(ParameterSetName = 'Archive')]
+        [switch]$AsScript,
+
+        [Parameter(ParameterSetName = 'Archive')]
+        [object]$Connection,
+
+        [Parameter(ParameterSetName = 'Archive')]
+        [switch]$NoRetry
+    )
+    if (-not $CronFile -and -not $Unit -and -not $Service) { throw 'Nothing to install: pass -CronFile, -Unit or -Service.' }
+    $Service = @($Service | ForEach-Object { $_ -replace '\.service$', '' })
+    if ($CronFile) { Assert-SafeRemoteName -Value $CronFile -What 'CronFile' -AllowSlash }
+    if (-not $CronName) { $CronName = $Name }
+    foreach ($path in $Unit) {
+        Assert-SafeRemoteName -Value $path -What 'Unit' -AllowSlash
+        if (($path -split '/')[-1] -notmatch '\.(service|timer|path|socket|target)$') { throw "Unit '$path' must be a .service, .timer, .path, .socket or .target file." }
+    }
+    $unitNames = @($Unit | ForEach-Object { ($_ -split '/')[-1] })
+    if (@($unitNames | Select-Object -Unique).Count -ne $unitNames.Count) { throw 'Two -Unit files have the same name.' }
+
+    $variable = [ordered]@{
+        cfg_state     = "/var/lib/shared-deploy/$Name"
+        cfg_record    = "/var/lib/shared-deploy/$Name/rollback"
+        cfg_cron      = $CronFile
+        cfg_cron_live = "/etc/cron.d/$CronName"
+        cfg_units     = $Unit -join ' '
+        cfg_unit_mode = $UnitMode
+        cfg_services  = $Service -join ' '
+        cfg_settle    = "$SettleSeconds"
+        cfg_no_backup = if ($NoBackup) { '1' } else { '' }
+    }
+    $check = @'
+for f in $cfg_cron $cfg_units; do
+  if [ ! -f "$bundle/$f" ]; then echo "The upload has no $f; nothing was changed." >&2; exit 3; fi
+done
+cfg_work=$(mktemp -d)
+if [ -n "$cfg_cron" ]; then
+  tr -d '\r' < "$bundle/$cfg_cron" > "$cfg_work/cron"
+  if [ -s "$cfg_work/cron" ] && [ -n "$(tail -c 1 "$cfg_work/cron")" ]; then echo >> "$cfg_work/cron"; fi
+  # Each job line names its user: the sixth field, or the second after an @keyword.
+  cfg_users=$(awk '
+    /^[ \t]*(#|$)/ { next }
+    /^[ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*=/ { next }
+    $1 ~ /^@/ { if (NF < 3) { print "BAD:" NR } else { print $2 }; next }
+    { if (NF < 7) { print "BAD:" NR } else { print $6 } }' "$cfg_work/cron")
+  cfg_bad=$(printf '%s\n' "$cfg_users" | sed -n 's/^BAD://p' | tr '\n' ' ')
+  if [ -n "$cfg_bad" ]; then
+    rm -rf "$cfg_work"
+    echo "$cfg_cron has a line that is not a schedule, a user and a command (line $cfg_bad); nothing was changed." >&2
+    exit 3
+  fi
+  for u in $(printf '%s\n' "$cfg_users" | sort -u); do
+    if ! id -u "$u" >/dev/null 2>&1; then rm -rf "$cfg_work"; echo "$cfg_cron runs a job as $u, who does not exist on the host; nothing was changed." >&2; exit 3; fi
+  done
+fi
+for u in $cfg_units; do
+  tr -d '\r' < "$bundle/$u" > "$cfg_work/$(basename "$u")"
+done
+mkdir -p "$cfg_state"
+chmod 700 "$cfg_state"
+# A retry of this run first undoes what its cut-off attempt changed. A record an earlier
+# deploy left, kept for Restore-HostConfig, goes with its copies: this run keeps its own.
+cfg_run="run ${token:-none}"
+if [ -f "$cfg_record" ]; then
+  if [ "$(head -n 1 "$cfg_record")" = "$cfg_run" ]; then cfg_undo; else rm -f "$cfg_record"; fi
+fi
+find "$cfg_state" -maxdepth 1 -name '*.old' -type f -delete
+printf '%s\n' "$cfg_run" > "$cfg_record"
+cfg_was_active=
+for s in $cfg_services; do
+  if systemctl is-active --quiet "$s" 2>/dev/null; then cfg_was_active="$cfg_was_active $s"; fi
+done
+cfg_abort() {
+  cfg_rc=$?
+  if [ "$cfg_rc" -ne 0 ]; then
+    echo "Putting the cron file and units back (exit $cfg_rc)." >&2
+    cfg_undo
+    for s in $cfg_services; do
+      case " $cfg_was_active " in
+        *" $s "*) systemctl reset-failed "$s" 2>/dev/null || true; systemctl restart "$s" || true ;;
+        *) systemctl stop "$s" 2>/dev/null || true ;;
+      esac
+    done
+  fi
+  rm -rf "$cfg_work"
+  exit "$cfg_rc"
+}
+trap cfg_abort EXIT
+'@
+    $install = @'
+cfg_changed_units=
+cfg_new_units=
+# cfg_put <file> <live path> <mode>: installs the file where it differs, its previous copy
+# kept and the change recorded first, and sets cfg_did when it did. Called on its own line,
+# never as a condition, so set -e still stops it at a failed copy or install.
+cfg_put() {
+  cfg_did=
+  if cmp -s "$1" "$2"; then return 0; fi
+  saved=$(cfg_saved "$2")
+  if [ -f "$2" ]; then
+    cp -p "$2" "$saved"
+    printf 'file %s changed\n' "$2" >> "$cfg_record"
+  else
+    printf 'file %s new\n' "$2" >> "$cfg_record"
+  fi
+  install -m "$3" -o root -g root "$1" "$2"
+  cfg_did=1
+  echo "Installed $2."
+}
+if [ -n "$cfg_cron" ]; then
+  cfg_put "$cfg_work/cron" "$cfg_cron_live" 644
+fi
+for u in $cfg_units; do
+  name=$(basename "$u")
+  live="/etc/systemd/system/$name"
+  had=
+  if [ -f "$live" ]; then had=1; fi
+  cfg_put "$cfg_work/$name" "$live" "$cfg_unit_mode"
+  if [ -n "$cfg_did" ]; then
+    cfg_changed_units="$cfg_changed_units $name"
+    if [ -z "$had" ]; then cfg_new_units="$cfg_new_units $name"; fi
+  fi
+done
+if [ -n "$cfg_changed_units" ]; then
+  systemctl daemon-reload
+  for name in $cfg_changed_units; do
+    case " $cfg_new_units " in
+      *" $name "*)
+        case "$name" in
+          *.timer) systemctl enable --now --quiet "$name" ;;
+          *.service) case " $cfg_services " in *" ${name%.service} "*) systemctl enable --quiet "$name" ;; esac ;;
+        esac
+        ;;
+      *)
+        case "$name" in *.service) case " $cfg_services " in *" ${name%.service} "*) continue ;; esac ;; esac
+        systemctl try-restart "$name" || true
+        ;;
+    esac
+  done
+fi
+# A worker that failed or restarted often may be held by systemd's start limit; reset-failed
+# clears it, so the restart is never refused.
+for s in $cfg_services; do systemctl reset-failed "$s" 2>/dev/null || true; systemctl restart "$s" || true; done
+if [ -n "$cfg_services" ]; then sleep "$cfg_settle"; fi
+cfg_failed=
+for s in $cfg_services; do
+  if ! systemctl is-active --quiet "$s"; then
+    cfg_failed="$cfg_failed $s"
+    journalctl -u "$s" -n 30 --no-pager >&2 || true
+  fi
+done
+if [ -n "$cfg_failed" ]; then echo "Did not stay active:$cfg_failed" >&2; exit 1; fi
+trap - EXIT
+rm -rf "$cfg_work"
+if [ -n "$cfg_no_backup" ]; then
+  rm -f "$cfg_record"
+  find "$cfg_state" -maxdepth 1 -name '*.old' -type f -delete
+fi
+if [ -n "$cfg_services" ]; then echo "Active: $cfg_services"; fi
+'@
+    $step = Join-ShellScript -Variable $variable -Body @((Get-HostConfigShell), $check, $install)
+    if ($AsStep) { return $step }
+    Invoke-DeployBundle -Archive $Archive -Sha256 $Sha256 -ExpectedFileCount $ExpectedFileCount -Step $step -AsScript:$AsScript -Connection $Connection -NoRetry:$NoRetry
+}
+
+function Restore-HostConfig {
+    <#
+    .SYNOPSIS
+    Puts back the cron file and units the last Install-HostConfig changed, after a deploy that went in but failed its smoke check, and restarts the workers.
+
+    .DESCRIPTION
+    Reads /var/lib/shared-deploy/<Name>/rollback, which the last deploy wrote: each file it
+    changed comes back from its previous copy, each it added is removed (a new unit stopped
+    and disabled first), and systemd reloads. Then each -Service restarts and must be
+    active after -SettleSeconds. When the last deploy changed nothing, or ran with
+    -NoBackup, there is nothing to put back and only the restart runs.
+
+    Run it after the code is back (Restore-RemoteItemSet or Restore-RemoteDirectory), so the
+    workers restart on the old code: one Invoke-RemoteStep with both -AsScript blocks, in
+    that order. One connection.
+
+    .PARAMETER Name
+    The site's short name, as given to Install-HostConfig.
+
+    .PARAMETER Service
+    The services restarted once the files are back: the workers.
+
+    .PARAMETER SettleSeconds
+    How long to wait before the is-active check.
+
+    .PARAMETER AsScript
+    Return the shell block instead of running it, to join with others in Invoke-RemoteStep.
+
+    .PARAMETER Connection
+    The connection to use; by default the one Open-DeployConnection stored.
+
+    .PARAMETER NoRetry
+    Never retry, even after a dropped connection.
+
+    .EXAMPLE
+    Invoke-SmokeCheck -SiteUrl 'https://example.com' -EntryScript $entry -Rollback {
+        Invoke-RemoteStep -Script @(
+            Restore-RemoteItemSet -AsScript -Root '/var/www/example.com' -Item 'app', 'public', 'vendor'
+            Restore-HostConfig -AsScript -Name 'example' -Service 'example-queue'
+        )
+    }
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidatePattern('^[a-z0-9][a-z0-9-]*$', Options = 'None')]
+        [string]$Name,
+
+        [ValidatePattern('^[A-Za-z0-9_.@-]+$')]
+        [string[]]$Service = @(),
+
+        [ValidateRange(0, 3600)]
+        [int]$SettleSeconds = 2,
+
+        [switch]$AsScript,
+
+        [object]$Connection,
+
+        [switch]$NoRetry
+    )
+    $Service = @($Service | ForEach-Object { $_ -replace '\.service$', '' })
+    $variable = [ordered]@{
+        cfg_state    = "/var/lib/shared-deploy/$Name"
+        cfg_record   = "/var/lib/shared-deploy/$Name/rollback"
+        cfg_services = $Service -join ' '
+        cfg_settle   = "$SettleSeconds"
+    }
+    $restore = @'
+if [ -f "$cfg_record" ] && [ "$(wc -l < "$cfg_record")" -gt 1 ]; then
+  cfg_undo
+else
+  rm -f "$cfg_record"
+  echo 'The last deploy changed no cron file or unit; nothing to put back.'
+fi
+find "$cfg_state" -maxdepth 1 -name '*.old' -type f -delete 2>/dev/null || true
+# A worker that failed or restarted often may be held by systemd's start limit; reset-failed
+# clears it, so the restart is never refused.
+for s in $cfg_services; do systemctl reset-failed "$s" 2>/dev/null || true; systemctl restart "$s" || true; done
+if [ -n "$cfg_services" ]; then sleep "$cfg_settle"; fi
+cfg_down=
+for s in $cfg_services; do
+  if ! systemctl is-active --quiet "$s"; then cfg_down="$cfg_down $s"; journalctl -u "$s" -n 30 --no-pager >&2 || true; fi
+done
+if [ -n "$cfg_down" ]; then echo "Did not come back up:$cfg_down" >&2; exit 1; fi
+if [ -n "$cfg_services" ]; then echo "Back up: $cfg_services"; fi
+'@
+    $script = Join-ShellScript -Variable $variable -Body @((Get-HostConfigShell), $restore)
+    if ($AsScript) { return $script }
+    Invoke-RemoteFlow -Connection $Connection -Script $script -NoRetry:$NoRetry -FailureMessage "Putting $Name's cron file and units back failed on the host"
+}
+
+#endregion
+
 #region Scheduled backup
 
 function Assert-UnitPath {
@@ -4445,11 +4867,12 @@ function Assert-UnitPath {
 function Install-BackupTimer {
     <#
     .SYNOPSIS
-    Installs or updates a project's daily database backup, a systemd timer and its oneshot service, and checks it with a first run whenever it changes.
+    Installs or updates a project's daily backup of its database or of a folder, a systemd timer and its oneshot service, and checks it with a first run whenever it changes.
 
     .DESCRIPTION
-    A project's backup timer, installed by the deploy rather than by hand. In one remote
-    run on the held connection:
+    A project's backup timer, installed by the deploy rather than by hand. It backs up a
+    SQLite database (-Database), a folder such as the site's uploads (-Folder), or runs the
+    project's own backup command (-Command). In one remote run on the held connection:
       - the units, and the shared job's script unless -Command names the project's own, are
         written here and compared with the live copies (cmp); if all match, nothing changes;
       - if any differs or is new, the previous copies are kept aside, the new ones
@@ -4480,6 +4903,20 @@ function Install-BackupTimer {
     then start the service again. The job's own header on the host gives the line with
     its paths.
 
+    The folder job archives -Folder with tar, compressed with gzip, as -Owner, to
+    <archive>.partial in -Directory; gzip -t and a full tar listing must pass before it
+    takes the day's name, <Prefix>YYYY-MM-DD<Suffix>.gz (UTC), so <Name>-2026-01-31.tar.gz.
+    tar's warning that a file changed while it was read (exit 1) leaves the archive whole,
+    holding that file as it was read, and the run says so; any other failure leaves the
+    earlier archives as they are. Archives older than -Keep days are removed, and nothing
+    else in -Directory is touched. Every archive is a whole copy of the folder, so a large
+    folder may want a smaller -Keep. -Directory must sit outside -Folder and outside the
+    web root, and the service writes only there: it reads -Folder under ProtectSystem=strict.
+    To put the folder back, stop what writes to it, move it aside, and unpack the archive
+    beside it as root, which keeps every file's owner:
+      mv <Folder> <Folder>.before-restore && tar -xzf <archive> -C <Folder's parent>
+    The job's header on the host gives the line with its paths.
+
     Call it after the smoke check, so a deploy that rolls back changes no backup. The
     service carries the standard hardening (ProtectSystem=strict, UMask=0077 and the rest)
     and writes only to -ReadWritePath. The copies stay on the host; the copy off it is the
@@ -4487,21 +4924,27 @@ function Install-BackupTimer {
 
     .PARAMETER Name
     The project's short name: the units are <Name>-backup.service and <Name>-backup.timer,
-    and the shared job is /usr/local/libexec/shared-deploy/<Name>-backup.
+    and the shared job is /usr/local/libexec/shared-deploy/<Name>-backup. A project that
+    backs up its database and a folder installs two timers, under two names (example and
+    example-media).
 
     .PARAMETER Database
     The live SQLite database on the host, for the shared job.
 
+    .PARAMETER Folder
+    The live folder on the host, such as the site's uploads, for the shared folder job.
+
     .PARAMETER Directory
-    Where the shared job writes its copies; by default a backups folder beside the
-    database. It is created if missing and given to -Owner, since the job runs as that user.
+    Where the shared job writes its copies; for a database by default a backups folder
+    beside it, and for a folder always given. It is created if missing and given to
+    -Owner, since the job runs as that user.
 
     .PARAMETER Prefix
     What the copies' names start with; by default <Name>-.
 
     .PARAMETER Suffix
     What follows the date in the copies' names, before .gz; by default the database's own
-    extension, such as .sqlite.
+    extension, such as .sqlite, or .tar for a folder.
 
     .PARAMETER Keep
     Days of copies kept: 28 unless set.
@@ -4518,11 +4961,12 @@ function Install-BackupTimer {
 
     .PARAMETER ReadWritePath
     The paths the service may write under ProtectSystem=strict. For the shared job, by
-    default the database's folder (SQLite writes its -shm there) and -Directory.
+    default the database's folder (SQLite writes its -shm there) and -Directory, or for a
+    folder -Directory alone.
 
     .PARAMETER Owner
     user or user:group the service runs as: the app's own user (www-data for a PHP site),
-    which can read the database. A bare user also names the group.
+    which can read the database or the folder. A bare user also names the group.
 
     .PARAMETER OnCalendar
     When it runs: 10:00 UTC every day unless set, after any evening has closed. A missed
@@ -4532,7 +4976,8 @@ function Install-BackupTimer {
     The spread after -OnCalendar, so the projects' backups don't all start at once.
 
     .PARAMETER Description
-    The units' description; by default "<Name> daily database backup".
+    The units' description; by default "<Name> daily database backup", or "<Name> daily
+    folder backup".
 
     .PARAMETER AsScript
     Return the remote script instead of running it.
@@ -4549,6 +4994,9 @@ function Install-BackupTimer {
     .EXAMPLE
     Install-BackupTimer -Name 'example' -Command '/opt/example/example backup' -Owner 'example' `
         -EnvironmentFile '/etc/example/example.env' -WorkingDirectory '/opt/example' -ReadWritePath '/opt/example'
+
+    .EXAMPLE
+    Install-BackupTimer -Name 'example-media' -Folder '/var/www/example.com/media' -Directory '/var/backups/example/media' -Owner 'www-data' -Keep 14
     #>
     [CmdletBinding(DefaultParameterSetName = 'Shared')]
     [OutputType([string])]
@@ -4560,18 +5008,25 @@ function Install-BackupTimer {
         [Parameter(Mandatory, ParameterSetName = 'Shared')]
         [string]$Database,
 
+        [Parameter(Mandatory, ParameterSetName = 'Folder')]
+        [string]$Folder,
+
         [Parameter(ParameterSetName = 'Shared')]
+        [Parameter(Mandatory, ParameterSetName = 'Folder')]
         [string]$Directory,
 
         [Parameter(ParameterSetName = 'Shared')]
+        [Parameter(ParameterSetName = 'Folder')]
         [ValidatePattern('^[A-Za-z0-9._@-]*$')]
         [string]$Prefix,
 
         [Parameter(ParameterSetName = 'Shared')]
+        [Parameter(ParameterSetName = 'Folder')]
         [ValidatePattern('^[A-Za-z0-9._@-]*$')]
         [string]$Suffix,
 
         [Parameter(ParameterSetName = 'Shared')]
+        [Parameter(ParameterSetName = 'Folder')]
         [ValidateRange(1, 3650)]
         [int]$Keep = 28,
 
@@ -4586,6 +5041,7 @@ function Install-BackupTimer {
         [string]$WorkingDirectory,
 
         [Parameter(ParameterSetName = 'Shared')]
+        [Parameter(ParameterSetName = 'Folder')]
         [Parameter(Mandatory, ParameterSetName = 'Command')]
         [string[]]$ReadWritePath,
 
@@ -4608,7 +5064,7 @@ function Install-BackupTimer {
         [switch]$NoRetry
     )
     $user, $group = Split-Owner -Owner $Owner
-    if (-not $Description) { $Description = "$Name daily database backup" }
+    if (-not $Description) { $Description = if ($PSCmdlet.ParameterSetName -eq 'Folder') { "$Name daily folder backup" } else { "$Name daily database backup" } }
     $unit = "$Name-backup"
     $job = ''
     $jobText = ''
@@ -4701,6 +5157,72 @@ echo "Backup: $dest ($(du -h "$dest" | cut -f1) compressed, $size uncompressed);
         $jobLines.Add($jobBody)
         $jobText = ($jobLines -join "`n") -replace "`r", ''
         if ("$Directory/$Prefix$Suffix" -match "'") { throw 'The backup path cannot hold a single quote (it goes into VACUUM INTO).' }
+        $execStart = $job
+        $EnvironmentFile = ''
+        $WorkingDirectory = ''
+    } elseif ($PSCmdlet.ParameterSetName -eq 'Folder') {
+        Assert-UnitPath -Value $Folder -What 'Folder'
+        $Folder = $Folder.TrimEnd('/')
+        $parent = $Folder -replace '/[^/]*$', ''
+        if (-not $parent) { throw "Folder '$Folder' must be a folder inside another, not one at the root." }
+        Assert-UnitPath -Value $Directory -What 'Directory'
+        $Directory = $Directory.TrimEnd('/')
+        if ($Directory -eq $Folder -or $Directory.StartsWith("$Folder/")) { throw "Directory '$Directory' must sit outside the folder it backs up, '$Folder'." }
+        if (-not $PSBoundParameters.ContainsKey('Prefix')) { $Prefix = "$Name-" }
+        if (-not $PSBoundParameters.ContainsKey('Suffix')) { $Suffix = '.tar' }
+        if (-not $ReadWritePath) { $ReadWritePath = @($Directory) }
+        $job = "/usr/local/libexec/shared-deploy/$unit"
+        $jobVariable = [ordered]@{
+            src    = $Folder
+            dir    = $Directory
+            prefix = $Prefix
+            suffix = $Suffix
+            keep   = "$Keep"
+        }
+        $jobBody = @'
+if [ ! -d "$src" ]; then echo "No folder at $src." >&2; exit 1; fi
+for t in tar gzip; do
+  if ! command -v "$t" >/dev/null; then echo "$t is not installed on the host." >&2; exit 1; fi
+done
+day=$(date -u +%Y-%m-%d)
+dest="$dir/$prefix$day$suffix.gz"
+part="$dest.partial"
+mkdir -p "$dir"
+rm -f "$part"
+trap 'rm -f "$part"' EXIT
+# tar exits 1 when a file changed while it was read: the archive is still whole, holding that
+# file as it was read. Anything above 1 is a failure, and the earlier archives stay.
+rc=0
+tar -C "$(dirname "$src")" -czf "$part" "$(basename "$src")" || rc=$?
+if [ "$rc" -gt 1 ]; then echo "tar could not archive $src (exit $rc), so the earlier archives stay as they are." >&2; exit 1; fi
+note=
+if [ "$rc" -eq 1 ]; then note='; some files changed while they were read'; fi
+gzip -t "$part"
+entries=$(tar -tzf "$part" | wc -l)
+mv -f "$part" "$dest"
+size=$(du -sh "$src" | cut -f1)
+# Archives older than $keep days go. Nothing else in the folder is touched.
+cutoff=$(date -u -d "$keep days ago" +%Y-%m-%d)
+pruned=0
+for f in "$dir/$prefix"[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]"$suffix.gz"; do
+  [ -e "$f" ] || continue
+  d=${f#"$dir/$prefix"}
+  d=${d%"$suffix.gz"}
+  if [[ "$d" < "$cutoff" ]]; then rm -f -- "$f"; pruned=$((pruned + 1)); fi
+done
+echo "Backup: $dest ($(du -h "$dest" | cut -f1) compressed, $size uncompressed, $entries entries); $pruned older removed$note."
+'@
+        $jobLines = [System.Collections.Generic.List[string]]::new()
+        $jobLines.Add('#!/bin/bash')
+        $jobLines.Add("# $Description, written by SharedDeploy's Install-BackupTimer at each deploy.")
+        $jobLines.Add("# Change the project's deploy script, not this file: the next deploy rewrites it.")
+        $jobLines.Add("# Each day's archive of $Folder is $Directory/$Prefix<YYYY-MM-DD>$Suffix.gz (UTC), $Keep days kept.")
+        $jobLines.Add('# To put one back, stop what writes to the folder, run this line as root, then start it again:')
+        $jobLines.Add("#   mv $Folder $Folder.before-restore && tar -xzf $Directory/$Prefix<YYYY-MM-DD>$Suffix.gz -C $parent")
+        $jobLines.Add('set -euo pipefail')
+        foreach ($key in $jobVariable.Keys) { $jobLines.Add("$key=$(ConvertTo-ShellLiteral -Value $jobVariable[$key])") }
+        $jobLines.Add($jobBody)
+        $jobText = ($jobLines -join "`n") -replace "`r", ''
         $execStart = $job
         $EnvironmentFile = ''
         $WorkingDirectory = ''
@@ -4955,22 +5477,171 @@ function Copy-LiveDatabase {
     }
 }
 
+function Copy-LiveFolder {
+    <#
+    .SYNOPSIS
+    Pulls a compressed archive of a live folder, such as the site's uploads, to this machine: made fresh on the host, downloaded and checked, three kept here, the host's copy removed.
+
+    .DESCRIPTION
+    The folder's counterpart of Copy-LiveDatabase, and with it the copy that leaves the
+    host:
+      - tar archives the folder on the host, compressed with gzip, into the SSH user's
+        ~/.shared-deploy, under umask 077, and gzip -t checks it. With -Owner, tar runs as
+        that user through runuser, so it reads what the site's own user can;
+      - the archive is downloaded and checked against the host's SHA-256, then kept as
+        <Destination>\<folder name>-<yyyyMMdd-HHmmss>.tar.gz; the newest three are kept;
+      - the host's archive is removed whether or not the download worked.
+    The archive is kept, not unpacked: it holds live uploads, so it stays on this machine,
+    git-ignored. Returns the local archive's path, or nothing when there was no folder.
+    Every call rides the connection Open-DeployConnection holds.
+
+    .PARAMETER Folder
+    The live folder on the host.
+
+    .PARAMETER Destination
+    The local folder the archives are kept in, such as devdata\media.
+
+    .PARAMETER Owner
+    user or user:group to read the folder as, through runuser, such as www-data. The group
+    is passed to runuser only when given.
+
+    .PARAMETER Connection
+    The connection to use; by default the one Open-DeployConnection stored.
+
+    .PARAMETER NoRetry
+    Never retry, even after a dropped connection.
+
+    .EXAMPLE
+    if (-not $NoDbPull) { $null = Copy-LiveFolder -Folder '/var/www/example.com/media' -Destination (Join-Path $repoRoot 'devdata\media') -Owner 'www-data' }
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Folder,
+
+        [Parameter(Mandatory)]
+        [string]$Destination,
+
+        [string]$Owner,
+
+        [object]$Connection,
+
+        [switch]$NoRetry
+    )
+    $Folder = $Folder.TrimEnd('/')
+    Assert-RemotePath -Value $Folder -What 'Folder'
+    $leaf = Split-Path -Path $Folder -Leaf
+    Assert-SafeRemoteName -Value $leaf -What "Folder's name"
+    $user, $group = Split-Owner -Owner $Owner
+    if ($Owner -notmatch ':') { $group = '' }
+    $active = Get-ActiveConnection -Connection $Connection
+    $archive = ".shared-deploy/$(Get-PathKey -Value $Folder).pull.tar.gz"
+    $variable = [ordered]@{
+        src            = $Folder
+        archive        = $archive
+        snapshot_user  = $user
+        snapshot_group = $group
+    }
+    $take = @'
+umask 077
+if [ ! -d "$src" ]; then echo no-folder; exit 0; fi
+for t in tar gzip; do
+  if ! command -v "$t" >/dev/null; then echo "$t is not installed on the host." >&2; exit 3; fi
+done
+mkdir -p "$HOME/.shared-deploy"
+chmod 700 "$HOME/.shared-deploy"
+rc=0
+snapshot_as tar -C "$(dirname "$src")" -czf - "$(basename "$src")" > "$HOME/$archive" || rc=$?
+if [ "$rc" -gt 1 ]; then rm -f "$HOME/$archive"; echo "tar could not archive $src (exit $rc)." >&2; exit 4; fi
+if ! gzip -t "$HOME/$archive"; then rm -f "$HOME/$archive"; echo "The archive of $src failed gzip -t." >&2; exit 4; fi
+echo "archive-ok $(du -h "$HOME/$archive" | cut -f1)"
+'@
+    Write-Step "Archiving $Folder on the host..."
+    $script = Join-ShellScript -Variable $variable -Body @((Get-SnapshotShell), $take)
+    $lines = Invoke-Remote -Script $script -Connection $active -NoRetry:$NoRetry
+    $made = @($lines | Where-Object { $_ -like 'archive-ok *' })
+    if (-not $made) {
+        Write-Host "    No folder at $Folder on the host; skipping the pull."
+        return
+    }
+    try {
+        if (-not (Test-Path -LiteralPath $Destination)) { $null = New-Item -ItemType Directory -Path $Destination -Force }
+        $local = Join-Path $Destination ('{0}-{1}.tar.gz' -f $leaf, (Get-Date -Format 'yyyyMMdd-HHmmss'))
+        Write-Step "Downloading the archive ($(($made[0] -split ' ', 2)[1])) -> $local ..."
+        if (-not (Get-File -Source $archive -Destination $local -Connection $active -NoRetry:$NoRetry)) {
+            throw "The archive of $Folder could not be downloaded; nothing was kept."
+        }
+        $stale = @(Get-ChildItem -LiteralPath $Destination -Filter "$leaf-*.tar.gz" -File |
+                Where-Object { $_.Name -match ('^{0}-\d{{8}}-\d{{6}}\.tar\.gz$' -f [regex]::Escape($leaf)) } |
+                Sort-Object -Property Name -Descending | Select-Object -Skip $script:SnapshotKeep)
+        $stale | Remove-Item -Force
+        Write-Ok "Archive of $Folder kept: $local (newest $($script:SnapshotKeep) kept; they hold live files, keep them local)."
+        $local
+    } finally {
+        $cleanup = Invoke-RemoteCore -Connection $active -Script "rm -f $(ConvertTo-ShellLiteral -Value $archive)" -NoRetry:$NoRetry
+        if ($cleanup.ExitCode -ne 0) { Write-Warning "The archive on the host could not be removed: ~/$archive" }
+    }
+}
+
 #endregion
 
 #region Smoke check
 
+function Add-DeployToken {
+    <#
+    .SYNOPSIS
+    The URL with a deploy=<token> query parameter added, before any #fragment, so no cached answer can be served for it.
+    #>
+    param([string]$Uri, [string]$Token)
+    $fragment = ''
+    $hash = $Uri.IndexOf('#')
+    if ($hash -ge 0) {
+        $fragment = $Uri.Substring($hash)
+        $Uri = $Uri.Substring(0, $hash)
+    }
+    $separator = if ($Uri.Contains('?')) { '&' } else { '?' }
+    "$Uri${separator}deploy=$([uri]::EscapeDataString($Token))$fragment"
+}
+
+function Test-ReportedVersion {
+    <#
+    .SYNOPSIS
+    Whether a health answer reports a version: its JSON's top-level version field, or else the version as a whole word in the body; a leading v is ignored on both sides. Returns what it found, for the message.
+    #>
+    param([string]$Content, [string]$Version)
+    $want = $Version -replace '^v', ''
+    $json = $null
+    try { $json = $Content | ConvertFrom-Json -ErrorAction Stop } catch { $json = $null }
+    if ($json -is [pscustomobject] -and $json.PSObject.Properties['version']) {
+        $found = [string]$json.version
+        return [pscustomobject]@{ Ok = (($found -replace '^v', '') -eq $want); Found = "version $found" }
+    }
+    $ok = $Content -match ('(?<![\w.-])v?' + [regex]::Escape($want) + '(?![\w.-])')
+    [pscustomobject]@{ Ok = $ok; Found = '' }
+}
+
 function Invoke-SmokeCheck {
     <#
     .SYNOPSIS
-    Fetches each listed URL from this machine, checks its status and optional text, and rolls back and throws if any fails.
+    Fetches each listed URL from this machine, each with a fresh ?deploy= token, checks its status and optional text or version, and rolls back and throws if any fails.
 
     .DESCRIPTION
     The checks a deploy makes once the new release is in, such as a page that must name the
-    build it ships, a form endpoint that must answer 405 to a GET, a /healthz, a POST whose
-    answer must hold known words, or a plugin index that must list the new version.
-    Each check is a URL with an expected status (200 unless given) and, optionally, text
-    the body must contain (case-sensitive, as grep). A check is tried up to -Attempts
-    times, -DelaySeconds apart. A line is printed for each.
+    build it ships, a form endpoint that must answer 405 to a GET, a /healthz that must
+    report the new version, a POST whose answer must hold known words, or a plugin index
+    that must list the new version. Each check is a URL with an expected status (200 unless
+    given) and, optionally, text the body must contain (case-sensitive, as grep) or the
+    version it must report. A check is tried up to -Attempts times, -DelaySeconds apart. A
+    line is printed for each.
+
+    -SiteUrl adds the two checks most deploys make: with -Version, <SiteUrl>/healthz must
+    report that version, and with -EntryScript, <SiteUrl>/ must name that script (the
+    content-hashed bundle this build's index.html loads).
+
+    Every request carries a query parameter of its own, deploy=<DeployId>-<attempt>, so
+    neither Cloudflare nor any other cache can answer it with a copy from before the
+    deploy. A check that must go out exactly as written says CacheBust = $false.
 
     A failed smoke check rolls back automatically: pass -Rollback with
     what puts the previous release back, or -NoRollback for a deploy with nothing to undo;
@@ -4983,8 +5654,23 @@ function Invoke-SmokeCheck {
 
     .PARAMETER Check
     One hashtable per check: Url (required), Status (a code or a list, default 200),
-    Contains (text the body must hold), Method (default GET), Body and ContentType (for a
-    POST).
+    Contains (text the body must hold), Version (the version the body must report, read as
+    -Version reads it), Method (default GET), Body and ContentType (for a POST), and
+    CacheBust ($false sends the URL without the deploy token).
+
+    .PARAMETER SiteUrl
+    The site's address, as visitors reach it, for -Version and -EntryScript.
+
+    .PARAMETER Version
+    The version <SiteUrl>/healthz must report: the top-level version field of its JSON, or
+    else the version as a whole word in its body. A leading v is ignored on either side.
+
+    .PARAMETER EntryScript
+    Text <SiteUrl>/ must contain: the entry script this build's index.html names, such as
+    /assets/index-B2x9kQ1c.js.
+
+    .PARAMETER DeployId
+    The token's stem; by default the time (UTC) and a random part.
 
     .PARAMETER Attempts
     How many times to try each URL before it counts as failed.
@@ -5009,19 +5695,31 @@ function Invoke-SmokeCheck {
     Invoke-SmokeCheck -Url 'https://example.com/' -Rollback { Restore-RemoteDirectory -Live '/var/www/example.com/dist' }
 
     .EXAMPLE
+    Invoke-SmokeCheck -SiteUrl 'https://example.com' -Version $release.Tag -EntryScript '/assets/index-B2x9kQ1c.js' -Attempts 5 `
+        -Rollback { Restore-ServiceBinary -ServiceName 'example' -Binary '/opt/example/example' }
+
+    .EXAMPLE
     Invoke-SmokeCheck -Check @(
         @{ Url = 'https://example.com/'; Contains = 'vue@3.5.0/' }
         @{ Url = 'https://example.com/contact.php'; Status = 405 }
     ) -NoRollback
     #>
-    [CmdletBinding(DefaultParameterSetName = 'Url')]
+    [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
-        [Parameter(Mandatory, Position = 0, ParameterSetName = 'Url')]
-        [string[]]$Url,
+        [Parameter(Position = 0)]
+        [string[]]$Url = @(),
 
-        [Parameter(Mandatory, ParameterSetName = 'Check')]
-        [hashtable[]]$Check,
+        [hashtable[]]$Check = @(),
+
+        [string]$SiteUrl,
+
+        [string]$Version,
+
+        [string]$EntryScript,
+
+        [ValidatePattern('^[A-Za-z0-9._-]+$')]
+        [string]$DeployId,
 
         [ValidateRange(1, 600)]
         [int]$Attempts = 1,
@@ -5042,16 +5740,30 @@ function Invoke-SmokeCheck {
     if (-not $Rollback -and -not $NoRollback) {
         throw 'A failed smoke check rolls back: pass -Rollback with what puts the previous release back, or -NoRollback for a deploy with nothing to undo.'
     }
+    if (($Version -or $EntryScript) -and -not $SiteUrl) { throw '-Version and -EntryScript check the site at -SiteUrl: pass it too.' }
+    if (-not $DeployId) {
+        $DeployId = '{0}-{1}' -f [datetime]::UtcNow.ToString('yyyyMMddHHmmss', [cultureinfo]::InvariantCulture), [guid]::NewGuid().ToString('N').Substring(0, 8)
+    }
     $ProgressPreference = 'SilentlyContinue'
-    $checks = if ($PSCmdlet.ParameterSetName -eq 'Url') { $Url | ForEach-Object { @{ Url = $_ } } } else { $Check }
+    $checks = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($address in $Url) { $checks.Add(@{ Url = $address }) }
+    foreach ($entry in $Check) { $checks.Add($entry) }
+    if ($SiteUrl) {
+        $site = $SiteUrl.TrimEnd('/')
+        if ($Version) { $checks.Add(@{ Url = "$site/healthz"; Version = $Version }) }
+        if ($EntryScript) { $checks.Add(@{ Url = "$site/"; Contains = $EntryScript }) }
+    }
+    if ($checks.Count -eq 0) { throw 'Nothing to check: pass -Url, -Check, or -SiteUrl with -Version or -EntryScript.' }
 
     $results = foreach ($entry in $checks) {
         if (-not $entry['Url']) { throw 'Every smoke check needs a Url.' }
         $method = if ($entry['Method']) { [string]$entry['Method'] } else { 'GET' }
         $expected = if ($entry.ContainsKey('Status')) { @($entry['Status'] | ForEach-Object { [int]$_ }) } else { @(200) }
         $text = [string]$entry['Contains']
+        $wantVersion = [string]$entry['Version']
+        $address = [string]$entry['Url']
+        $bust = -not ($entry.ContainsKey('CacheBust') -and -not $entry['CacheBust'])
         $request = @{
-            Uri                = [string]$entry['Url']
             Method             = $method
             TimeoutSec         = $TimeoutSec
             SkipHttpErrorCheck = $true
@@ -5062,14 +5774,18 @@ function Invoke-SmokeCheck {
         $status = $null
         $reason = $null
         for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+            $request.Uri = if ($bust) { Add-DeployToken -Uri $address -Token "$DeployId-$attempt" } else { $address }
             try {
                 $response = Invoke-WebRequest @request
                 $status = [int]$response.StatusCode
                 $content = if ($response.Content -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($response.Content) } else { [string]$response.Content }
+                $reported = if ($wantVersion -and $status -in $expected) { Test-ReportedVersion -Content $content -Version $wantVersion } else { $null }
                 $reason = if ($status -notin $expected) {
                     "answered $status, expected $($expected -join ' or ')"
                 } elseif ($text -and -not $content.Contains($text)) {
                     "answered $status but does not contain '$text'"
+                } elseif ($reported -and -not $reported.Ok) {
+                    if ($reported.Found) { "answered $status but reports $($reported.Found), not $wantVersion" } else { "answered $status but does not report $wantVersion" }
                 } else {
                     $null
                 }
@@ -5082,12 +5798,13 @@ function Invoke-SmokeCheck {
         }
 
         if ($reason) {
-            Write-Host "    FAILED: $method $($request.Uri) $reason" -ForegroundColor Red
+            Write-Host "    FAILED: $method $address $reason" -ForegroundColor Red
         } else {
-            Write-Ok "$method $($request.Uri) -> $status$(if ($text) { ", contains '$text'" })"
+            $detail = if ($text) { ", contains '$text'" } elseif ($wantVersion) { ", reports $wantVersion" } else { '' }
+            Write-Ok "$method $address -> $status$detail"
         }
         [pscustomobject]@{
-            Url    = $request.Uri
+            Url    = $address
             Method = $method
             Status = $status
             Ok     = -not $reason
@@ -5150,7 +5867,10 @@ Export-ModuleMember -Alias 'Fail' -Function @(
     'Backup-RemoteDatabase'
     'Export-PluginRepository'
     'Publish-PluginRepository'
+    'Install-HostConfig'
+    'Restore-HostConfig'
     'Install-BackupTimer'
     'Copy-LiveDatabase'
+    'Copy-LiveFolder'
     'Invoke-SmokeCheck'
 )

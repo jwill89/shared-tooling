@@ -6,7 +6,7 @@ What every project tests, how it tests it, and where each stack keeps and runs i
 
 | Stack | Tests live in | Runner and shared setup | CI |
 | --- | --- | --- | --- |
-| Vue and TypeScript | `src/__tests__/`, named `*.spec.ts` | Vitest, configured inside `vite.config.ts` with `test/web`'s `vitestDefaults` | `web.yml` |
+| Vue or React, and TypeScript | `src/__tests__/`, named `*.spec.ts` (`*.spec.tsx` for a React component) | Vitest, configured inside `vite.config.ts` with `test/web`'s `vitestDefaults` | `web.yml` |
 | Go | Beside the code, named `*_test.go` | `go test` | `go.yml` |
 | PHP | `tests/`, in the suites the project's `phpunit.xml` names | PHPUnit or Pest, on a copy of `test/php/phpunit.xml.dist` | `php.yml` |
 | End-to-end | `e2e/` | Playwright, with `test/e2e`'s `playwrightDefaults` and axe from `test/a11y` | `e2e.yml` |
@@ -22,6 +22,7 @@ What every project tests, how it tests it, and where each stack keeps and runs i
 - Every change ships with its tests, small features included. [review]
 - Every bug fix lands with a test that fails without it: write the test first and watch it fail. [review]
 - Each project's coverage floor sits a little under its current numbers, and CI fails below it: `test/web` sets Vitest's thresholds, `test/php/coverage-check.php` reads PHPUnit's report (pcov in CI), and `go.yml` runs `test/go/Test-CoverageFloor.ps1`. [CI]
+- `task check` holds the same floors locally, with the same numbers CI passes: Vitest's run with coverage, PHPUnit with coverage and `coverage-check.php`, and `task shared:go:coverage` for each Go module (`DIR=backend FLOOR=62.5 EXCLUDE=... COVERPKG=...`, as its `go.yml` call has them). [review]
 - A floor only rises: when a change drops coverage under it, add tests, never lower the floor. [review]
 - Sign-in and passkeys, permissions, migrations, imports, and deploy and rollback hold a higher bar than the floor, since mistakes there cost most. [review]
 - Generated code (sqlc, OpenAPI types) and startup wiring stay out of the coverage count. [review]
@@ -45,14 +46,16 @@ What every project tests, how it tests it, and where each stack keeps and runs i
 - A mechanical refactor is done by script and checked by script: method bodies byte-identical, spec paths and schemas unchanged. [review]
 - A CSS refactor is checked with a computed-style walk over every route, signed in and out, before and after. [review]
 
-## Vitest (Vue and TypeScript)
+## Vitest (Vue, React and TypeScript)
 
 - Specs live in `src/__tests__/`, named `*.spec.ts`. [review]
 - The Vitest config lives inside `vite.config.ts`, as `test: vitestDefaults({ ... })` from the shared `test/web` preset, and adds only the include, the floor and a setup file. [review]
 - The preset sets jsdom, puts mocks and stubbed globals back after each test, and measures v8 coverage over all of `src`, so a project doesn't restate any of that. [CI]
 - Tests that need a DOM run on jsdom, the preset's default; a suite with no DOM test passes `environment: 'node'`. [review]
 - The setup file stands in only for browser APIs jsdom lacks. [review]
+- A React app's specs use the same preset and the same rules; only the mounting library differs. [review]
 - Specs import `describe`, `it`, `expect` and `vi` from `vitest` (`globals: false`) and type-check under their own `tsconfig.vitest.json`, so app code stays free of Node types. [CI]
+- That file lists the app's own config first and `lint/web`'s base after it, which adds Node's types and takes in the specs the app config leaves out: `"extends": ["./tsconfig.app.json", "@jwill89/lint-web/tsconfig.vitest.json"]`. `web.yml` fails an app with Vitest specs that has no such file, or one that leaves a spec out, then type-checks the specs with it (vue-tsc where the app has it, else tsc); `task shared:web:specs` runs the same locally. [CI]
 - Component and view specs mount with `@vue/test-utils` and fake the server at one seam: a stubbed `fetch`, a mocked `useApi`, or a `stubApi` that fails the test on any call it didn't declare. [review]
 - Module-level state is reset in `beforeEach`. [review]
 - Every new composable, component and view gets a spec that covers the states and error paths a user can reach, not only the happy path. [review]

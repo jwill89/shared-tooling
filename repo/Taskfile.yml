@@ -56,6 +56,28 @@ tasks:
     cmds:
       - go run -C "{{.SHARED}}/lint/go" . -check {{.CLI_ARGS}}
 
+  changelog:links:
+    desc: Write the compare link under each CHANGELOG.md heading (-- -Path plugin/CHANGELOG.md -TagPrefix plugin-v for a second part)
+    cmds:
+      - pwsh -NoProfile -File "{{.SHARED}}/repo/Update-ChangelogLinks.ps1" {{.CLI_ARGS}}
+
+  changelog:check:
+    desc: Fail if a CHANGELOG.md heading has no compare link, as docs.yml checks (-- -Path 'CHANGELOG.md plugin/CHANGELOG.md')
+    cmds:
+      - pwsh -NoProfile -File "{{.SHARED}}/repo/Update-ChangelogLinks.ps1" -Check {{.CLI_ARGS}}
+
+  go:coverage:
+    desc: A Go module's tests with coverage, held to the floor go.yml holds (DIR=backend FLOOR=62.5 EXCLUDE=... COVERPKG=./...)
+    requires:
+      vars: [FLOOR]
+    cmds:
+      - pwsh -NoProfile -File "{{.SHARED}}/test/go/Invoke-GoCoverage.ps1" -Path "{{.DIR | default "."}}" -Floor {{.FLOOR}} -Exclude "{{.EXCLUDE}}" -CoverPkg "{{.COVERPKG}}"
+
+  web:specs:
+    desc: Type-check a front end's Vitest specs under its tsconfig.vitest.json, as web.yml does (DIR=web)
+    cmds:
+      - node "{{.SHARED}}/test/web/typecheck-specs.mjs" "{{.DIR | default "web"}}"
+
   update:
     desc: Move to a shared-tooling release (-- v1.1.0) - the submodule, the workflow refs and what's built from them
     cmds:

@@ -21,7 +21,7 @@ API statuses and the cache baseline are in [api-and-realtime.md](api-and-realtim
 - A setting in `.env` turns the CSP to report-only without a deploy. When production blocks something, flip it first, then fix. [review]
 - Every response, the SPA shell included, sends `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`. [test]
 - Every page's CSP sets `frame-ancestors 'none'`. [test]
-- HSTS is set at the reverse proxy. [review]
+- HSTS is set in each site's own vhost, in its port-443 block (`Header always set Strict-Transport-Security "max-age=31536000"`), not server-wide, so a site carries it wherever it moves ([deploy-and-ops.md](deploy-and-ops.md#apache-and-cloudflare)). [review]
 - A shared or unlisted page sends `X-Robots-Tag: noindex`. [review]
 
 ## Sign-in and sessions
@@ -122,7 +122,7 @@ API statuses and the cache baseline are in [api-and-realtime.md](api-and-realtim
 
 ## Behind Cloudflare and Apache
 
-- The visitor's address is restored once, in Apache: `mod_remoteip` trusts Cloudflare's `CF-Connecting-IP` only from Cloudflare's published ranges. [review]
+- The visitor's address is restored once, in Apache: `mod_remoteip` trusts Cloudflare's `CF-Connecting-IP` only from Cloudflare's published ranges. The two lines that do it, `RemoteIPHeader CF-Connecting-IP` and `RemoteIPTrustedProxyList /etc/apache2/cloudflare-ips.txt`, sit in each site's own vhost, not in a server-wide config. [review]
 - An app reads the address Apache gives it: a PHP app its `REMOTE_ADDR`, a Go service the last `X-Forwarded-For` entry, which is the one Apache appends. [review]
 - An app never reads `CF-Connecting-IP` itself. [review]
 - The list of Cloudflare's ranges is refreshed when Cloudflare changes it. [review]
@@ -155,5 +155,5 @@ The audit jobs each stack runs, and how packages are added and updated, are in [
 - In CI, `composer audit` includes dev packages, since they run there and on developer machines. [CI]
 - A security fix comes from the package itself. A framework's security release is applied even before the advisory database lists it. [review]
 - A finding in code the app never runs waits for its package's own fix, never a forced version. [review]
-- A public repo runs CodeQL, in its own `codeql.yml`, over its JavaScript or TypeScript, its C# (build mode none) and its workflows. CodeQL has no PHP support. [review]
+- A public repo runs CodeQL over its JavaScript or TypeScript, its C# (build mode none) and its workflows, by calling the shared `codeql.yml` with the languages it has, with CodeQL's default setup off in the repo's settings. CodeQL has no PHP support. [review]
 - A security problem is reported privately to the maintainer, never in a public issue. [review]

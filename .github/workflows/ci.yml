@@ -1,8 +1,10 @@
 name: CI
 
-# shared-tooling's own checks: its scripts with its own analyzer settings, its docs with
-# its own Markdown config, the golangci sync tool linted by the template it ships, every
-# workflow with actionlint, and the front-end package installing and linting a sample.
+# shared-tooling's own checks, the same `task check` runs: its scripts with its own
+# analyzer settings, its docs with its own Markdown config and the CHANGELOG's links, the
+# golangci sync tool linted by the template it ships, every workflow with actionlint,
+# every lint/web config and test preset loading from its own install, and OSV-Scanner
+# over the lockfiles.
 
 on:
   push:
@@ -60,9 +62,6 @@ jobs:
 
   web:
     runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: lint/web
     steps:
       - uses: actions/checkout@v7
         with:
@@ -71,13 +70,19 @@ jobs:
         with:
           node-version: 26
           cache: npm
-          cache-dependency-path: lint/web/package-lock.json
+          cache-dependency-path: |
+            lint/web/package-lock.json
+            test/a11y/package-lock.json
       - run: npm ci
-      # Every config loads, from this package's own install.
-      - run: |
-          node --input-type=module -e "
-            for (const m of ['./eslint.js', './eslint-react.js', './prettier.js', './stylelint.js', './stylelint-tailwind.js']) {
-              const config = (await import(m)).default
-              if (!config) throw new Error(m + ' exports nothing')
-            }
-          "
+        working-directory: lint/web
+      - run: npm ci
+        working-directory: test/a11y
+      # Every config and preset loads, from its own package's install.
+      - run: node scripts/test-presets.mjs
+
+  osv:
+    uses: ./.github/workflows/osv.yml
+    permissions:
+      contents: read
+      actions: read
+      security-events: write

@@ -1,1 +1,14 @@
 node_modules/
+
+# Build output: binaries, Go test binaries and coverage profiles, front-end builds,
+# coverage reports and Playwright's results.
+*.exe
+*.test
+*.out
+dist/
+build/
+coverage/
+test-results/
+
+# Editor state.
+.vscode/changelists.json

@@ -5,7 +5,8 @@ name: Docs and repo files
 #     .markdownlint-cli2.jsonc);
 #   - its .editorconfig and .gitattributes, still matching shared-tooling/repo above
 #     their project marker;
-#   - its shared workflow refs, naming the release its submodule holds.
+#   - its shared workflow refs, naming the release its submodule holds;
+#   - its changelogs: every version heading, and Unreleased, has its compare link.
 # Go-only repos need no Node locally for the Markdown: the VS Code extension lints in
 # the editor, and this runs it here.
 #
@@ -27,6 +28,10 @@ on:
         description: Where shared-tooling is checked out, relative to the repo.
         type: string
         default: shared
+      changelogs:
+        description: The changelogs whose compare links are checked, separated by spaces; a repo with two parts versioned apart lists both.
+        type: string
+        default: CHANGELOG.md
 
 permissions:
   contents: read
@@ -61,3 +66,10 @@ jobs:
         env:
           SHARED: ${{ inputs.shared-path }}
         run: '& (Join-Path $env:SHARED "repo/Test-SharedVersion.ps1") -Shared $env:SHARED'
+
+      - name: CHANGELOG compare links
+        shell: pwsh
+        env:
+          SHARED: ${{ inputs.shared-path }}
+          CHANGELOGS: ${{ inputs.changelogs }}
+        run: '& (Join-Path $env:SHARED "repo/Update-ChangelogLinks.ps1") -Path $env:CHANGELOGS -Check'

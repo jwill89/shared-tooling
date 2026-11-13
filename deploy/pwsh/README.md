@@ -1,6 +1,6 @@
 # deploy/pwsh: the SharedDeploy module
 
-One PowerShell module for the pieces every deploy script needs: settings, the SSH connection, the one archive a deploy ships, the atomic swap of a folder, a code set, a binary or a plugin repository, the service restart and its check, rollback, the dev-database pull, and a smoke check after the deploy. Each function's help (`Get-Help <name> -Full`) gives the detail.
+One PowerShell module for the pieces every deploy script needs: settings, the SSH connection, the one archive a deploy ships, the atomic swap of a folder, a code set, a binary or a plugin repository, the service restart and its check, a site's cron file and workers, rollback, the daily backups and the pulls to the dev machine, and a smoke check after the deploy. Each function's help (`Get-Help <name> -Full`) gives the detail.
 
 The module holds no host names, users, keys, tokens or addresses. Those stay in each project's git-ignored `scripts/deploy.config.ps1`, read through `Resolve-DeploySetting`.
 
@@ -24,6 +24,8 @@ Every project names the same thing the same way, as `$Deploy<Name>` in `deploy.c
 | `CertName` | The certificate: its folder's name under `/etc/letsencrypt/live`, not a path. |
 | `BackupDir` | Where a backup the deploy installs writes, outside the web root. |
 
+A project may add a setting outside these names, for something only it has (the folder its uploads live in, say), once its `AGENTS.md` names the setting and what it holds. It follows the same pattern: `$Deploy<Name>`, `$env:DEPLOY_<NAME>`, and a placeholder in `deploy.config.example.ps1`.
+
 Some things are deliberately not settings:
 
 - **Fixed paths:** the Cloudflare ranges file `mod_remoteip` reads is `/etc/apache2/cloudflare-ips.txt` on every host.
@@ -39,7 +41,7 @@ Everything a deploy needs goes into ONE archive: the binary, systemd units, env 
 3. `Invoke-Upload` streams it to the host.
 4. One remote run unpacks it to a staging folder, checks the SHA-256 and file count, and only then runs the steps: `Install-ServiceBinary`, `Switch-RemoteDirectory`, `Switch-RemoteItemSet` or `Publish-PluginRepository` on their own, or several of them as `-AsStep` blocks of one `Invoke-DeployBundle`.
 5. `Invoke-SmokeCheck` fetches the site and, if it fails, runs the rollback.
-6. For a project with a database: `Install-BackupTimer` keeps its daily backup installed and checked, and `Copy-LiveDatabase` pulls a copy to the dev machine, the one copy that leaves the host.
+6. For a project with a database: `Install-BackupTimer` keeps its daily backup installed and checked, and `Copy-LiveDatabase` pulls a copy to the dev machine, the one copy that leaves the host. A folder only the host holds, such as the site's uploads, gets the same: `Install-BackupTimer -Folder` and `Copy-LiveFolder`.
 7. `Close-DeployConnection` in a `finally` block.
 
 A host that runs `ufw limit ssh` refuses an address after six connections in 30 seconds. This shape opens one: every command, upload and download rides the held connection, so a deploy with several targets (a backend, its frontend and a plugin) is one connection and one remote run, with no pauses between targets.
@@ -51,7 +53,7 @@ Single-file uploads (`Send-File`, `Send-FileVerified`) stay for the rare case th
 - PowerShell 7.4 or later (`CompatiblePSEditions = 'Core'`), on Windows.
 - PuTTY's `plink` 0.85 or later (connection sharing), on PATH or in `C:\Program Files\PuTTY`, with the key loaded in Pageant if it has a passphrase. pscp is not used.
 - Windows' own `tar.exe` for `Compress-DeployArchive`.
-- On the host: bash as the SSH user's shell, systemd, GNU coreutils (`sha256sum`, `cat`, `sort -V`, `stat`), `sqlite3` and `gzip` for database snapshots and backups, `runuser` (util-linux) for an `-Owner` on `Backup-RemoteDatabase` or `Copy-LiveDatabase`, `curl` for `-HealthUrl`, and for a vhost, Apache in Debian's layout (`/etc/apache2` with `sites-available` and `sites-enabled`, and an `apachectl` that reads `APACHE_CONFDIR`).
+- On the host: bash as the SSH user's shell, systemd, GNU coreutils (`sha256sum`, `cat`, `tac`, `sort -V`, `stat`) and `awk`, `sqlite3` and `gzip` for database snapshots and backups, GNU `tar` for a folder's, `runuser` (util-linux) for an `-Owner` on `Backup-RemoteDatabase`, `Copy-LiveDatabase` or `Copy-LiveFolder`, `curl` for `-HealthUrl`, cron reading `/etc/cron.d` for a site's cron file, and for a vhost, Apache in Debian's layout (`/etc/apache2` with `sites-available` and `sites-enabled`, and an `apachectl` that reads `APACHE_CONFDIR`).
 
 ## The one connection
 
@@ -142,6 +144,11 @@ Folder swaps:
 - `Switch-RemoteItemSet`: swaps several top-level entries of one folder (a PHP app's code) through a staging folder, and puts the old ones back if a later step fails; it takes `-Vhost` and `-ServerName` too.
 - `Restore-RemoteItemSet`: puts that backup back, and with `-ServerName` the vhost.
 
+Cron files and worker units:
+
+- `Install-HostConfig`: a site's cron file (`/etc/cron.d/<name>`) and the units of a worker that runs the site's own code rather than a binary, such as a PHP queue worker. Each file is checked first (every cron job names a user that exists), made LF-only with a trailing newline, and installed only where it differs, its previous copy kept in `/var/lib/shared-deploy/<name>`; then the workers restart on the code in place and must stay active. Any failure puts every file back and the workers up as they were. Run it as the code swap's `-AfterSwap`, so a failure also swaps the code back.
+- `Restore-HostConfig`: puts back what the last `Install-HostConfig` changed and restarts the workers, after a failed smoke check; run it after the code's own `Restore-`.
+
 Database snapshots:
 
 - `Backup-RemoteDatabase`: returns a shell block for a step's hook that snapshots a site's SQLite database to `Install-ServiceBinary -Database`'s standard, with the same shell underneath, for a PHP site's migrations. The path is given (`-Database`) or read from a shell variable at run time (`-DatabaseVariable`, such as one set from the host's `.env`). With `-Owner` everything it writes beside the database is written as that user through `runuser`, under `-Umask` if given. Afterwards `$snapshot`, `$snapshot_db` and `$snapshot_restore` (the exact command that puts it back) are set for the step's failure message; the returned string carries the same as `.Snapshot`, `.Database` and `.Restore` for the deploy script's own messages when the path is given.
@@ -153,25 +160,27 @@ Plugins:
 
 Scheduled backup:
 
-- `Install-BackupTimer`: a daily systemd timer and its oneshot service, with the standard hardening. It renders the units and the shared job, installs them only where they differ from the live copies (`cmp`), runs the service once to check them, and puts the previous copies back if that run fails. The shared job writes a `VACUUM INTO` copy of the live database, checks it with `PRAGMA integrity_check`, compresses it with gzip and checks that (`gzip -t`), names it `<prefix>YYYY-MM-DD<suffix>.gz` (UTC) and keeps 28 days, leaving every other file in its folder alone. `-Command` runs a project's own job instead (`myapp backup`, say). Call it after the smoke check.
+- `Install-BackupTimer`: a daily systemd timer and its oneshot service, with the standard hardening. It renders the units and the shared job, installs them only where they differ from the live copies (`cmp`), runs the service once to check them, and puts the previous copies back if that run fails. The shared job writes a `VACUUM INTO` copy of the live database, checks it with `PRAGMA integrity_check`, compresses it with gzip and checks that (`gzip -t`), names it `<prefix>YYYY-MM-DD<suffix>.gz` (UTC) and keeps 28 days, leaving every other file in its folder alone. `-Folder` backs up a folder instead, as a `.tar.gz` checked with `gzip -t` and a full `tar` listing, into a `-Directory` outside it, with the same names and retention, the service reading the folder and writing only there. `-Command` runs a project's own job instead (`myapp backup`, say). A project with a database and a folder installs two timers under two names. Call it after the smoke check.
 
-Development database:
+Development copies:
 
 - `Copy-LiveDatabase`: an online `sqlite3 .backup` on the host, a checked download, three timestamped local copies kept, the host's copy removed; warns and skips if the local database is in use. The host's copy lives only for the pull, so it is not compressed. `-Owner` makes it as the database's user (`runuser`), so it can sit beside a database whose folder holds only that user's files.
+- `Copy-LiveFolder`: the same for a folder: a fresh `.tar.gz` made on the host (as `-Owner`, through `runuser`) into the SSH user's `~/.shared-deploy` and checked with `gzip -t`, a checked download kept as `<folder>-<time>.tar.gz` in a local folder, the newest three kept, the host's copy removed. The archive is kept, not unpacked.
 
 Smoke check:
 
-- `Invoke-SmokeCheck`: fetches each URL from this machine, checks its status (200 unless given) and optional text, tries each up to `-Attempts` times; on a failure runs `-Rollback` and throws. It needs `-Rollback`, or `-NoRollback` for a deploy with nothing to undo.
+- `Invoke-SmokeCheck`: fetches each URL from this machine, checks its status (200 unless given) and optional text or version, tries each up to `-Attempts` times; on a failure runs `-Rollback` and throws. It needs `-Rollback`, or `-NoRollback` for a deploy with nothing to undo. Every request carries a fresh `?deploy=<id>-<attempt>` token, so no cached copy can answer it; a check with `CacheBust = $false` goes out as written. `-SiteUrl` with `-Version` checks that `/healthz` reports that version (its JSON's `version` field, or the version as a whole word), and with `-EntryScript` that `/` names this build's entry script.
 
 ## Backups on the host
 
-Every backup the module keeps on the host is compressed with gzip. Each is written to a `.partial` file, checked with `PRAGMA integrity_check`, compressed to another `.partial`, checked with `gzip -t`, and only then renamed into place, with no uncompressed copy left behind.
+Every backup the module keeps on the host is compressed with gzip. A database's copy is written to a `.partial` file, checked with `PRAGMA integrity_check`, compressed to another `.partial`, checked with `gzip -t`, and only then renamed into place, with no uncompressed copy left behind. A folder's archive is written compressed to a `.partial`, checked with `gzip -t` and a full `tar` listing, then renamed into place.
 
 | What | Name | Kept |
 | --- | --- | --- |
 | `Install-ServiceBinary -Database`'s snapshot, taken after the stop | `<SnapshotPrefix><yyyyMMdd-HHmmss><SnapshotSuffix>.gz` (UTC) | the newest three |
 | `Backup-RemoteDatabase`'s snapshot, taken where the step puts it (before the migrations) | `<SnapshotPrefix><yyyyMMdd-HHmmss><SnapshotSuffix>.gz` (UTC), such as `.backups/example-<yyyyMMdd-HHmmss>.db.gz` | the newest `-Keep` (three) |
 | `Install-BackupTimer`'s shared job, daily | `<Prefix>YYYY-MM-DD<Suffix>.gz` | 28 days |
+| `Install-BackupTimer -Folder`'s job, daily, checked with `gzip -t` and a full `tar` listing in place of the integrity check | `<Prefix>YYYY-MM-DD<Suffix>.gz`, such as `example-media-2026-01-31.tar.gz` (`<Suffix>` is `.tar` unless given) | 28 days, or `-Keep` |
 
 The prefix defaults are `<Database>.pre-` and `<Name>-`; `Backup-RemoteDatabase` takes a relative `-SnapshotPrefix` from the database's folder. Only names of exactly these forms are pruned, compressed or restored; nothing else in the folders is touched, apart from a run's own `.partial` files.
 
@@ -186,11 +195,48 @@ gunzip -c /opt/example/data/backups/example-2026-01-31.sqlite.gz > /opt/example/
 systemctl start example
 ```
 
-`Install-ServiceBinary` prints these commands, with its snapshot's paths, after a rollback in a project that has not opted into `-RestoreDatabaseOnRollback`, `Backup-RemoteDatabase` sets them as `$snapshot_restore` (with `systemctl stop` and `start` of its `-Service`) for the step's own message, and the shared job's script on the host carries them, with its paths, in its header. A project's own backup command (`-Command`) keeps its own copies, so compressing them is up to that command.
+A folder comes back by moving the live one aside and unpacking the archive beside it as root, which keeps every file's owner, with whatever writes to it stopped:
+
+```sh
+mv /var/www/example.com/media /var/www/example.com/media.before-restore
+tar -xzf /var/backups/example/media/example-media-2026-01-31.tar.gz -C /var/www/example.com
+```
+
+`Install-ServiceBinary` prints these commands, with its snapshot's paths, after a rollback in a project that has not opted into `-RestoreDatabaseOnRollback`, `Backup-RemoteDatabase` sets them as `$snapshot_restore` (with `systemctl stop` and `start` of its `-Service`) for the step's own message, and the shared job's script on the host carries them, with its paths, in its header (a folder job's header carries its two lines). A project's own backup command (`-Command`) keeps its own copies, so compressing them is up to that command.
 
 ## The vhost
 
 A site has one vhost file, holding its port-80 redirect to HTTPS and its port-443 site: `/etc/apache2/sites-available/<name>.conf`. `<name>` is the service's name (the first `-ServiceName`) for an app that runs a service, and the site's `ServerName` (`-ServerName`) for a site Apache serves from a folder, in lower case. The file is a template in the project's repo, filled from the deploy config when the deploy packs the archive (`Format-RemoteScript`); `-Vhost` names it inside the upload. `Install-ServiceBinary`, `Switch-RemoteDirectory` and `Switch-RemoteItemSet` all take it.
+
+Each site's file carries, in its port-443 block, HSTS and the two lines that take the visitor's address from Cloudflare, so nothing about them depends on a server-wide config ([security.md](../../standards/security.md#behind-cloudflare-and-apache)). A service's template, with `Format-RemoteScript` filling `SERVER_NAME`, `SERVER_ADMIN`, `CERT` and `APP_PORT` from the settings of those names:
+
+```apache
+<VirtualHost *:80>
+    ServerName {{SERVER_NAME}}
+    Redirect permanent / https://{{SERVER_NAME}}/
+</VirtualHost>
+
+<VirtualHost *:443>
+    ServerName {{SERVER_NAME}}
+    ServerAdmin {{SERVER_ADMIN}}
+
+    SSLEngine on
+    SSLCertificateFile /etc/letsencrypt/live/{{CERT}}/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/{{CERT}}/privkey.pem
+
+    Header always set Strict-Transport-Security "max-age=31536000"
+
+    RemoteIPHeader CF-Connecting-IP
+    RemoteIPTrustedProxyList /etc/apache2/cloudflare-ips.txt
+
+    ProxyPreserveHost On
+    RequestHeader set X-Forwarded-Proto "https"
+    ProxyPass / http://127.0.0.1:{{APP_PORT}}/
+    ProxyPassReverse / http://127.0.0.1:{{APP_PORT}}/
+</VirtualHost>
+```
+
+A site served from a folder has its `DocumentRoot` and `<Directory>` block where the proxy lines are. Apache needs `mod_ssl`, `mod_headers`, `mod_remoteip` and, for a service, `mod_proxy_http`.
 
 Every deploy that ships the file does this before anything else on the host changes:
 
@@ -408,6 +454,37 @@ Install-BackupTimer -Name 'example' -Database '/var/www/example.com/db/example.d
 Install-BackupTimer -Name 'example' -Command '/opt/example/example backup' -Owner 'example' `
     -EnvironmentFile '/etc/example/example.env' -WorkingDirectory '/opt/example' -ReadWritePath '/opt/example'
 if (-not $NoDbPull) { $null = Copy-LiveDatabase -Database '/var/www/example.com/db/example.db' -Destination (Join-Path $repoRoot 'devdata/example.db') }
+```
+
+A folder only the host holds, here a site's uploads, backed up daily under a second timer and pulled with the database:
+
+```powershell
+Install-BackupTimer -Name 'example-media' -Folder '/var/www/example.com/media' -Directory '/var/backups/example/media' -Owner 'www-data' -Keep 14
+if (-not $NoDbPull) { $null = Copy-LiveFolder -Folder '/var/www/example.com/media' -Destination (Join-Path $repoRoot 'devdata\media') -Owner 'www-data' }
+```
+
+A PHP site whose code ships with its cron file and a queue worker's unit. The worker restarts on the new code once it is in; if it doesn't stay up, the files and the code go back together, and `-OnRestore` restarts it on the old code. After a failed smoke check the code goes back first, then the files:
+
+```powershell
+$config = Install-HostConfig -AsStep -Name 'example' -CronFile 'deploy/example.cron' `
+    -Unit 'deploy/example-queue.service' -Service 'example-queue'
+Switch-RemoteItemSet -Archive 'example-deploy.tgz' -Sha256 $archive.Sha256 -ExpectedFileCount $archive.FileCount `
+    -Root '/var/www/example.com' -Item 'app', 'public', 'vendor' -AfterSwap $config -OnRestore 'systemctl try-restart example-queue'
+Invoke-SmokeCheck -SiteUrl $settings.SiteUrl -EntryScript $entry -Attempts 5 -Rollback {
+    Invoke-RemoteStep -Script @(
+        Restore-RemoteItemSet -AsScript -Root '/var/www/example.com' -Item 'app', 'public', 'vendor'
+        Restore-HostConfig -AsScript -Name 'example' -Service 'example-queue'
+    )
+}
+```
+
+A service's smoke check: `/healthz` must report the release just deployed, and `/` must name the entry script the build's `index.html` loads:
+
+```powershell
+$entry = [regex]::Match((Get-Content -Raw (Join-Path $tree 'web\dist\index.html')), '<script[^>]+src="([^"]+)"').Groups[1].Value
+Invoke-SmokeCheck -SiteUrl $settings.SiteUrl -Version $release.Tag -EntryScript $entry -Attempts 5 -Rollback {
+    Restore-ServiceBinary -ServiceName $settings.ServiceName -Binary "$($settings.RemoteOptDir)/example"
+}
 ```
 
 ## Checking the module

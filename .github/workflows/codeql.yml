@@ -1,0 +1,60 @@
+name: CodeQL
+
+# CodeQL over a public repo's own code, one job per language, every one in build mode
+# none: JavaScript and TypeScript (Vue files included), C# (a Dalamud plugin, read
+# without a build) and the GitHub Actions workflows. CodeQL has no PHP or PowerShell.
+# The shared-tooling submodule is left out: its CI scans it.
+#
+# The repo's CodeQL default setup stays off (Settings > Code security), since code
+# scanning refuses an advanced setup's results beside it.
+#
+#   codeql:
+#     uses: jwill89/shared-tooling/.github/workflows/codeql.yml@v1.0.0
+#     with:
+#       languages: '["javascript-typescript", "csharp", "actions"]'
+#     permissions:
+#       contents: read
+#       actions: read
+#       security-events: write
+
+on:
+  workflow_call:
+    inputs:
+      languages:
+        description: The languages to analyse, as a JSON list of CodeQL's names (javascript-typescript, csharp, actions).
+        type: string
+        default: '["javascript-typescript", "actions"]'
+      queries:
+        description: The query suite, such as security-extended; empty runs CodeQL's default suite.
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(inputs.languages) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: ${{ inputs.queries }}
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}

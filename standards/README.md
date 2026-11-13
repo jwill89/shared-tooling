@@ -26,13 +26,15 @@ Where a current, accepted RFC covers what you are building, follow it, since it 
   @shared/standards/README.md
   ```
 
-- A repo's `AGENTS.md` is its one deep guide, for agents and developers alike (see docs-and-agents.md). It links [`shared/standards/README.md`](README.md) near the top for agents that don't read `CLAUDE.md`, and it holds only what is specific to that project.
+- A repo's `AGENTS.md` is its one deep guide, for agents and developers alike (see docs-and-agents.md). It links [`shared/standards/README.md`](README.md) near the top for agents that don't read `CLAUDE.md`, and it holds only what is specific to that project, its departures and its list of what isn't meeting the standards yet among them.
 - Only this index is loaded every session. Before working in an area, read its file below; each is short, and the linters carry the detail.
 
 ## Where a project may differ
 
 - Some rules leave the choice to each project and name the options, such as layout with Tailwind or with a stylesheet of object classes, or a cache header beyond the baseline. The project's `AGENTS.md` says which it takes.
-- A project that must break a rule says so in its `AGENTS.md`, with the reason. Without that, the rule here wins over anything older in the project's own docs.
+- A project that must break a rule says so in its `AGENTS.md`, with the reason: that is a departure. A departure counts only when it states its reason; without one, the rule here wins over anything older in the project's own docs.
+- Anything a project hasn't brought up to a rule yet goes in its `AGENTS.md` under a separate heading, "Not yet meeting the standards": one item per gap, saying what falls short of which rule and since when (`- Since 2026-11-13: no tsconfig.vitest.json for the specs (testing.md, Vitest).`). An item leaves the list in the change that closes it.
+- A project meets the standards when nothing it falls short in is missing from that list, and the list is empty. A departure that states its reason doesn't stop it meeting them.
 - A project that hasn't been rolled out onto shared-tooling yet still has old patterns. Its rollout brings it to these rules; until then, new code follows them.
 
 ## How each rule is checked
@@ -61,7 +63,7 @@ A rule a tool can check belongs in the tool's config as well, which keeps this g
 | [security.md](security.md) | Headers and CSP, sign-in and sessions, rate limits, client addresses behind Cloudflare, secrets |
 | [performance.md](performance.md) | Anything a page or request has to do quickly: bundles, images, queries, caching |
 | [database.md](database.md) | SQLite settings, migrations and schema |
-| [deploy-and-ops.md](deploy-and-ops.md) | A deploy, a systemd service, backups and restores, the database pull |
+| [deploy-and-ops.md](deploy-and-ops.md) | A deploy, a systemd service, backups and restores, the database pull, and what `docs/ops.md` holds |
 | [testing.md](testing.md) | Tests of any kind: unit, HTTP, end-to-end, coverage floors |
 | [packages.md](packages.md) | Adding or replacing a dependency |
 | [css.md](css.md) | Styles: tokens and colour, units, class naming, layout, motion, themes |

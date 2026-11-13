@@ -1,0 +1,12 @@
+# The advisories OSV-Scanner may pass over in this lockfile, from repo/osv-scanner.example.toml.
+# standards/packages.md has the rule: an advisory is passed over only when it reaches nothing
+# that ships (lint, test and build tooling) and no fix fits its dependents' ranges, each with
+# its reason and a date, three months out, when it is looked at again.
+
+# minimatch 7.0.0 to 11.0.0: denial of service from a crafted glob pattern. It comes with
+# ESLint 10, @eslint/config-array, typescript-eslint and eslint-plugin-jsx-a11y-x, which all
+# require ^10.2, and the fix is 11.0.1. The shared configs write every pattern.
+[[IgnoredVulns]]
+id = "GHSA-g3hv-75wg-m249"
+ignoreUntil = 2027-02-07
+reason = "Dev tooling only (ESLint and its plugins); the fix, minimatch 11.0.1, is outside ESLint's ^10.2 range."

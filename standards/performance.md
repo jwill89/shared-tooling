@@ -52,7 +52,7 @@ The headers each kind of static file gets, and purging at Cloudflare, are in [de
 
 ## Images
 
-- Served images are WebP. [review]
+- Served images are WebP or AVIF. [review]
 - The server keeps a master of each image and makes every served size from it, such as a display size and a thumbnail. [review]
 - Lossy derivatives are encoded at quality 80 to 82. [review]
 - An image that can start off-screen gets `loading="lazy"`. The LCP image, and any other image visible at first render, stays eager. [review]

@@ -1,0 +1,4 @@
+# The advisories OSV-Scanner may pass over in this lockfile, from repo/osv-scanner.example.toml.
+# None today. standards/packages.md has the rule: an advisory is passed over only when it
+# reaches nothing that ships (lint, test and build tooling) and no fix fits its dependents'
+# ranges, each with its reason and a date, three months out, when it is looked at again.

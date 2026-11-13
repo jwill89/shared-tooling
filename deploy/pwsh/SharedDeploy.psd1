@@ -47,8 +47,11 @@
         'Backup-RemoteDatabase'
         'Export-PluginRepository'
         'Publish-PluginRepository'
+        'Install-HostConfig'
+        'Restore-HostConfig'
         'Install-BackupTimer'
         'Copy-LiveDatabase'
+        'Copy-LiveFolder'
         'Invoke-SmokeCheck'
     )
     CmdletsToExport      = @()
