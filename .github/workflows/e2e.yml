@@ -3,9 +3,10 @@ name: E2E
 # The end-to-end job: the caller's Playwright suite against the app as it runs, in the
 # runner's own Chrome (test/e2e's settings), so no browser is downloaded. The caller's
 # playwright.config starts the app through its webServer; this job installs what that
-# needs first: the front end always, Go or PHP when asked, then the caller's setup.
-# The front end's install comes back from the cache web.yml fills (the same key), so
-# calling this with `needs: [web]` costs no second Font Awesome download.
+# needs first: the front end always, Go, PHP or Python when asked, an artifact another job
+# built, then the caller's setup. The front end's install comes back from the cache web.yml
+# fills (the same key), so calling this with `needs: [web]` costs no second Font Awesome
+# download.
 #
 #   e2e:
 #     needs: [web]
@@ -16,6 +17,17 @@ name: E2E
 #       fontawesome: true
 #     secrets:
 #       FONTAWESOME_TOKEN: ${{ secrets.FONTAWESOME_NPM_TOKEN }}
+#
+# A Python app, its data built by the python job:
+#
+#   e2e:
+#     needs: [python, web]
+#     uses: jwill89/shared-tooling/.github/workflows/e2e.yml@v2.10.0
+#     with:
+#       dir: .
+#       python-version-file: .python-version
+#       download-artifact: data
+#       download-path: var
 
 on:
   workflow_call:
@@ -52,6 +64,26 @@ on:
         description: The folder whose Composer packages to install, with php-version.
         type: string
         default: ''
+      python-version-file:
+        description: A file naming the exact Python to set up, for a Python server the suite starts; .venv is made beside it, with its bin first on PATH.
+        type: string
+        default: ''
+      python-requirements:
+        description: The requirements file installed into that .venv, every package pinned with its hashes, relative to the repo.
+        type: string
+        default: requirements-dev.txt
+      uv-version:
+        description: The uv release, with python-version-file, checked against its published checksum.
+        type: string
+        default: 0.13.5
+      download-artifact:
+        description: An artifact to download before the setup (a build another job made).
+        type: string
+        default: ''
+      download-path:
+        description: Where the artifact goes, relative to the repo.
+        type: string
+        default: .
       setup:
         description: Shell run from the repo root once everything is installed (an .env and a migrated, seeded database, say).
         type: string
@@ -160,6 +192,33 @@ jobs:
         if: inputs.php-version != '' && inputs.composer-dir != ''
         working-directory: ${{ inputs.composer-dir }}
         run: composer install --prefer-dist --no-interaction --no-progress
+
+      - uses: astral-sh/setup-uv@v10
+        if: inputs.python-version-file != ''
+        with:
+          version: ${{ inputs.uv-version }}
+          cache-dependency-glob: ${{ inputs.python-requirements }}
+
+      # The exact Python the file names, fetched by uv, then the pinned packages; uv refuses
+      # one whose hash doesn't match.
+      - name: Python
+        if: inputs.python-version-file != ''
+        env:
+          VERSION_FILE: ${{ inputs.python-version-file }}
+          REQUIREMENTS: ${{ inputs.python-requirements }}
+        run: |
+          venv="$PWD/$(dirname "$VERSION_FILE")/.venv"
+          uv venv --managed-python --python "$(tr -d '[:space:]' < "$VERSION_FILE")" "$venv"
+          uv pip install --python "$venv/bin/python" --require-hashes -r "$REQUIREMENTS"
+          echo "$venv/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=$venv" >> "$GITHUB_ENV"
+
+      - name: Download ${{ inputs.download-artifact }}
+        if: inputs.download-artifact != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.download-artifact }}
+          path: ${{ inputs.download-path }}
 
       - name: Setup
         if: inputs.setup != ''

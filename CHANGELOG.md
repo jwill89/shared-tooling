@@ -8,6 +8,26 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Added
+
+- `lint/python/ruff.toml`: the shared ruff rules and formatter settings a Python project's `pyproject.toml` extends.
+- `python.yml`: uv at a pinned version, the Python `.python-version` names, the hashed dev requirements, ruff, ruff format, `mypy --strict`, and pytest held to the coverage floor in `pyproject.toml`, with a step before the checks that can be cached and an artifact uploaded after them.
+- `e2e.yml`: `python-version-file`, `python-requirements` and `uv-version`, to start a Python server, and `download-artifact` with `download-path`.
+- `task shared:python:setup`, `shared:python:lint` and `shared:python:test`, which run what `python.yml` runs.
+- `test/python/coverage_floor.py`: a Python run fails when `pyproject.toml` sets no coverage floor or package.
+- `task shared:deps` and `shared:deps:update` take Python's compiled requirements: the direct packages against PyPI, floors raised and the files compiled again by the command in their headers.
+- `Install-PythonEnvironment` builds a Python service's environment on the host before its folder swaps in, reusing one already built for the same Python and requirements.
+- `Switch-RemoteDirectory` and `Restore-RemoteDirectory` take `-OnRestore`, and `-ServiceName` to name the vhost after a service shipped as a folder.
+- `Install-HostConfig -HealthUrl`, with `-EnvFile`, `-HealthDefault` and `-HealthTimeoutSeconds` (60 by default), waits for a code-run service's `/healthz` after its restart.
+- `deploy/pwsh/README.md`: the shape of a Python web service's deploy.
+- Python in the standards: `code-style.md`, `testing.md` and `packages.md` gain Python sections, `api-and-realtime.md` gives a Python service `/api/v1` and a spec generated from its pydantic models, and `deploy-and-ops.md` covers its environment, its health check and its gunicorn unit.
+
+### Changed
+
+- `repo/dependabot.example.yml`: Python's compiled requirements go under the `uv` ecosystem, whose updates keep `--universal` and `--python-version`, with an example hold for a package whose data must match its minor.
+- `task shared:vuln` scans every `requirements*.txt`, `requirements-dev.txt` included.
+- `standards/deploy-and-ops.md`: every restart in a rollback clears systemd's start limit first.
+
 ## [2.9.0] - 2026-11-13
 
 ### Added

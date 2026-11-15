@@ -1,12 +1,12 @@
 # API and real-time
 
-How every project's HTTP API, its OpenAPI spec, its generated client and its live feeds are shaped, in Go and PHP alike.
+How every project's HTTP API, its OpenAPI spec, its generated client and its live feeds are shaped, in Go, PHP and Python alike.
 
 Where an RFC describes a behaviour, the API follows it ([README.md](README.md) says which RFCs count): RFC 9110 for methods, statuses and conditional requests, RFC 9111 for caching, RFC 9457 for error bodies. Sign-in, access and limits are in [security.md](security.md); static files and the app shell are in [performance.md](performance.md).
 
 ## Paths and methods
 
-- Every endpoint sits under one base path: `/api/v1` in a Go service, `/api` in a PHP site. The examples below write it `/api`. [review]
+- Every endpoint sits under one base path: `/api/v1` in a Go or Python service, `/api` in a PHP site. The examples below write it `/api`. [review]
 - Endpoints are resource-shaped and shared by every client (the SPA, a plugin, a native app). No endpoint exists for one screen. [review]
 - A report is a filter on its resource (`?from&to`), not an endpoint of its own. [review]
 - A collection is a plural noun (`/api/decks`), an item is `/api/<resource>/{id}`, and a sub-collection nests (`/api/<resource>/{id}/<subs>/{subId}`). [review]
@@ -78,6 +78,7 @@ Each project sets its own cache headers, starting from this baseline. A project 
 
 - The spec is OpenAPI 3.1, generated from code. Every Go service generates it with huma. [CI]
 - A PHP site generates its spec from code too (swagger-php attributes on controllers and schema classes, in custom PHP or Laravel) and follows the same conventions as the Go services. [CI]
+- A Python service generates its spec from the pydantic models of its bodies, whose JSON Schema the spec's schemas are, with response schemas in serialization mode so every field the API always sends is required. It follows the same conventions, and a test fails when the spec the code generates differs from the committed file, so the test run catches drift. [CI]
 - The spec is committed, and CI fails when it drifts from the code. [CI]
 - Every body has a named schema that its endpoint references, never a bare `object`, and every property is described. [review]
 - A type used only inside the server gets no schema. [review]

@@ -24,6 +24,8 @@ version: '3'
 vars:
   # This file's folder, so the paths hold wherever the submodule sits.
   SHARED: '{{.TASKFILE_DIR}}/..'
+  # The Python of a project's .venv, which python:setup makes.
+  PY: '{{if eq OS "windows"}}.venv/Scripts/python.exe{{else}}.venv/bin/python{{end}}'
 
 tasks:
   lint:scripts:
@@ -78,6 +80,30 @@ tasks:
     cmds:
       - node "{{.SHARED}}/test/web/typecheck-specs.mjs" "{{.DIR | default "web"}}"
 
+  python:setup:
+    desc: Make .venv with uv on the Python .python-version names, then install the dev requirements, every hash checked (DIR=. REQUIREMENTS=requirements-dev.txt)
+    dir: '{{.DIR | default "."}}'
+    cmds:
+      # uv venv fetches that Python when it isn't installed yet. uv python install isn't used:
+      # on Windows it can exit 2 after a good install, over the minor-version link it makes.
+      - uv venv --clear --managed-python .venv
+      - uv pip install --require-hashes -r "{{.REQUIREMENTS | default "requirements-dev.txt"}}"
+
+  python:lint:
+    desc: ruff check, ruff format --check and mypy --strict, as python.yml runs them (DIR=.)
+    dir: '{{.DIR | default "."}}'
+    cmds:
+      - '{{.PY}} -m ruff check .'
+      - '{{.PY}} -m ruff format --check .'
+      - '{{.PY}} -m mypy --strict'
+
+  python:test:
+    desc: pytest with line coverage, failing below the floor pyproject.toml sets or with none set, as python.yml runs it (DIR=.)
+    dir: '{{.DIR | default "."}}'
+    cmds:
+      - '{{.PY}} "{{.SHARED}}/test/python/coverage_floor.py"'
+      - '{{.PY}} -m pytest --cov --cov-report=term-missing:skip-covered'
+
   update:
     desc: Move to a shared-tooling release (-- v1.1.0) - the submodule, the workflow refs and what's built from them
     cmds:
@@ -99,7 +125,7 @@ tasks:
       - pwsh -NoProfile -File "{{.SHARED}}/repo/Invoke-DependencyCheck.ps1" -Path .
 
   deps:update:
-    desc: Take the in-range dependency updates (npm, Go, Composer, NuGet); majors and held versions are left alone
+    desc: Take the in-range dependency updates (npm, Go, Composer, NuGet, Python's compiled requirements); majors and held versions are left alone
     cmds:
       - pwsh -NoProfile -File "{{.SHARED}}/repo/Invoke-DependencyCheck.ps1" -Path . -Update
 

@@ -1,0 +1,37 @@
+# The ruff config every Python project extends, for its lint rules and its formatter. In the
+# project's pyproject.toml:
+#
+#   [tool.ruff]
+#   extend = "shared/lint/python/ruff.toml"
+#
+#   [tool.ruff.lint]
+#   ignore = ["RUF001"]  # each of the project's own rules with its reason
+#
+#   [tool.ruff.lint.extend-per-file-ignores]
+#   "wsgi.py" = ["E402"]  # extend-, since a per-file-ignores table there replaces the one below
+#
+# ruff format is the one formatter, with its defaults. No target-version is set: ruff reads
+# it from the project's requires-python.
+line-length = 110
+
+[lint]
+select = [
+    "E", "W",  # pycodestyle
+    "F",       # pyflakes
+    "I",       # import order
+    "B",       # bugbear
+    "UP",      # pyupgrade
+    "S",       # bandit's security checks
+    "C4",      # comprehensions
+    "SIM",     # simplifications
+    "RET",     # return statements
+    "PIE",     # misc. lints
+    "PTH",     # pathlib over os.path
+    "RUF",     # ruff's own rules
+]
+
+[lint.per-file-ignores]
+# Tests assert. The patterns name files, not folders: through extend, a path pattern here is
+# anchored at this file's folder rather than the project's, and never matches its tests.
+"test_*.py" = ["S101"]
+"conftest.py" = ["S101"]

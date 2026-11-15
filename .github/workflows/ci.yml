@@ -2,7 +2,8 @@ name: CI
 
 # shared-tooling's own checks, the same `task check` runs: its scripts with its own
 # analyzer settings, its docs with its own Markdown config and the CHANGELOG's links, the
-# golangci sync tool linted by the template it ships, every workflow with actionlint,
+# golangci sync tool linted by the template it ships, the shared ruff config loading on
+# the Python script it ships, every workflow with actionlint,
 # every lint/web config and test preset loading from its own install, and OSV-Scanner
 # over the lockfiles.
 
@@ -48,6 +49,22 @@ jobs:
       # The version go.yml defaults to, so a release that can't analyse current Go fails
       # here before it reaches a project.
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  python:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: 0.13.5
+          enable-cache: false
+      # The shared ruff config loads, linting and formatting test/python's script, at the
+      # versions the Taskfile's lint:python runs.
+      - run: uvx ruff@0.17.5 check --config lint/python/ruff.toml --no-cache test/python
+      - run: uvx ruff@0.17.5 format --check --config lint/python/ruff.toml --no-cache test/python
+      - run: uvx mypy@2.4.0 --strict test/python
 
   workflows:
     runs-on: ubuntu-24.04

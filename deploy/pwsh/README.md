@@ -1,6 +1,6 @@
 # deploy/pwsh: the SharedDeploy module
 
-One PowerShell module for the pieces every deploy script needs: settings, the SSH connection, the one archive a deploy ships, the atomic swap of a folder, a code set, a binary or a plugin repository, the service restart and its check, a site's cron file and workers, rollback, the daily backups and the pulls to the dev machine, and a smoke check after the deploy. Each function's help (`Get-Help <name> -Full`) gives the detail.
+One PowerShell module for the pieces every deploy script needs: settings, the SSH connection, the one archive a deploy ships, the atomic swap of a folder, a code set, a binary or a plugin repository, a Python service's environment, the service restart and its check, a site's cron file and workers, rollback, the daily backups and the pulls to the dev machine, and a smoke check after the deploy. Each function's help (`Get-Help <name> -Full`) gives the detail.
 
 The module holds no host names, users, keys, tokens or addresses. Those stay in each project's git-ignored `scripts/deploy.config.ps1`, read through `Resolve-DeploySetting`.
 
@@ -53,7 +53,7 @@ Single-file uploads (`Send-File`, `Send-FileVerified`) stay for the rare case th
 - PowerShell 7.4 or later (`CompatiblePSEditions = 'Core'`), on Windows.
 - PuTTY's `plink` 0.85 or later (connection sharing), on PATH or in `C:\Program Files\PuTTY`, with the key loaded in Pageant if it has a passphrase. pscp is not used.
 - Windows' own `tar.exe` for `Compress-DeployArchive`.
-- On the host: bash as the SSH user's shell, systemd, GNU coreutils (`sha256sum`, `cat`, `tac`, `sort -V`, `stat`) and `awk`, `sqlite3` and `gzip` for database snapshots and backups, GNU `tar` for a folder's, `runuser` (util-linux) for an `-Owner` on `Backup-RemoteDatabase`, `Copy-LiveDatabase` or `Copy-LiveFolder`, `curl` for `-HealthUrl`, cron reading `/etc/cron.d` for a site's cron file, and for a vhost, Apache in Debian's layout (`/etc/apache2` with `sites-available` and `sites-enabled`, and an `apachectl` that reads `APACHE_CONFDIR`).
+- On the host: bash as the SSH user's shell, systemd, GNU coreutils (`sha256sum`, `cat`, `tac`, `sort -V`, `stat`) and `awk`, `sqlite3` and `gzip` for database snapshots and backups, GNU `tar` for a folder's, `runuser` (util-linux) for an `-Owner` on `Backup-RemoteDatabase`, `Copy-LiveDatabase` or `Copy-LiveFolder`, `curl` for `-HealthUrl`, cron reading `/etc/cron.d` for a site's cron file, uv at `<app dir>/bin/uv` for `Install-PythonEnvironment` (with outbound HTTPS, to fetch a Python and the packages), and for a vhost, Apache in Debian's layout (`/etc/apache2` with `sites-available` and `sites-enabled`, and an `apachectl` that reads `APACHE_CONFDIR`).
 
 ## The one connection
 
@@ -139,14 +139,18 @@ Service binaries:
 
 Folder swaps:
 
-- `Switch-RemoteDirectory`: swaps a folder from the upload into place by renames, keeping `<live>.old`, with hooks before and after the swap; with `-Vhost` and `-ServerName`, the site's vhost goes in with it.
-- `Restore-RemoteDirectory`: puts `<live>.old` back, and with `-ServerName` the vhost.
+- `Switch-RemoteDirectory`: swaps a folder from the upload into place by renames, keeping `<live>.old`, with hooks before and after the swap and `-OnRestore` once a failure after it has put the old folder back; with `-Vhost`, the vhost goes in with it, named after `-ServerName` for a site served from the folder or `-ServiceName` for a service whose code is the folder.
+- `Restore-RemoteDirectory`: puts `<live>.old` back, with `-ServerName` or `-ServiceName` the vhost, then runs `-OnRestore`.
 - `Switch-RemoteItemSet`: swaps several top-level entries of one folder (a PHP app's code) through a staging folder, and puts the old ones back if a later step fails; it takes `-Vhost` and `-ServerName` too.
 - `Restore-RemoteItemSet`: puts that backup back, and with `-ServerName` the vhost.
 
+Python environments:
+
+- `Install-PythonEnvironment`: returns the shell for `Switch-RemoteDirectory -BeforeSwap` that installs the exact Python the new folder's `.python-version` names (`uv python install` into `<app dir>/python`), builds the environment its hashed requirements pin in `<app dir>/venvs/<key>` (keyed by the Python and the requirements, reused while neither changes, given to `-Owner`, a completion marker written last), links it as the folder's `.venv`, compiles the folder's bytecode, and removes environments no folder links to (the new one, the live one and `<live>.old` keep theirs).
+
 Cron files and worker units:
 
-- `Install-HostConfig`: a site's cron file (`/etc/cron.d/<name>`) and the units of a worker that runs the site's own code rather than a binary, such as a PHP queue worker. Each file is checked first (every cron job names a user that exists), made LF-only with a trailing newline, and installed only where it differs, its previous copy kept in `/var/lib/shared-deploy/<name>`; then the workers restart on the code in place and must stay active. Any failure puts every file back and the workers up as they were. Run it as the code swap's `-AfterSwap`, so a failure also swaps the code back.
+- `Install-HostConfig`: a site's cron file (`/etc/cron.d/<name>`) and the units of a worker or service that runs the site's own code rather than a binary, such as a PHP queue worker or a Python web service. Each file is checked first (every cron job names a user that exists), made LF-only with a trailing newline, and installed only where it differs, its previous copy kept in `/var/lib/shared-deploy/<name>`; then the workers restart on the code in place and must stay active, and with `-HealthUrl` the first must answer it within `-HealthTimeoutSeconds` (60 by default; parts in braces read from `-EnvFile`, as `Install-ServiceBinary` reads them). Any failure puts every file back and the workers up as they were. Run it as the code swap's `-AfterSwap`, so a failure also swaps the code back.
 - `Restore-HostConfig`: puts back what the last `Install-HostConfig` changed and restarts the workers, after a failed smoke check; run it after the code's own `Restore-`.
 
 Database snapshots:
@@ -206,7 +210,7 @@ tar -xzf /var/backups/example/media/example-media-2026-01-31.tar.gz -C /var/www/
 
 ## The vhost
 
-A site has one vhost file, holding its port-80 redirect to HTTPS and its port-443 site: `/etc/apache2/sites-available/<name>.conf`. `<name>` is the service's name (the first `-ServiceName`) for an app that runs a service, and the site's `ServerName` (`-ServerName`) for a site Apache serves from a folder, in lower case. The file is a template in the project's repo, filled from the deploy config when the deploy packs the archive (`Format-RemoteScript`); `-Vhost` names it inside the upload. `Install-ServiceBinary`, `Switch-RemoteDirectory` and `Switch-RemoteItemSet` all take it.
+A site has one vhost file, holding its port-80 redirect to HTTPS and its port-443 site: `/etc/apache2/sites-available/<name>.conf`. `<name>` is the service's name (the first `-ServiceName`, on `Install-ServiceBinary` for a binary or `Switch-RemoteDirectory` for a service shipped as a folder) for an app that runs a service, and the site's `ServerName` (`-ServerName`) for a site Apache serves from a folder, in lower case. The file is a template in the project's repo, filled from the deploy config when the deploy packs the archive (`Format-RemoteScript`); `-Vhost` names it inside the upload. `Install-ServiceBinary`, `Switch-RemoteDirectory` and `Switch-RemoteItemSet` all take it.
 
 Each site's file carries, in its port-443 block, HSTS and the two lines that take the visitor's address from Cloudflare, so nothing about them depends on a server-wide config ([security.md](../../standards/security.md#behind-cloudflare-and-apache)). A service's template, with `Format-RemoteScript` filling `SERVER_NAME`, `SERVER_ADMIN`, `CERT` and `APP_PORT` from the settings of those names:
 
@@ -463,13 +467,14 @@ Install-BackupTimer -Name 'example-media' -Folder '/var/www/example.com/media' -
 if (-not $NoDbPull) { $null = Copy-LiveFolder -Folder '/var/www/example.com/media' -Destination (Join-Path $repoRoot 'devdata\media') -Owner 'www-data' }
 ```
 
-A PHP site whose code ships with its cron file and a queue worker's unit. The worker restarts on the new code once it is in; if it doesn't stay up, the files and the code go back together, and `-OnRestore` restarts it on the old code. After a failed smoke check the code goes back first, then the files:
+A PHP site whose code ships with its cron file and a queue worker's unit. The worker restarts on the new code once it is in; if it doesn't stay up, the files and the code go back together, and `-OnRestore` restarts it on the old code, clearing systemd's start limit first, since the failed restarts may have used it up. After a failed smoke check the code goes back first, then the files:
 
 ```powershell
 $config = Install-HostConfig -AsStep -Name 'example' -CronFile 'deploy/example.cron' `
     -Unit 'deploy/example-queue.service' -Service 'example-queue'
 Switch-RemoteItemSet -Archive 'example-deploy.tgz' -Sha256 $archive.Sha256 -ExpectedFileCount $archive.FileCount `
-    -Root '/var/www/example.com' -Item 'app', 'public', 'vendor' -AfterSwap $config -OnRestore 'systemctl try-restart example-queue'
+    -Root '/var/www/example.com' -Item 'app', 'public', 'vendor' -AfterSwap $config `
+    -OnRestore 'systemctl reset-failed example-queue; systemctl restart example-queue'
 Invoke-SmokeCheck -SiteUrl $settings.SiteUrl -EntryScript $entry -Attempts 5 -Rollback {
     Invoke-RemoteStep -Script @(
         Restore-RemoteItemSet -AsScript -Root '/var/www/example.com' -Item 'app', 'public', 'vendor'
@@ -477,6 +482,28 @@ Invoke-SmokeCheck -SiteUrl $settings.SiteUrl -EntryScript $entry -Attempts 5 -Ro
     )
 }
 ```
+
+A Python web service, run by gunicorn from a folder of code, in one remote run and a smoke check. The archive holds the folder as `current` (the code, `pyproject.toml`, `.python-version` and the compiled `requirements.txt`), the unit and the vhost, both rendered from their templates:
+
+```powershell
+Switch-RemoteDirectory -Archive 'example-deploy.tgz' -Sha256 $archive.Sha256 -ExpectedFileCount $archive.FileCount `
+    -Live '/opt/example/current' -Owner 'example' `
+    -BeforeSwap (Install-PythonEnvironment -AppDir '/opt/example' -Owner 'example') `
+    -AfterSwap (Install-HostConfig -AsStep -Name 'example' -Unit 'example.service' -Service 'example' `
+        -HealthUrl 'http://127.0.0.1:8000/healthz') `
+    -OnRestore 'systemctl reset-failed example; systemctl restart example' `
+    -Vhost 'apache-vhost.conf' -ServiceName 'example'
+Invoke-SmokeCheck -SiteUrl $settings.SiteUrl -Version $release.Tag -Attempts 5 -Rollback {
+    Invoke-RemoteStep -Script @(
+        Restore-RemoteDirectory -AsScript -Live '/opt/example/current' -ServiceName 'example'
+        Restore-HostConfig -AsScript -Name 'example' -Service 'example'
+    )
+}
+```
+
+In order, on the host: the folder is staged beside the live one and given to `example`; its Python is installed and its environment built or reused, so a bad hash or a file that doesn't parse stops the deploy with nothing live changed; the vhost goes in (`example.conf`); the folder swaps in; the unit is installed where it differs, the service restarts, and `/healthz` must answer on the host within 60 seconds. A failure at any point puts the unit, the folder and the vhost back, then `-OnRestore` clears the start limit and restarts the service on the old code. After a failed smoke check, the folder and vhost go back first, then the unit, and `Restore-HostConfig` restarts the service.
+
+The unit runs `/opt/example/current/.venv/bin/gunicorn` with `WorkingDirectory=/opt/example/current`, bound to `127.0.0.1`, and passes `--no-control-socket`, since `ProtectSystem=strict` refuses the socket gunicorn would make under the user's home. The host setup creates the user and `/opt/example` with `bin/`, `python/`, `venvs/` and `cache/`, and puts uv at `bin/uv`, at the version CI pins, checked against its published `.sha256`.
 
 A service's smoke check: `/healthz` must report the release just deployed, and `/` must name the entry script the build's `index.html` loads:
 

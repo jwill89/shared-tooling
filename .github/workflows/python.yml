@@ -1,0 +1,144 @@
+name: Python
+
+# The Python job every repo with a Python app calls: uv at a pinned version, the exact Python
+# the version file names, the dev requirements installed with every hash checked, then ruff,
+# ruff format, mypy --strict, and pytest with the coverage floor pyproject.toml sets. The
+# tools come from the project's own pinned requirements.
+#
+#   python:
+#     uses: jwill89/shared-tooling/.github/workflows/python.yml@v2.10.0
+#     with:
+#       before: python -m tools.build_data
+#       cache-path: var/data.sqlite
+#       cache-key-files: |
+#         tools/build_data.py
+#         requirements-dev.txt
+#       artifact-path: var/data.sqlite
+#       artifact-name: data
+
+on:
+  workflow_call:
+    inputs:
+      dir:
+        description: The folder holding pyproject.toml.
+        type: string
+        default: .
+      python-version-file:
+        description: The file naming the exact Python (3.14.9, say), relative to dir.
+        type: string
+        default: .python-version
+      requirements:
+        description: The requirements file to install, every package pinned with its hashes, relative to dir.
+        type: string
+        default: requirements-dev.txt
+      uv-version:
+        description: The uv release, checked against its published checksum.
+        type: string
+        default: 0.13.5
+      before:
+        description: Shell run from dir after the install and before the checks, with .venv's python first on PATH (a data build, say).
+        type: string
+        default: ''
+      cache-path:
+        description: Paths, relative to the repo, restored before `before` and saved after it; goes with cache-key-files.
+        type: string
+        default: ''
+      cache-key-files:
+        description: Files whose contents key that cache, one glob per line, relative to the repo.
+        type: string
+        default: ''
+      artifact-path:
+        description: A path, relative to the repo, uploaded once every check passes.
+        type: string
+        default: ''
+      artifact-name:
+        description: The uploaded artifact's name.
+        type: string
+        default: python-build
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ${{ inputs.dir }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - name: Inputs
+        if: (inputs.cache-path != '') != (inputs.cache-key-files != '')
+        run: |
+          echo "::error::Pass cache-path and cache-key-files together: the files' contents key the cache."
+          exit 1
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: ${{ inputs.uv-version }}
+          working-directory: ${{ inputs.dir }}
+          cache-dependency-glob: ${{ inputs.requirements }}
+
+      # The exact Python the file names, fetched by uv, then the pinned packages; uv refuses
+      # one whose hash doesn't match.
+      - name: Install
+        env:
+          VERSION_FILE: ${{ inputs.python-version-file }}
+          REQUIREMENTS: ${{ inputs.requirements }}
+        run: |
+          uv venv --managed-python --python "$(tr -d '[:space:]' < "$VERSION_FILE")" .venv
+          uv pip install --require-hashes -r "$REQUIREMENTS"
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+
+      - name: Restore the build cache
+        id: build-cache
+        if: inputs.cache-path != ''
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ inputs.cache-path }}
+          key: python-before-${{ runner.os }}-${{ hashFiles(inputs.cache-key-files) }}
+
+      - name: Before
+        if: inputs.before != ''
+        env:
+          BEFORE: ${{ inputs.before }}
+        run: bash -euo pipefail -c "$BEFORE"
+
+      # Saved at once, so a failing check doesn't throw the build away.
+      - name: Save the build cache
+        if: inputs.cache-path != '' && steps.build-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ inputs.cache-path }}
+          key: ${{ steps.build-cache.outputs.cache-primary-key }}
+
+      - name: ruff check
+        run: python -m ruff check --output-format=github .
+
+      - name: ruff format
+        run: python -m ruff format --check .
+
+      # --strict on the command line, so a project's config chooses what is checked but
+      # can't turn strictness off.
+      - name: mypy
+        run: python -m mypy --strict
+
+      - name: Coverage floor is set
+        run: python "$GITHUB_WORKSPACE/shared/test/python/coverage_floor.py"
+
+      # pytest-cov fails the run below the floor in pyproject.toml's [tool.coverage.report].
+      - name: Tests
+        run: python -m pytest --cov --cov-report=term-missing:skip-covered
+
+      - name: Upload ${{ inputs.artifact-name }}
+        if: inputs.artifact-path != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.artifact-path }}
+          if-no-files-found: error

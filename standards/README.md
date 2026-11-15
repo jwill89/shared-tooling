@@ -43,7 +43,7 @@ Every rule ends with how it is checked:
 
 | Mark | Meaning |
 | --- | --- |
-| [lint: tool rule] | A shared linter config fails the build: ESLint, Stylelint, golangci-lint, PHPStan, PHP CS Fixer, the .NET analyzers, PSScriptAnalyzer or markdownlint |
+| [lint: tool rule] | A shared linter config fails the build: ESLint, Stylelint, golangci-lint, PHPStan, PHP CS Fixer, ruff, mypy, the .NET analyzers, PSScriptAnalyzer or markdownlint |
 | [axe] | Each site's end-to-end suite runs axe (`test/a11y`), which enforces WCAG 2.2 AA, the floor under the AAA target |
 | [test] | A project's own tests hold it |
 | [CI] | A shared workflow checks it on every push |
@@ -56,7 +56,7 @@ A rule a tool can check belongs in the tool's config as well, which keeps this g
 
 | File | Read it before working on |
 | --- | --- |
-| [code-style.md](code-style.md) | Code in any stack: Go, Vue and TypeScript, PHP, C#, PowerShell |
+| [code-style.md](code-style.md) | Code in any stack: Go, Vue and TypeScript, PHP, Python, C#, PowerShell |
 | [comments.md](comments.md) | Writing a comment or doc comment in any language, or text that becomes documentation (an OpenAPI description, a CLI's help) |
 | [naming.md](naming.md) | Naming files, components, packages, tables and columns, API fields and paths, CSS classes |
 | [api-and-realtime.md](api-and-realtime.md) | An API endpoint, its errors and OpenAPI spec, or a live feed (SSE or WebSockets) |

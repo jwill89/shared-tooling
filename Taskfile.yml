@@ -18,14 +18,22 @@ tasks:
       - cd test/a11y && npm ci
 
   lint:
-    desc: Scripts, Markdown, the CHANGELOG's links, the Go sync tool, the workflows and the repo files
+    desc: Scripts, Markdown, the CHANGELOG's links, the Go sync tool, the Python config, the workflows and the repo files
     cmds:
       - task: shared:lint:scripts
       - task: shared:lint:md
       - task: shared:changelog:check
       - task: lint:go
+      - task: lint:python
       - task: lint:workflows
       - task: shared:repo:check
+
+  lint:python:
+    desc: The shared ruff config loads, linting and formatting test/python's script, which mypy --strict checks too, at the versions CI runs
+    cmds:
+      - uvx ruff@0.17.5 check --config lint/python/ruff.toml --no-cache test/python
+      - uvx ruff@0.17.5 format --check --config lint/python/ruff.toml --no-cache test/python
+      - uvx mypy@2.4.0 --strict test/python
 
   lint:go:
     desc: The golangci sync tool, linted by the template it ships, and its advisories

@@ -44,6 +44,7 @@
         'Restore-RemoteDirectory'
         'Switch-RemoteItemSet'
         'Restore-RemoteItemSet'
+        'Install-PythonEnvironment'
         'Backup-RemoteDatabase'
         'Export-PluginRepository'
         'Publish-PluginRepository'

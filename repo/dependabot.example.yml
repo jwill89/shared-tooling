@@ -83,15 +83,26 @@ updates:
       dotnet:
         patterns: ['*']
 
-  - package-ecosystem: pip
+  # Python's requirements files, compiled from .in files by uv pip compile. Dependabot's uv
+  # ecosystem compiles them again with uv pip compile, taking --universal, --python-version
+  # and --generate-hashes from the command uv wrote in each file's header, so a file is
+  # compiled without --custom-compile-command. The pip ecosystem would compile them with
+  # pip-tools instead, which keeps neither --universal nor --python-version.
+  - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly
       day: monday
     groups:
-      pip-minor:
+      python-minor:
         patterns: ['*']
         update-types: [minor, patch]
+    ignore:
+      # Held on purpose: a package whose data must match its minor, such as spaCy and the
+      # model wheel the project pins by URL for it, moves by hand with that wheel. Dependabot
+      # can't see a requirement pinned by URL, so nothing else holds the two together.
+      - dependency-name: spacy
+        update-types: ['version-update:semver-minor', 'version-update:semver-major']
 
   - package-ecosystem: github-actions
     directory: /

@@ -8,14 +8,14 @@ Each rule ends with how it is checked. Names are in [naming.md](naming.md), CSS 
 
 ### Configs and formatting
 
-- Every lint, format and type-check config extends shared-tooling's (`lint/web`, `lint/go`, `lint/php`, `lint/dotnet`, `lint/pwsh`, `lint/markdown`) and adds only the project's own rules, after the shared ones. [review]
+- Every lint, format and type-check config extends shared-tooling's (`lint/web`, `lint/go`, `lint/php`, `lint/python`, `lint/dotnet`, `lint/pwsh`, `lint/markdown`) and adds only the project's own rules, after the shared ones. [review]
 - A rule every project should hold, or a change to a shared rule, is made in shared-tooling, not in one project. [review]
 - What shared-tooling writes is never edited in the project: `shared/`, the generated `.golangci.yml`, and `.editorconfig` and `.gitattributes` above the project marker. [CI]
 - A Go module's own lint rules go in `.golangci.local.yml`, each with its reason. `task shared:golangci:sync` regenerates `.golangci.yml`, and both files are committed. [CI]
 - A project's own `.editorconfig` and `.gitattributes` lines, such as its C# exceptions, go below the project marker. [CI]
 - A lint rule is turned off with its reason: in the project's config, or at the one line it doesn't fit (`// eslint-disable-next-line rule -- why`, `//nolint:linter // why`). Never silently. [review]
 - A new linter is adopted only after a run over the code. It stays when its findings are worth fixing, and then every finding is fixed. [review]
-- Each language has one formatter: Prettier, gofmt with goimports, PHP CS Fixer, `dotnet format`, and PSScriptAnalyzer's layout rules. No linter also polices formatting. [lint: eslint-config-prettier]
+- Each language has one formatter: Prettier, gofmt with goimports, PHP CS Fixer, ruff format, `dotnet format`, and PSScriptAnalyzer's layout rules. No linter also polices formatting. [lint: eslint-config-prettier]
 - Enforced by the synced `.editorconfig` and `.gitattributes`: UTF-8, LF, a final newline, no trailing whitespace, and no CRLF in a commit. [CI]
 
 ### Design
@@ -96,6 +96,15 @@ Components come from shared-components-vue first ([components.md](components.md)
 - Every PHP tool targets the PHP version the server runs (the fixer's migration set, Rector's PHP set, PHPStan's PHP version), so none writes syntax production can't run. [lint: PHP CS Fixer, Rector, PHPStan]
 - Time is UTC and comes from one clock helper, never `date()`. The entry point sets UTC as well. [review]
 - The suite runs under a far-off zone (`-d date.timezone=Pacific/Kiritimati`, UTC+14) to prove nothing depends on the server's zone. [test]
+
+## Python
+
+- Enforced by the shared `lint/python/ruff.toml`, which the project's `pyproject.toml` extends (`[tool.ruff] extend = "shared/lint/python/ruff.toml"`): pycodestyle, pyflakes, import order, bugbear, pyupgrade, bandit's security checks, comprehensions, simplifications, return statements, pathlib over `os.path` and ruff's own rules, at a line length of 110, with `assert` allowed in `test_*.py` and `conftest.py`. ruff format is the formatter, with its defaults, and the target version comes from the project's `requires-python`. `python.yml` and `task shared:python:lint` run `ruff check`, `ruff format --check` and `mypy --strict`. [lint: ruff, mypy]
+- The project's own ruff rules follow the `extend`, each with its reason. Its per-file ignores go under `extend-per-file-ignores`, since a `per-file-ignores` table of its own replaces the shared one. [review]
+- Every type check is `mypy --strict`, passed on the command line, so the project's `[tool.mypy]` chooses what is checked (its packages, the tests among them) but can't turn strictness off. An override for a library without types names the library and states its reason. [lint: mypy]
+- Logs go through `logging` to standard output, which journald keeps. [review]
+- Values that cross a module's boundary are dataclasses, typed dicts or pydantic models, never bare dicts (`dict[str, Any]`). [review]
+- A web service runs under gunicorn in production, never under the framework's development server (see [deploy-and-ops.md](deploy-and-ops.md#services-and-systemd)). [review]
 
 ## C\#
 

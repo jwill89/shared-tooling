@@ -15,6 +15,8 @@
       Go              go list -m -u, the direct requirements of each go.mod
       Composer        composer outdated --direct, beside each composer.lock
       NuGet           dotnet list package --outdated, for each restored .csproj
+      Python          each package a tracked .in file names, against PyPI's releases, where
+                      uv pip compile wrote the .txt beside it (Dependabot's uv ecosystem)
       GitHub Actions  each workflow's `uses:` pins against the action's latest release
 
     It leaves out what .github/dependabot.yml holds: an `ignore` entry's dependency-name
@@ -26,10 +28,15 @@
 
     An update short of a new major (for npm the newest release in the installed major, so a
     pinned version or a ~ range rises as Dependabot raises it; a Composer "semver-safe-update";
-    any Go or NuGet minor or patch) is one Dependabot would fold into the ecosystem's grouped
-    pull request; -Update takes those. A major is one Dependabot opens alone, after its breaking
-    changes are read, so it is listed and never taken. GitHub Actions pins name a major tag
-    (v7), so their updates are majors too.
+    any Go or NuGet minor or patch; for Python the newest release inside the .in file's range)
+    is one Dependabot would fold into the ecosystem's grouped pull request; -Update takes
+    those. A major is one Dependabot opens alone, after its breaking changes are read, so it is
+    listed and never taken; so is a Python release outside its range, such as ruff 0.18 for
+    <0.18. GitHub Actions pins name a major tag (v7), so their updates are majors too.
+
+    For Python, a release counts once it is final (no pre-release or dev release), not yanked,
+    and allows the Python the folder's .python-version names. A requirement pinned by URL,
+    such as a model wheel, has no releases to compare, and is counted apart.
 
     modernc.org/libc is never raised by name: modernc.org/sqlite is released against one
     exact libc and brings it along (standards/packages.md).
@@ -41,8 +48,11 @@
     Take the in-range updates: for npm, each package's range raised to the new version and
     its family's lockfile entries dropped (npm-take-updates.mjs), then npm install, so
     packages that pin each other move together; go get each module at its version then go
-    mod tidy; composer update then composer bump for those packages; and dotnet add package.
-    Majors and held versions are left alone.
+    mod tidy; composer update then composer bump for those packages; dotnet add package; and
+    for Python, each package's floor in its .in file raised to the new version (>=, == or ~=),
+    then every compiled file in that folder made again by the command its header records,
+    with --upgrade-package for each, a file another one reads (-r, -c) first, and the
+    folder's .venv given the result. Majors and held versions are left alone.
 
 .PARAMETER PassThru
     Return the updates as objects (Ecosystem, Directory, Name, Current, Target, Kind,
@@ -113,6 +123,228 @@ function Get-NpmNewestInMajor {
     if ($LASTEXITCODE -ne 0 -or -not $raw) { return $null }
     $newest = @($raw | Out-String | ConvertFrom-Json)[-1]
     if ($newest -and (Test-NewerVersion $newest $Current)) { $newest } else { $null }
+}
+
+function ConvertTo-PythonVersion {
+    # A PEP 440 version's parts, normalized (1.0RC1 and 1.0rc1 alike); $null when it isn't one.
+    param([string] $Value)
+    $pattern = '^v?(?:(?<epoch>\d+)!)?(?<release>\d+(?:\.\d+)*)' +
+    '(?:[-_.]?(?<phase>a|b|c|rc|alpha|beta|pre|preview)[-_.]?(?<pre>\d*))?' +
+    '(?:-(?<post1>\d+)|[-_.]?(?:post|rev|r)[-_.]?(?<post2>\d*))?' +
+    '(?:[-_.]?(?<dev>dev)[-_.]?(?<devn>\d*))?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$'
+    $match = [regex]::Match("$Value".Trim().ToLowerInvariant(), $pattern)
+    if (-not $match.Success) { return $null }
+    $number = { param($group) if ($group.Success -and $group.Value) { [long]$group.Value } else { 0 } }
+    $phase = switch ($match.Groups['phase'].Value) {
+        { $_ -in 'a', 'alpha' } { 0 } { $_ -in 'b', 'beta' } { 1 } { $_ -in 'c', 'rc', 'pre', 'preview' } { 2 } default { -1 }
+    }
+    $hasPost = $match.Groups['post1'].Success -or $match.Groups['post2'].Success
+    [pscustomobject]@{
+        Epoch   = & $number $match.Groups['epoch']
+        Release = [long[]]($match.Groups['release'].Value -split '\.')
+        Phase   = $phase
+        Pre     = & $number $match.Groups['pre']
+        Post    = if ($hasPost) { [long]("0" + $match.Groups['post1'].Value + $match.Groups['post2'].Value) } else { -1 }
+        Dev     = if ($match.Groups['dev'].Success) { & $number $match.Groups['devn'] } else { [long]::MaxValue }
+        Final   = $phase -lt 0 -and -not $match.Groups['dev'].Success
+    }
+}
+
+function Compare-PythonVersion {
+    # -1, 0 or 1, as PEP 440 orders two parsed versions; a local label is not compared.
+    param([object] $A, [object] $B)
+    if ($A.Epoch -ne $B.Epoch) { return [Math]::Sign($A.Epoch - $B.Epoch) }
+    $length = [Math]::Max($A.Release.Count, $B.Release.Count)
+    for ($i = 0; $i -lt $length; $i++) {
+        $x = if ($i -lt $A.Release.Count) { $A.Release[$i] } else { 0 }
+        $y = if ($i -lt $B.Release.Count) { $B.Release[$i] } else { 0 }
+        if ($x -ne $y) { return [Math]::Sign($x - $y) }
+    }
+    # A dev release with nothing else sorts before the pre-releases; a final one after them.
+    $stage = { param($v) if ($v.Phase -ge 0) { $v.Phase } elseif ($v.Post -lt 0 -and $v.Dev -ne [long]::MaxValue) { -1 } else { 9 } }
+    foreach ($pair in @((& $stage $A), (& $stage $B)), @($A.Pre, $B.Pre), @($A.Post, $B.Post), @($A.Dev, $B.Dev)) {
+        if ($pair[0] -ne $pair[1]) { return [Math]::Sign($pair[0] - $pair[1]) }
+    }
+    0
+}
+
+function Test-PythonSpecifier {
+    # Whether a version string meets a PEP 440 specifier set ('>=3.1.3,<4'); an empty set allows
+    # anything. A clause this can't read counts as met, so nothing is hidden by a misreading.
+    param([string] $Version, [string] $Specifier)
+    $v = ConvertTo-PythonVersion $Version
+    if (-not $v) { return $false }
+    foreach ($clause in "$Specifier" -split ',') {
+        $clause = $clause.Trim()
+        if (-not $clause) { continue }
+        if ($clause -notmatch '^(?<op>===|~=|==|!=|<=|>=|<|>)\s*(?<value>\S+)$') { continue }
+        $op = $Matches['op']
+        $value = $Matches['value']
+        if ($op -eq '===') {
+            if ($Version -ne $value) { return $false }
+            continue
+        }
+        if ($op -in '==', '!=' -and $value.EndsWith('.*')) {
+            $prefix = ConvertTo-PythonVersion $value.Substring(0, $value.Length - 2)
+            if (-not $prefix) { continue }
+            $same = $v.Epoch -eq $prefix.Epoch
+            for ($i = 0; $same -and $i -lt $prefix.Release.Count; $i++) {
+                $same = ($(if ($i -lt $v.Release.Count) { $v.Release[$i] } else { 0 })) -eq $prefix.Release[$i]
+            }
+            if ($same -ne ($op -eq '==')) { return $false }
+            continue
+        }
+        $w = ConvertTo-PythonVersion $value
+        if (-not $w) { continue }
+        $order = Compare-PythonVersion $v $w
+        $met = switch ($op) {
+            '==' { $order -eq 0 }
+            '!=' { $order -ne 0 }
+            '<=' { $order -le 0 }
+            '>=' { $order -ge 0 }
+            '<' { $order -lt 0 }
+            # >1.7 leaves out 1.7's post-releases, as PEP 440 says.
+            '>' { $order -gt 0 -and -not ($v.Post -ge 0 -and $w.Post -lt 0 -and (Compare-PythonVersion ([pscustomobject]@{ Epoch = $v.Epoch; Release = $v.Release; Phase = $v.Phase; Pre = $v.Pre; Post = -1; Dev = $v.Dev }) $w) -eq 0) }
+            '~=' {
+                if ($w.Release.Count -lt 2) { $true } else {
+                    $upper = [long[]]@($w.Release[0..($w.Release.Count - 2)])
+                    $upper[-1]++
+                    $order -ge 0 -and (Compare-PythonVersion $v ([pscustomobject]@{ Epoch = $w.Epoch; Release = $upper; Phase = 0; Pre = 0; Post = -1; Dev = 0 })) -lt 0
+                }
+            }
+        }
+        if (-not $met) { return $false }
+    }
+    $true
+}
+
+function Get-PythonName {
+    # A package name as PEP 503 normalizes it, as uv writes it in a compiled file.
+    param([string] $Name)
+    ($Name -replace '[-_.]+', '-').ToLowerInvariant()
+}
+
+function Read-PythonRequirement {
+    # The packages an .in file names directly: Name, Specifier and Line (its index in the file).
+    # -r, -c and other options are skipped, and a requirement pinned by URL comes back with Url set.
+    param([string] $File)
+    $lines = @(Get-Content -LiteralPath $File)
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $text = ($lines[$i] -replace '(^|\s)#.*$', '').Trim()
+        if (-not $text -or $text.StartsWith('-')) { continue }
+        if ($text -notmatch '^(?<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(?<rest>[^;]*)') { continue }
+        $rest = $Matches['rest'].Trim()
+        [pscustomobject]@{
+            Name      = $Matches['name']
+            Specifier = if ($rest.StartsWith('@')) { '' } else { $rest }
+            Url       = $rest.StartsWith('@')
+            Line      = $i
+        }
+    }
+}
+
+function Get-PythonCompileCommand {
+    # The uv pip compile arguments a compiled file's header records, or $null when uv didn't
+    # write it or the header holds another command (--custom-compile-command).
+    param([string] $File)
+    $head = @(Get-Content -LiteralPath $File -TotalCount 2)
+    if ($head.Count -lt 2 -or $head[0] -notmatch 'autogenerated by uv') { return $null }
+    $command = ($head[1] -replace '^#\s*', '').Trim()
+    if ($command -notmatch '^uv pip compile ' -or $command -match '[''"`$;&|<>\\]') { return $null }
+    , @($command -split '\s+' | Select-Object -Skip 3)
+}
+
+function Get-PyPIRelease {
+    # The final, unyanked releases of a package on PyPI that allow $Python (when given), oldest
+    # first; $null when PyPI can't be read.
+    param([string] $Name, [string] $Python)
+    if ($script:pypi.ContainsKey($Name)) { return $script:pypi[$Name] }
+    try {
+        $data = Invoke-RestMethod -Uri "https://pypi.org/pypi/$([uri]::EscapeDataString($Name))/json" -TimeoutSec 30
+    } catch {
+        $script:pypi[$Name] = $null
+        return $null
+    }
+    $found = [System.Collections.Generic.List[object]]::new()
+    foreach ($property in $data.releases.PSObject.Properties) {
+        $parsed = ConvertTo-PythonVersion $property.Name
+        $files = @($property.Value)
+        if (-not $parsed -or -not $parsed.Final -or -not $files) { continue }
+        $live = @($files | Where-Object { -not $_.yanked })
+        if (-not $live) { continue }
+        if ($Python) {
+            $allowed = @($live | Where-Object { -not $_.requires_python -or (Test-PythonSpecifier $Python $_.requires_python) })
+            if (-not $allowed) { continue }
+        }
+        $found.Add([pscustomobject]@{ Version = $property.Name; Parsed = $parsed })
+    }
+    $sorted = [System.Collections.Generic.List[object]]::new()
+    foreach ($item in $found) {
+        $at = 0
+        while ($at -lt $sorted.Count -and (Compare-PythonVersion $sorted[$at].Parsed $item.Parsed) -lt 0) { $at++ }
+        $sorted.Insert($at, $item)
+    }
+    $script:pypi[$Name] = $sorted.ToArray()
+    $script:pypi[$Name]
+}
+
+function Invoke-PythonRequirementUpdate {
+    # Raises each entry's floor in its .in file, compiles every uv-written file in the folder
+    # again by its header's command (a file another .in reads first), then reinstalls .venv.
+    param([string] $Directory, [object[]] $Entry, [string[]] $Tracked)
+    if (-not (Get-Command uv -ErrorAction SilentlyContinue)) { throw 'uv is not on PATH, so the Python requirements cannot be compiled again.' }
+    foreach ($item in $Entry) {
+        $lines = @(Get-Content -LiteralPath $item.Project)
+        $requirement = Read-PythonRequirement -File $item.Project | Where-Object { (Get-PythonName $_.Name) -eq (Get-PythonName $item.Name) } | Select-Object -First 1
+        if (-not $requirement) { continue }
+        $target = $item.Target
+        # >= and == take the new version; ~= keeps its number of parts (~=3.1 becomes ~=3.2).
+        $lines[$requirement.Line] = $lines[$requirement.Line] -replace '(>=|==|~=)\s*(\d[^,;\s#]*)', {
+            $op = $_.Groups[1].Value
+            if ($op -ne '~=') { return "$op$target" }
+            $parts = @($_.Groups[2].Value -split '\.').Count
+            "$op$((@($target -split '\.') | Select-Object -First $parts) -join '.')"
+        }
+        [System.IO.File]::WriteAllText((Resolve-Path -LiteralPath $item.Project).Path, (($lines -join "`n") + "`n"), [System.Text.UTF8Encoding]::new($false))
+    }
+
+    # The folder's uv-written files, in an order where a file comes after those it reads.
+    $files = @($Tracked | Where-Object {
+            $_ -match '\.in$' -and ((Split-Path -Path $_ -Parent) -replace '^$', '.') -eq $Directory -and
+            $Tracked -contains ($_ -replace '\.in$', '.txt') -and (Get-PythonCompileCommand -File ($_ -replace '\.in$', '.txt'))
+        })
+    $reads = @{}
+    foreach ($file in $files) {
+        $reads[$file] = @(Get-Content -LiteralPath $file | ForEach-Object {
+                if ($_ -match '^\s*-[rc]\s+(\S+)') { (Join-Path $Directory ($Matches[1] -replace '\.txt$', '.in')) -replace '\\', '/' -replace '^\./', '' }
+            } | Where-Object { $files -contains $_ })
+    }
+    $order = [System.Collections.Generic.List[string]]::new()
+    while ($order.Count -lt $files.Count) {
+        $next = @($files | Where-Object { $order -notcontains $_ -and -not @($reads[$_] | Where-Object { $order -notcontains $_ }) })
+        if (-not $next) { throw "The .in files in $Directory read each other in a circle." }
+        $next | ForEach-Object { $order.Add($_) }
+    }
+    $upgrade = @($Entry | ForEach-Object { '--upgrade-package', $_.Name })
+    Push-Location -LiteralPath $Directory
+    try {
+        foreach ($file in $order) {
+            $compiled = Split-Path -Path ($file -replace '\.in$', '.txt') -Leaf
+            $arguments = Get-PythonCompileCommand -File $compiled
+            Write-Output "   uv pip compile $($arguments -join ' ')"
+            uv pip compile --quiet @arguments @upgrade
+            if ($LASTEXITCODE -ne 0) { throw "uv pip compile failed for $compiled." }
+        }
+        if (Test-Path -LiteralPath '.venv') {
+            # The files no other .in reads hold everything the others do.
+            foreach ($top in $order | Where-Object { $file = $_; -not @($reads.Values | Where-Object { $_ -contains $file }) }) {
+                uv pip install --quiet --require-hashes -r (Split-Path -Path ($top -replace '\.in$', '.txt') -Leaf)
+                if ($LASTEXITCODE -ne 0) { throw "Installing $($top -replace '\.in$', '.txt') into .venv failed." }
+            }
+        }
+    } finally {
+        Pop-Location
+    }
 }
 
 function Read-DependabotHold {
@@ -271,6 +503,45 @@ try {
         }
     }
 
+    # Python: the packages each .in file names, where uv pip compile wrote the .txt beside it.
+    # Held versions are read under Dependabot's uv ecosystem, which updates those files.
+    $script:pypi = @{}
+    $script:byUrl = 0
+    foreach ($in in $tracked | Where-Object { $_ -match '\.in$' }) {
+        $compiled = $in -replace '\.in$', '.txt'
+        if ($tracked -notcontains $compiled) { continue }
+        $header = @(Get-Content -LiteralPath $compiled -TotalCount 1)
+        if ("$header" -notmatch 'autogenerated by uv') { $skipped.Add("python ($in): $compiled was not written by uv pip compile"); continue }
+        $dir = Split-Path -Path $in -Parent
+        if (-not $dir) { $dir = '.' }
+        $versionFile = Join-Path $dir '.python-version'
+        $python = if (Test-Path -LiteralPath $versionFile) { (Get-Content -LiteralPath $versionFile -TotalCount 1).Trim() } else { '' }
+        $pins = @{}
+        foreach ($line in Get-Content -LiteralPath $compiled) {
+            if ($line -match '^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;\\]+)') { $pins[(Get-PythonName $Matches[1])] = $Matches[2] }
+        }
+        foreach ($requirement in Read-PythonRequirement -File $in) {
+            if ($requirement.Url) { $script:byUrl++; continue }
+            $current = $pins[(Get-PythonName $requirement.Name)]
+            if (-not $current) { $skipped.Add("python ($in): $($requirement.Name) is not pinned in $compiled; compile it again"); continue }
+            $releases = Get-PyPIRelease -Name $requirement.Name -Python $python
+            if ($null -eq $releases) { $skipped.Add("python ($in): PyPI did not answer for $($requirement.Name)"); continue }
+            $now = ConvertTo-PythonVersion $current
+            $newer = @($releases | Where-Object { (Compare-PythonVersion $_.Parsed $now) -gt 0 })
+            if (-not $newer) { continue }
+            $inRange = @($newer | Where-Object { Test-PythonSpecifier $_.Version $requirement.Specifier })
+            if ($inRange) {
+                $target = $inRange[-1].Version
+                Add-Update -Ecosystem uv -Directory $dir -Name $requirement.Name -Current $current -Target $target -Kind (Get-UpdateKind $current $target) -InRange $true -Project $in
+            }
+            $latest = $newer[-1].Version
+            if (-not (Test-PythonSpecifier $latest $requirement.Specifier)) {
+                $kind = Get-UpdateKind $current $latest
+                Add-Update -Ecosystem uv -Directory $dir -Name $requirement.Name -Current $current -Target $latest -Kind $kind -InRange $false -Project $in
+            }
+        }
+    }
+
     # GitHub Actions: pins name a major tag, so an update is always a major.
     $pins = @{}
     foreach ($workflow in $tracked | Where-Object { $_ -match '^\.github/workflows/.+\.ya?ml$' }) {
@@ -339,6 +610,9 @@ try {
                         if ($LASTEXITCODE -ne 0) { throw "dotnet add package $($entry.Name) failed." }
                     }
                 }
+                'uv' {
+                    Invoke-PythonRequirementUpdate -Directory $first.Directory -Entry $group.Group -Tracked $tracked
+                }
             }
         }
         return
@@ -364,6 +638,7 @@ try {
     if (-not $entries.Count) { Write-Output 'Up to date: Dependabot has nothing to open.' }
     if ($held) { Write-Output "$held more held back (by .github/dependabot.yml, a Composer conflict, or a package that depends on them), left out." }
     if ($implied.Count) { Write-Output "$($implied.Count) more an SDK adds rather than a project file ($($implied -join ', ')), left out: Dependabot never sees them, and they move with that SDK." }
+    if ($script:byUrl) { Write-Output "$($script:byUrl) Python requirement(s) pinned by URL, left out: they have no releases to compare, and move by hand." }
     $skipped | ForEach-Object { Write-Warning $_ }
 } finally {
     Pop-Location

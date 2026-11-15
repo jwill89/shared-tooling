@@ -53,6 +53,23 @@ Which packages each stack uses and avoids, and how dependencies are added, pinne
 | roave/security-advisories, with `composer audit` gating CI | | | [CI] |
 | `require-dev` for anything only dev tooling uses, its symbols whitelisted by name for composer-require-checker | Loading dev tooling in production | | [CI] |
 
+## Python
+
+| Use | Don't use | Why | Checked |
+| --- | --- | --- | --- |
+| uv, at a pinned version, for Python itself, environments and installs | pip, venv, virtualenv, pyenv | One tool installs the exact Python `.python-version` names, on the dev machine, in CI and on the host | [CI] |
+| Requirements files compiled from `.in` files with every package pinned and hashed, installed with `uv pip install --require-hashes -r` | Poetry, Pipenv, `uv.lock`, a requirements file written by hand | Every machine installs the same packages, checked, and Dependabot's uv ecosystem updates the files (below) | [CI] |
+| ruff, for lint and format, on the shared `lint/python` config | black, isort, flake8, pylint | One tool and one config for both | [lint: ruff] |
+| mypy, always `--strict` | | | [lint: mypy] |
+| pytest with pytest-cov | unittest's runner | The floor lives in `pyproject.toml` ([testing.md](testing.md#python-pytest)) | [CI] |
+| pydantic models for an API's bodies, its OpenAPI spec generated from them | A hand-written spec | One source for the API and its spec | [review] |
+| gunicorn behind Apache, for a web service | The framework's development server, in production | | [review] |
+| `sqlite3` from the standard library | | | [review] |
+
+- An `.in` file names the packages the code imports directly, each with a range floored at the pinned version and capped below its next major (`flask>=3.1.3,<4`; below its next minor for a 0.x package), and `task shared:deps:update` raises a floor with its pin. `requirements.in` holds what the server runs, and `requirements-dev.in` holds `-r requirements.in`, `-c requirements.txt` and the tools, so development runs the server's exact versions. [review]
+- The files are compiled with `uv pip compile --universal --python-version <major.minor> --generate-hashes <file>.in -o <file>.txt`, so they hold every platform's packages (a Windows-only one under its marker) and resolve for the Python production runs. Never with `--custom-compile-command`: the header keeps that real command, which Dependabot and `task shared:deps:update` run again. [review]
+- A package pinned by URL, such as a model wheel, is compiled with its hash too. No release list or advisory database knows it, so it moves by hand, with the package whose version it must match held in `dependabot.yml`. [review]
+
 ## C\#
 
 | Use | Don't use | Why | Checked |
@@ -78,10 +95,11 @@ Which packages each stack uses and avoids, and how dependencies are added, pinne
 
 ## Versions and holds
 
-- Tool versions are pinned exactly, and the shared workflows' inputs hold the pins: golangci-lint, govulncheck, markdownlint-cli2 and PSScriptAnalyzer. [CI]
+- Tool versions are pinned exactly, and the shared workflows' inputs hold the pins: golangci-lint, govulncheck, markdownlint-cli2, PSScriptAnalyzer and uv. A Python project's own tools (ruff, mypy, pytest) are pinned in its dev requirements. [CI]
 - golangci-lint is built with the project's own Go toolchain. [CI]
 - A generator run through `npx` names a fixed version. [review]
 - A runtime's version lives in one file that CI reads: Node's in `.nvmrc`, with `engines.node` matching, and Go's in the `go` line of `go.mod`, which names the release the module requires and is raised when a Go security release lands; a `toolchain` line equal to it is left out, since `go mod tidy` drops it. [CI]
+- Python's version lives in `.python-version` as an exact patch (`3.14.9`), which `python.yml`, `e2e.yml`, `task shared:python:setup` and the deploy read. It is raised when a Python security release lands, as Go's is; Dependabot doesn't update it. `requires-python` in `pyproject.toml` and the compile's `--python-version` name its minor. [CI]
 - A version held on purpose is held in config (a `~` pin, a Dependabot ignore or a Composer `conflict`), and AGENTS.md records why it is held and what ends the hold. [review]
 - A hold stays until its reason is gone. [review]
 - A major of a tool `lint/web` owns (ESLint and its plugins, Prettier, Stylelint and its configs) moves in shared-tooling first and reaches a project with `task shared:update`. [review]
@@ -90,6 +108,7 @@ Which packages each stack uses and avoids, and how dependencies are added, pinne
 ## Updates
 
 - Dependabot runs weekly on Monday for every ecosystem in the repo, from a `dependabot.yml` copied from `repo/dependabot.example.yml`. [review]
+- Python's compiled requirements are updated under Dependabot's `uv` ecosystem, not `pip`. Read from Dependabot's source (dependabot-core, November 2026): its uv ecosystem compiles a requirements file again with `uv pip compile`, taking `--universal`, `--python-version` and `--generate-hashes` from the command in the file's header, while its pip ecosystem compiles it with pip-tools' `pip-compile`, which keeps neither `--universal` nor `--python-version`, so a Windows-only package would leave the file. [review]
 - A push goes through `task push`, so Dependabot finds little left to open: it takes the in-range updates Dependabot would open (`task shared:deps`, which leaves out what `dependabot.yml` holds) after asking, runs `task check` on them and commits them as one `chore(deps)` commit, then scans every lockfile with OSV-Scanner (`task shared:vuln`), runs `task check`, and pushes. Majors are only listed: Dependabot opens each alone, to be read first. [review]
 - Every project's `task check` includes `task shared:vuln`, so a known advisory fails locally before CI's OSV job finds it. [review]
 - Minors and patches are grouped per ecosystem, and majors come one by one. [review]
@@ -101,5 +120,6 @@ Which packages each stack uses and avoids, and how dependencies are added, pinne
 ## Audits
 
 - CI audits dependencies and gates the build: `npm audit --omit=dev` in `web.yml`, `composer audit` in `php.yml`, govulncheck in `go.yml`, and OSV-Scanner over every lockfile in `osv.yml`. [CI]
+- Python's audit is OSV-Scanner over the compiled requirements files (`requirements.txt` and `requirements-dev.txt` alike), in `osv.yml` and `task shared:vuln`; pip-audit isn't used, since the pinned files list every package already. [CI]
 - Go keeps govulncheck beside OSV-Scanner, since govulncheck checks whether the vulnerable code is actually called. A Go module OSV-Scanner flags is still raised to its fixed version once a tagged release carries the fix, even when govulncheck finds the code unreached. [CI]
 - An advisory OSV-Scanner reports is fixed by raising the package. Only one that reaches nothing that ships (lint, test or build tooling), and whose fix no dependent's range takes, may be passed over: in an `osv-scanner.toml` beside the lockfile, copied from `repo/osv-scanner.example.toml`, each entry with its reason and an `ignoreUntil` three months out, when it is looked at again. [CI]

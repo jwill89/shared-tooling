@@ -1067,17 +1067,22 @@ function Get-DirectorySwapStep {
         [string]$Owner,
         [string]$BeforeSwap,
         [string]$AfterSwap,
+        [string]$OnRestore,
         [switch]$NoBackup,
         [System.Collections.Specialized.OrderedDictionary]$ExtraVariable,
         [string]$Check,
         [string]$Vhost,
-        [string]$ServerName
+        [string]$ServerName,
+        [string]$ServiceName
     )
     $Live = $Live.TrimEnd('/')
     Assert-RemotePath -Value $Live -What 'Live'
     if (-not $Item) { $Item = Split-Path -Path $Live -Leaf }
     Assert-SafeRemoteName -Value $Item -What 'Item' -AllowSlash
-    if ([bool]$Vhost -ne [bool]$ServerName) { throw 'Pass -Vhost and -ServerName together: the vhost file is named after the site''s ServerName.' }
+    if ($ServerName -and $ServiceName) { throw 'Pass -ServerName or -ServiceName, not both: the vhost file is named after one of them.' }
+    if ([bool]$Vhost -ne [bool]($ServerName -or $ServiceName)) {
+        throw 'Pass -Vhost with -ServerName (a site served from the folder) or -ServiceName (a service shipped as the folder): the vhost file is named after it.'
+    }
     $user, $group = Split-Owner -Owner $Owner
     $variable = [ordered]@{
         live      = $Live
@@ -1095,7 +1100,13 @@ function Get-DirectorySwapStep {
     $vhostReload = ''
     $vhostDrop = ''
     if ($Vhost) {
-        $vhostVariable = Get-VhostVariable -Path (Get-VhostPath -Name $ServerName -What 'ServerName') -Vhost $Vhost -ServerName $ServerName
+        # A service's vhost is named after the service and may declare any ServerName; a
+        # site's is named after its ServerName, which it must declare.
+        $vhostVariable = if ($ServiceName) {
+            Get-VhostVariable -Path (Get-VhostPath -Name $ServiceName -What 'ServiceName') -Vhost $Vhost
+        } else {
+            Get-VhostVariable -Path (Get-VhostPath -Name $ServerName -What 'ServerName') -Vhost $Vhost -ServerName $ServerName
+        }
         foreach ($name in $vhostVariable.Keys) { $variable[$name] = $vhostVariable[$name] }
         $variable['reload_svc'] = 'apache2'
         $vhostShell = Get-VhostShell -Install
@@ -1153,7 +1164,8 @@ echo "Swapped the new folder into $live."
         $moveFiles.Add(('if [ -f {0} ]; then if [ -f {1} ]; then cp -p {1} {1}.old; else rm -f {1}.old; fi; cp {0} {1}.next; if [ -n "$owner" ]; then chown "$owner:$group" {1}.next; fi; mv -f {1}.next {1}; fi' -f $source, $to))
         $dropOld.Add(('if [ -n "$no_backup" ]; then rm -f {0}.old; fi' -f $to))
     }
-    Join-ShellScript -Variable $variable -Body (@($vhostShell, $begin, $Check, $stage, $BeforeSwap, $vhostInstall, $swap) + @($undoFiles) + @($vhostUndo, $undoEnd) + @($moveFiles) + @($AfterSwap, $vhostReload, $end) + @($dropOld) + @($vhostDrop))
+    # -OnRestore runs inside undo, once the folder, the files and the vhost are back.
+    Join-ShellScript -Variable $variable -Body (@($vhostShell, $begin, $Check, $stage, $BeforeSwap, $vhostInstall, $swap) + @($undoFiles) + @($vhostUndo, $OnRestore, $undoEnd) + @($moveFiles) + @($AfterSwap, $vhostReload, $end) + @($dropOld) + @($vhostDrop))
 }
 
 #endregion
@@ -3396,18 +3408,22 @@ function Switch-RemoteDirectory {
       - <Live> becomes <Live>.old and the new folder becomes <Live>; if that last rename
         fails, the old folder and the vhost are put back;
       - each -File moves into place too, its previous copy kept as .old (a site's .htaccess);
-      - -AfterSwap runs; if it fails, the previous folder, files and vhost go back;
+      - -AfterSwap runs; if it fails, the previous folder, files and vhost go back, then
+        -OnRestore runs;
       - Apache reloads if the vhost changed.
     A run cut off between the two renames is noticed by the next and the live folder put back first.
+    A live folder that is a symlink (a release folder behind a current link) is swapped as
+    the link: it becomes <Live>.old, and a rollback renames it back.
 
     The vhost is the site's one file, holding its port-80 redirect and its port-443 site,
-    installed as /etc/apache2/sites-available/<ServerName>.conf and enabled. Every other
-    enabled site serving one of its names (a certbot -le-ssl file, an old pair under other
-    names) is disabled in the same configtest and reload, and enabled again on a rollback.
-    The deploy refuses, changing nothing, when one of those sites also serves a name the
-    new file does not, when the new file drops a port those names are served on now, or
-    when the file's ServerName is not -ServerName. Install-ServiceBinary's help has the
-    detail.
+    installed as /etc/apache2/sites-available/<name>.conf and enabled: <ServerName>.conf for
+    a site served from the folder, or <ServiceName>.conf for a service whose code is the
+    folder (a Python web service). Every other enabled site serving one of its names (a
+    certbot -le-ssl file, an old pair under other names) is disabled in the same configtest
+    and reload, and enabled again on a rollback. The deploy refuses, changing nothing, when
+    one of those sites also serves a name the new file does not, when the new file drops a
+    port those names are served on now, or, with -ServerName, when the file's ServerName is
+    not -ServerName. Install-ServiceBinary's help has the detail.
 
     Hooks run under set -e with these shell variables set: live, new, old, bundle.
 
@@ -3428,15 +3444,26 @@ function Switch-RemoteDirectory {
     Shell run on the new folder ($new) before the swap, such as php -l on its scripts.
 
     .PARAMETER AfterSwap
-    Shell run after the swap, such as clearing the site's cache; a failure swaps back.
+    Shell run after the swap, such as clearing the site's cache, or Install-HostConfig's step
+    restarting the service on the new code; a failure swaps back.
+
+    .PARAMETER OnRestore
+    Shell run once a failure after the swap has put the previous folder, files and vhost
+    back, such as restarting the service on the old code:
+    systemctl reset-failed example; systemctl restart example.
 
     .PARAMETER Vhost
     The site's vhost file inside the upload, rendered from the project's template. Goes
-    with -ServerName.
+    with -ServerName or -ServiceName.
 
     .PARAMETER ServerName
-    The site's ServerName, which names the vhost file:
+    For a site served from the folder: its ServerName, which names the vhost file,
     /etc/apache2/sites-available/<ServerName>.conf, in lower case. The file must declare it.
+
+    .PARAMETER ServiceName
+    For a service whose code is the folder: the service, which names the vhost file,
+    /etc/apache2/sites-available/<ServiceName>.conf, in lower case, as Install-ServiceBinary
+    names a binary service's.
 
     .PARAMETER NoBackup
     Remove <Live>.old, the files' .old copies and the vhost's rollback copies once the swap
@@ -3469,6 +3496,16 @@ function Switch-RemoteDirectory {
 
     .EXAMPLE
     Switch-RemoteDirectory -AsStep -Live '/var/www/example.com/site' -Vhost 'apache-vhost.conf' -ServerName 'example.com'
+
+    .EXAMPLE
+    # A Python web service: its environment built before the swap, its unit installed and
+    # its /healthz awaited after it, and its vhost named after the service.
+    Switch-RemoteDirectory -Archive 'example-deploy.tgz' -Sha256 $archive.Sha256 -ExpectedFileCount $archive.FileCount `
+        -Live '/opt/example/current' -Owner 'example' `
+        -BeforeSwap (Install-PythonEnvironment -AppDir '/opt/example' -Owner 'example') `
+        -AfterSwap (Install-HostConfig -AsStep -Name 'example' -Unit 'example.service' -Service 'example' -HealthUrl 'http://127.0.0.1:8000/healthz') `
+        -OnRestore 'systemctl reset-failed example; systemctl restart example' `
+        -Vhost 'apache-vhost.conf' -ServiceName 'example'
     #>
     [CmdletBinding(DefaultParameterSetName = 'Archive')]
     [OutputType([string])]
@@ -3486,9 +3523,14 @@ function Switch-RemoteDirectory {
 
         [string]$AfterSwap,
 
+        [string]$OnRestore,
+
         [string]$Vhost,
 
         [string]$ServerName,
+
+        [ValidatePattern('^[A-Za-z0-9_.@-]+$')]
+        [string]$ServiceName,
 
         [switch]$NoBackup,
 
@@ -3516,15 +3558,17 @@ function Switch-RemoteDirectory {
         [switch]$NoRetry
     )
     $swap = @{
-        Live       = $Live
-        Item       = $Item
-        File       = $File
-        Owner      = $Owner
-        BeforeSwap = $BeforeSwap
-        AfterSwap  = $AfterSwap
-        NoBackup   = $NoBackup
-        Vhost      = $Vhost
-        ServerName = $ServerName
+        Live        = $Live
+        Item        = $Item
+        File        = $File
+        Owner       = $Owner
+        BeforeSwap  = $BeforeSwap
+        AfterSwap   = $AfterSwap
+        OnRestore   = $OnRestore
+        NoBackup    = $NoBackup
+        Vhost       = $Vhost
+        ServerName  = $ServerName
+        ServiceName = $ServiceName
     }
     $step = Get-DirectorySwapStep @swap
     if ($AsStep) { return $step }
@@ -3539,9 +3583,9 @@ function Restore-RemoteDirectory {
     .DESCRIPTION
     Done by renames: the failed folder is moved aside and removed only once the old one is
     back. (A plain mv '<Live>.old' '<Live>' would move the old folder inside the live one
-    while that exists.) Each -File gets its .old copy back too. With -ServerName, the vhost
-    and the sites the deploy disabled go back as they were, if the deploy changed them, and
-    Apache reloads. One connection.
+    while that exists.) Each -File gets its .old copy back too. With -ServerName or
+    -ServiceName, the vhost and the sites the deploy disabled go back as they were, if the
+    deploy changed them, and Apache reloads. Then -OnRestore runs. One connection.
 
     .PARAMETER Live
     The live folder on the host.
@@ -3551,6 +3595,14 @@ function Restore-RemoteDirectory {
 
     .PARAMETER ServerName
     The ServerName given to Switch-RemoteDirectory -ServerName, whose vhost goes back.
+
+    .PARAMETER ServiceName
+    The service given to Switch-RemoteDirectory -ServiceName, whose vhost goes back.
+
+    .PARAMETER OnRestore
+    Shell run once the previous folder, files and vhost are back, such as restarting a
+    service on the old code. A service whose unit Install-HostConfig installed is
+    restarted by Restore-HostConfig instead, run after this in the same Invoke-RemoteStep.
 
     .PARAMETER AsScript
     Return the shell block instead of running it, to join with others in Invoke-RemoteStep.
@@ -3566,6 +3618,13 @@ function Restore-RemoteDirectory {
 
     .EXAMPLE
     Restore-RemoteDirectory -Live '/var/www/example.com/site' -ServerName 'example.com'
+
+    .EXAMPLE
+    # A Python web service after a failed smoke check: the code and vhost, then its unit and restart.
+    Invoke-RemoteStep -Script @(
+        Restore-RemoteDirectory -AsScript -Live '/opt/example/current' -ServiceName 'example'
+        Restore-HostConfig -AsScript -Name 'example' -Service 'example'
+    )
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -3577,6 +3636,11 @@ function Restore-RemoteDirectory {
 
         [string]$ServerName,
 
+        [ValidatePattern('^[A-Za-z0-9_.@-]+$')]
+        [string]$ServiceName,
+
+        [string]$OnRestore,
+
         [switch]$AsScript,
 
         [object]$Connection,
@@ -3586,11 +3650,13 @@ function Restore-RemoteDirectory {
     $Live = $Live.TrimEnd('/')
     Assert-RemotePath -Value $Live -What 'Live'
     foreach ($path in $File) { Assert-RemotePath -Value $path -What 'File' }
+    if ($ServerName -and $ServiceName) { throw 'Pass -ServerName or -ServiceName, not both: the vhost file is named after one of them.' }
     $variable = [ordered]@{ live = $Live }
     $vhostShell = ''
     $vhostRestore = ''
-    if ($ServerName) {
-        $vhostVariable = Get-VhostVariable -Path (Get-VhostPath -Name $ServerName -What 'ServerName')
+    if ($ServerName -or $ServiceName) {
+        $vhostPath = if ($ServiceName) { Get-VhostPath -Name $ServiceName -What 'ServiceName' } else { Get-VhostPath -Name $ServerName -What 'ServerName' }
+        $vhostVariable = Get-VhostVariable -Path $vhostPath
         foreach ($name in $vhostVariable.Keys) { $variable[$name] = $vhostVariable[$name] }
         $variable['reload_svc'] = 'apache2'
         $vhostShell = Get-VhostShell
@@ -3609,7 +3675,7 @@ rm -rf "$failed"
         $q = ConvertTo-ShellLiteral -Value $path
         "if [ -f $q.old ]; then mv -f $q.old $q; fi"
     }
-    $script = Join-ShellScript -Variable $variable -Body (@($vhostShell, $restore) + @($files) + @($vhostRestore, 'echo "Rolled $live back to the previous copy."'))
+    $script = Join-ShellScript -Variable $variable -Body (@($vhostShell, $restore) + @($files) + @($vhostRestore, $OnRestore, 'echo "Rolled $live back to the previous copy."'))
     if ($AsScript) { return $script }
     Invoke-RemoteFlow -Connection $Connection -Script $script -NoRetry:$NoRetry -FailureMessage "Rolling $Live back failed on the host"
 }
@@ -3918,6 +3984,151 @@ done
     $script = Join-ShellScript -Variable $variable -Body @($vhostShell, $restore, $vhostRestore, $OnRestore, 'echo "Put the previous items back in $root."')
     if ($AsScript) { return $script }
     Invoke-RemoteFlow -Connection $Connection -Script $script -NoRetry:$NoRetry -FailureMessage "Rolling the items in $Root back failed on the host"
+}
+
+#endregion
+
+#region Python environments
+
+function Install-PythonEnvironment {
+    <#
+    .SYNOPSIS
+    Returns the shell, for Switch-RemoteDirectory's -BeforeSwap, that installs the exact Python the new folder names, builds or reuses its environment, links it as the folder's .venv, compiles the folder's bytecode, and removes environments nothing links to.
+
+    .DESCRIPTION
+    A Python service's code ships as a folder holding its version file (.python-version,
+    an exact version such as 3.14.9) and its requirements file, every package pinned with
+    its hashes; never an environment. This builds what that folder needs on the host, under
+    -AppDir, before the swap, so a failure leaves the live folder untouched. It runs nothing
+    itself: pass it as the swap's -BeforeSwap. In order:
+      - uv must be at <AppDir>/bin/uv, put there by the project's host setup; the version
+        file must name an exact version, and both files must be in the new folder;
+      - that Python is installed with uv into <AppDir>/python, which does nothing when it
+        is there already;
+      - the environment is keyed by the SHA-256 of that version and the requirements file
+        (line endings aside): <AppDir>/venvs/<key>. One that holds its completion marker is
+        reused. Otherwise any partial one (a build cut off) is removed and the environment
+        built in place, since a virtualenv can't be moved once built: uv venv on that
+        Python, then uv pip install --require-hashes --compile-bytecode, which refuses a
+        package whose hash doesn't match. It is given to -Owner, and the marker is written
+        last;
+      - the new folder's .venv becomes a link to it;
+      - the folder's own bytecode is compiled with that Python (python -m compileall),
+        which also refuses a file that doesn't parse, and what that writes takes the
+        folder's owner: the running service can't write it under ProtectSystem=strict;
+      - every environment that no folder links to is removed: the new folder's, the live
+        one's and that of <Live>.old, still a rollback's target until the swap replaces it,
+        all stay. A live folder that is a symlink (a release folder behind a current link)
+        keeps the environment its .venv names.
+    uv's cache sits in <AppDir>/cache. uv, its cache and the Python installs stay root's;
+    files are copied from the cache rather than linked, so an environment shares no file
+    with it. Everything runs under umask 022, so the service's user can read the Python.
+
+    The block is a subshell: it reads $new and $live from the swap, and sets nothing the
+    swap's later lines see. It exits 3 when something it needs is missing and 4 when the
+    install fails, and the swap stops before anything live changes.
+
+    .PARAMETER AppDir
+    The service's folder on the host, such as /opt/example, holding bin/uv, python/,
+    venvs/ and cache/ beside the live folder.
+
+    .PARAMETER Owner
+    user or user:group given each environment it builds, such as the service's own user
+    (a bare user also names the group). Without it they stay root's.
+
+    .PARAMETER Requirements
+    The requirements file inside the new folder; requirements.txt by default.
+
+    .PARAMETER VersionFile
+    The file inside the new folder naming the exact Python; .python-version by default.
+
+    .EXAMPLE
+    Switch-RemoteDirectory -AsStep -Live '/opt/example/current' -Owner 'example' `
+        -BeforeSwap (Install-PythonEnvironment -AppDir '/opt/example' -Owner 'example')
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$AppDir,
+
+        [string]$Owner,
+
+        [string]$Requirements = 'requirements.txt',
+
+        [string]$VersionFile = '.python-version'
+    )
+    Assert-RemotePath -Value $AppDir -What 'AppDir'
+    if (-not $AppDir.StartsWith('/')) { throw "AppDir '$AppDir' must be an absolute path." }
+    $AppDir = $AppDir.TrimEnd('/')
+    Assert-SafeRemoteName -Value $Requirements -What 'Requirements' -AllowSlash
+    Assert-SafeRemoteName -Value $VersionFile -What 'VersionFile' -AllowSlash
+    $user, $group = Split-Owner -Owner $Owner
+    $variable = [ordered]@{
+        py_app          = $AppDir
+        py_owner        = $user
+        py_group        = $group
+        py_requirements = $Requirements
+        py_version_file = $VersionFile
+    }
+    $body = @'
+umask 022
+py_uv="$py_app/bin/uv"
+export UV_PYTHON_INSTALL_DIR="$py_app/python" UV_CACHE_DIR="$py_app/cache" UV_LINK_MODE=copy UV_NO_CONFIG=1
+if [ ! -x "$py_uv" ]; then echo "uv is not at $py_uv, where the host setup puts it; nothing was changed." >&2; exit 3; fi
+for f in "$py_version_file" "$py_requirements"; do
+  if [ ! -f "$new/$f" ]; then echo "The new folder has no $f; nothing was changed." >&2; exit 3; fi
+done
+py_version=$(tr -d '[:space:]' < "$new/$py_version_file")
+if ! printf '%s' "$py_version" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+'; then
+  echo "$py_version_file names '$py_version', not an exact Python such as 3.14.9; nothing was changed." >&2
+  exit 3
+fi
+"$py_uv" python install --quiet --no-bin "$py_version"
+py_key=$({ printf 'python %s\n' "$py_version"; tr -d '\r' < "$new/$py_requirements"; } | sha256sum | cut -c 1-16)
+py_env="$py_app/venvs/$py_key"
+py_mark="$py_env/.shared-deploy-complete"
+if [ -f "$py_mark" ]; then
+  echo "Reusing Python environment $py_key (Python $py_version)."
+else
+  # A folder without the marker is a build that was cut off.
+  rm -rf "$py_env"
+  mkdir -p "$py_app/venvs"
+  echo "Building Python environment $py_key (Python $py_version)..."
+  "$py_uv" venv --quiet --managed-python --no-python-downloads --python "$py_version" "$py_env"
+  if ! "$py_uv" pip install --quiet --require-hashes --compile-bytecode --python "$py_env/bin/python" -r "$new/$py_requirements"; then
+    rm -rf "$py_env"
+    echo "Installing $py_requirements failed, so the live folder is untouched." >&2
+    exit 4
+  fi
+  if [ -n "$py_owner" ]; then chown -R "$py_owner:$py_group" "$py_env"; fi
+  touch "$py_mark"
+  if [ -n "$py_owner" ]; then chown "$py_owner:$py_group" "$py_mark"; fi
+fi
+rm -rf "$new/.venv"
+ln -s "$py_env" "$new/.venv"
+chown -h --reference="$new" "$new/.venv"
+if ! "$py_env/bin/python" -m compileall -q "$new" >&2; then
+  echo "The new folder's Python does not compile, so the live folder is untouched." >&2
+  exit 4
+fi
+find "$new" -name __pycache__ -type d -exec chown -R --reference="$new" {} +
+# Environments no folder links to: not the new one, the live one, or the previous one kept
+# beside it, which stays a rollback's target until this swap replaces it.
+py_keep_live=$(readlink -f "$live/.venv" 2>/dev/null || true)
+py_keep_old=$(readlink -f "$live.old/.venv" 2>/dev/null || true)
+py_keep_new=$(readlink -f "$new/.venv")
+for py_dir in "$py_app"/venvs/*; do
+  if [ ! -d "$py_dir" ]; then continue; fi
+  py_real=$(readlink -f "$py_dir")
+  if [ "$py_real" != "$py_keep_live" ] && [ "$py_real" != "$py_keep_old" ] && [ "$py_real" != "$py_keep_new" ]; then
+    rm -rf "$py_dir"
+    echo "Removed Python environment ${py_dir##*/}, which no folder uses."
+  fi
+done
+echo "Linked $new/.venv to Python environment $py_key."
+'@
+    Join-ShellScript -Variable $variable -Body @($body)
 }
 
 #endregion
@@ -4473,20 +4684,24 @@ function Install-HostConfig {
 
     .DESCRIPTION
     For what a site runs beside its code that is not a binary: its cron file in
-    /etc/cron.d, and the systemd units of a worker that runs the site's own code, such as a
-    PHP queue worker (ExecStart=/usr/bin/php artisan queue:work) or a timer that runs one
-    of its scripts. A service with a binary of its own uses Install-ServiceBinary instead.
+    /etc/cron.d, and the systemd units of a worker or service that runs the site's own
+    code, such as a PHP queue worker (ExecStart=/usr/bin/php artisan queue:work), a timer
+    that runs one of its scripts, or a Python web service run by gunicorn from the swapped
+    folder. A service with a binary of its own uses Install-ServiceBinary instead.
     In order:
       - checks before anything changes: each file is in the upload; the cron file has only
         comments, NAME=value lines and jobs (five time fields or an @keyword, a user, a
-        command), and every user it names exists;
+        command), and every user it names exists; with -HealthUrl, curl is installed and
+        the URL can be built;
       - each file is made LF-only with a trailing newline, then compared with the live
         copy (cmp); one that differs is installed (root:root, 644 for the cron file,
         -UnitMode for units), its previous copy kept in /var/lib/shared-deploy/<Name>;
       - if a unit changed, systemd reloads; a new timer is enabled and started, a changed
         one restarted if it runs, and a new -Service enabled;
       - each -Service restarts, so the worker runs the code now in place, and must be
-        active after -SettleSeconds;
+        active after -SettleSeconds; with -HealthUrl, the URL must answer within
+        -HealthTimeoutSeconds instead of the wait, polled once a second (and given up early
+        once the first service has failed for good), and every -Service must then be active;
       - on any failure, every file goes back as it was (a new unit stopped, disabled and
         removed), systemd reloads, each -Service that was running before restarts and the
         others stop, and the step fails.
@@ -4498,7 +4713,10 @@ function Install-HostConfig {
     Run it as -AfterSwap of the swap that ships the site's code (Switch-RemoteItemSet or
     Switch-RemoteDirectory), so the workers restart on the new code and a failure here
     also swaps the code back; give that swap -OnRestore with the workers' restart, so
-    they run the old code again once it is back.
+    they run the old code again once it is back. The restart here, on a failure, runs on
+    the new code, since the swap puts the old code back only after this step: so -OnRestore
+    restarts every worker that should run, after systemctl reset-failed, rather than
+    try-restart, which skips a worker that crashed.
 
     .PARAMETER Name
     The site's short name, which names the state folder /var/lib/shared-deploy/<Name>.
@@ -4520,7 +4738,22 @@ function Install-HostConfig {
     The services restarted and checked once the files are in: the workers.
 
     .PARAMETER SettleSeconds
-    How long to wait before the is-active check; 2 by default.
+    How long to wait before the is-active check; 2 by default. Not used with -HealthUrl.
+
+    .PARAMETER HealthUrl
+    A URL fetched on the host (curl -fs, two seconds each) once a second after the restart
+    until it answers, such as the first -Service's /healthz. Parts in braces, such as
+    http://{EXAMPLE_ADDR}/healthz, are read from -EnvFile on the host.
+
+    .PARAMETER EnvFile
+    The service's env file on the host, for -HealthUrl's {NAME} parts.
+
+    .PARAMETER HealthDefault
+    Values for -HealthUrl's {NAME} parts the env file does not set.
+
+    .PARAMETER HealthTimeoutSeconds
+    How long -HealthUrl may take to answer; 60 by default, room for an app that loads a
+    model or a large index at start. Only a failing check waits that long.
 
     .PARAMETER NoBackup
     Remove the previous copies and the rollback record once the step succeeds.
@@ -4551,7 +4784,12 @@ function Install-HostConfig {
     $config = Install-HostConfig -AsStep -Name 'example' -CronFile 'deploy/example.cron' `
         -Unit 'deploy/example-queue.service' -Service 'example-queue'
     Switch-RemoteItemSet -AsStep -Root '/var/www/example.com' -Item 'app', 'public', 'vendor' `
-        -AfterSwap $config -OnRestore 'systemctl try-restart example-queue'
+        -AfterSwap $config -OnRestore 'systemctl reset-failed example-queue; systemctl restart example-queue'
+
+    .EXAMPLE
+    # A Python web service's unit, its /healthz awaited after the restart.
+    Install-HostConfig -AsStep -Name 'example' -Unit 'example.service' -Service 'example' `
+        -HealthUrl 'http://127.0.0.1:8000/healthz'
     #>
     [CmdletBinding(DefaultParameterSetName = 'Archive')]
     [OutputType([string])]
@@ -4575,6 +4813,15 @@ function Install-HostConfig {
 
         [ValidateRange(0, 3600)]
         [int]$SettleSeconds = 2,
+
+        [string]$HealthUrl,
+
+        [string]$EnvFile,
+
+        [System.Collections.IDictionary]$HealthDefault = @{},
+
+        [ValidateRange(1, 3600)]
+        [int]$HealthTimeoutSeconds = 60,
 
         [switch]$NoBackup,
 
@@ -4611,6 +4858,8 @@ function Install-HostConfig {
     }
     $unitNames = @($Unit | ForEach-Object { ($_ -split '/')[-1] })
     if (@($unitNames | Select-Object -Unique).Count -ne $unitNames.Count) { throw 'Two -Unit files have the same name.' }
+    if ($HealthUrl -and -not $Service) { throw '-HealthUrl checks the first -Service, so it needs one.' }
+    if ($EnvFile) { Assert-RemotePath -Value $EnvFile -What 'EnvFile' }
 
     $variable = [ordered]@{
         cfg_state     = "/var/lib/shared-deploy/$Name"
@@ -4620,13 +4869,18 @@ function Install-HostConfig {
         cfg_units     = $Unit -join ' '
         cfg_unit_mode = $UnitMode
         cfg_services  = $Service -join ' '
+        cfg_main      = if ($Service) { $Service[0] } else { '' }
         cfg_settle    = "$SettleSeconds"
         cfg_no_backup = if ($NoBackup) { '1' } else { '' }
+        env_file      = $EnvFile
+        health_wait   = "$HealthTimeoutSeconds"
     }
+    $health = ConvertTo-HealthScript -Template $HealthUrl -Default $HealthDefault -EnvFile $EnvFile
     $check = @'
 for f in $cfg_cron $cfg_units; do
   if [ ! -f "$bundle/$f" ]; then echo "The upload has no $f; nothing was changed." >&2; exit 3; fi
 done
+if [ -n "$health" ] && ! command -v curl >/dev/null; then echo "curl is not installed on the host, so $health cannot be checked; nothing was changed." >&2; exit 3; fi
 cfg_work=$(mktemp -d)
 if [ -n "$cfg_cron" ]; then
   tr -d '\r' < "$bundle/$cfg_cron" > "$cfg_work/cron"
@@ -4735,8 +4989,26 @@ fi
 # A worker that failed or restarted often may be held by systemd's start limit; reset-failed
 # clears it, so the restart is never refused.
 for s in $cfg_services; do systemctl reset-failed "$s" 2>/dev/null || true; systemctl restart "$s" || true; done
-if [ -n "$cfg_services" ]; then sleep "$cfg_settle"; fi
 cfg_failed=
+if [ -n "$health" ]; then
+  # Polled once a second until it answers; a service systemd has given up on stops the wait.
+  cfg_up=
+  cfg_i=0
+  while [ "$cfg_i" -lt "$health_wait" ]; do
+    if curl -fs -m 2 -o /dev/null "$health"; then cfg_up=1; break; fi
+    if systemctl is-failed --quiet "$cfg_main"; then break; fi
+    cfg_i=$((cfg_i + 1))
+    sleep 1
+  done
+  if [ -z "$cfg_up" ]; then
+    echo "$cfg_main did not answer $health within ${health_wait}s." >&2
+    journalctl -u "$cfg_main" -n 30 --no-pager >&2 || true
+    exit 1
+  fi
+  echo "$cfg_main answered $health."
+elif [ -n "$cfg_services" ]; then
+  sleep "$cfg_settle"
+fi
 for s in $cfg_services; do
   if ! systemctl is-active --quiet "$s"; then
     cfg_failed="$cfg_failed $s"
@@ -4752,7 +5024,7 @@ if [ -n "$cfg_no_backup" ]; then
 fi
 if [ -n "$cfg_services" ]; then echo "Active: $cfg_services"; fi
 '@
-    $step = Join-ShellScript -Variable $variable -Body @((Get-HostConfigShell), $check, $install)
+    $step = Join-ShellScript -Variable $variable -Body @($health, (Get-HostConfigShell), $check, $install)
     if ($AsStep) { return $step }
     Invoke-DeployBundle -Archive $Archive -Sha256 $Sha256 -ExpectedFileCount $ExpectedFileCount -Step $step -AsScript:$AsScript -Connection $Connection -NoRetry:$NoRetry
 }
@@ -5864,6 +6136,7 @@ Export-ModuleMember -Alias 'Fail' -Function @(
     'Restore-RemoteDirectory'
     'Switch-RemoteItemSet'
     'Restore-RemoteItemSet'
+    'Install-PythonEnvironment'
     'Backup-RemoteDatabase'
     'Export-PluginRepository'
     'Publish-PluginRepository'

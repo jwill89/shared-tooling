@@ -9,6 +9,7 @@ What every project tests, how it tests it, and where each stack keeps and runs i
 | Vue or React, and TypeScript | `src/__tests__/`, named `*.spec.ts` (`*.spec.tsx` for a React component) | Vitest, configured inside `vite.config.ts` with `test/web`'s `vitestDefaults` | `web.yml` |
 | Go | Beside the code, named `*_test.go` | `go test` | `go.yml` |
 | PHP | `tests/`, in the suites the project's `phpunit.xml` names | PHPUnit or Pest, on a copy of `test/php/phpunit.xml.dist` | `php.yml` |
+| Python | `tests/`, named `test_*.py` | pytest with pytest-cov, from the project's dev requirements | `python.yml` |
 | End-to-end | `e2e/` | Playwright, with `test/e2e`'s `playwrightDefaults` and axe from `test/a11y` | `e2e.yml` |
 | C# (Dalamud plugins) | A test project beside the plugin | xUnit v3 | `dotnet.yml` |
 
@@ -21,8 +22,8 @@ What every project tests, how it tests it, and where each stack keeps and runs i
 
 - Every change ships with its tests, small features included. [review]
 - Every bug fix lands with a test that fails without it: write the test first and watch it fail. [review]
-- Each project's coverage floor sits a little under its current numbers, and CI fails below it: `test/web` sets Vitest's thresholds, `test/php/coverage-check.php` reads PHPUnit's report (pcov in CI), and `go.yml` runs `test/go/Test-CoverageFloor.ps1`. [CI]
-- `task check` holds the same floors locally, with the same numbers CI passes: Vitest's run with coverage, PHPUnit with coverage and `coverage-check.php`, and `task shared:go:coverage` for each Go module (`DIR=backend FLOOR=62.5 EXCLUDE=... COVERPKG=...`, as its `go.yml` call has them). [review]
+- Each project's coverage floor sits a little under its current numbers, and CI fails below it: `test/web` sets Vitest's thresholds, `test/php/coverage-check.php` reads PHPUnit's report (pcov in CI), `go.yml` runs `test/go/Test-CoverageFloor.ps1`, and `python.yml` holds pytest-cov to the floor in `pyproject.toml`. [CI]
+- `task check` holds the same floors locally, with the same numbers CI passes: Vitest's run with coverage, PHPUnit with coverage and `coverage-check.php`, `task shared:go:coverage` for each Go module (`DIR=backend FLOOR=62.5 EXCLUDE=... COVERPKG=...`, as its `go.yml` call has them), and `task shared:python:test`. [review]
 - A floor only rises: when a change drops coverage under it, add tests, never lower the floor. [review]
 - Sign-in and passkeys, permissions, migrations, imports, and deploy and rollback hold a higher bar than the floor, since mistakes there cost most. [review]
 - Generated code (sqlc, OpenAPI types) and startup wiring stay out of the coverage count. [review]
@@ -76,6 +77,14 @@ What every project tests, how it tests it, and where each stack keeps and runs i
 - A project copies that file to its `phpunit.xml` and sets only its suites and `<source>`, since PHPUnit can't extend another config. [review]
 - `#[CoversClass]` lists every class a test really checks, since coverage is credited only to listed classes; a trait is listed with `#[CoversTrait]`. [review]
 
+## Python (pytest)
+
+- Tests live in `tests/`, named `test_*.py`, and run with pytest; pytest and pytest-cov are pinned in the project's dev requirements like every other package ([packages.md](packages.md#python)). [review]
+- The floor is `fail_under` under `[tool.coverage.report]` in `pyproject.toml`, and `source` under `[tool.coverage.run]` names the app's package. coverage.py reads that config for the local run and CI alike, so the floor is one number in one place, where Go's is a `go.yml` input because `go test` has no config file. `python.yml` and `task shared:python:test` fail when either is missing (`test/python/coverage_floor.py`), then run `pytest --cov`. [CI]
+- Coverage counts lines in the app's package. Its startup wiring (the WSGI entry point) and dev tools stay out of the count, through `omit` or by sitting outside `source`. [review]
+- A web app is tested over HTTP through its framework's test client (Flask's `test_client()`), each response checked against the committed OpenAPI spec (openapi-core, from the dev requirements). [test]
+- Locally, `task shared:python:test` holds the floor as CI does, and `task shared:python:lint` runs the same lint and type checks. [review]
+
 ## End-to-end (Playwright)
 
 - Each site's basic suite opens every main page by its address and checks that it shows its data. [test]
@@ -83,7 +92,7 @@ What every project tests, how it tests it, and where each stack keeps and runs i
 - One more spec runs the key user flow. [review]
 - CI runs the suite through `e2e.yml`, after the backend and front-end jobs pass (the caller's `needs:`). [CI]
 - Specs find elements by role and label (`getByRole`, `getByLabel`), never by a Bulma, PrimeVue or Tailwind class, so they still pass when an app swaps in the component kit. [review]
-- The suite runs the real built app (the real binary, or PHP served through the production routing so pages get the real CSP) on a throwaway database in the OS temp folder, built by the migrations and seeded. [CI]
+- The suite runs the real built app (the real binary, or PHP served through the production routing so pages get the real CSP) on a throwaway database in the OS temp folder, built by the migrations and seeded. A Python app may run under its framework's own server for the suite, since gunicorn has no Windows build and the framework serves the same app, headers and CSP; `e2e.yml` sets up its Python and `.venv` (`python-version-file`). [CI]
 - The prepare script refuses any database path inside the checkout. [test]
 - Anything that leaves the app, such as mail or an outside API, is dry-run. [review]
 - The Playwright config spreads `test/e2e`'s `playwrightDefaults`: tests in `e2e/`, one worker in order, one retry in CI, a trace kept on failure, and the browser already installed (Edge locally on Windows, the runner's Chrome in CI). The one worker is because a suite's steps share one server and one database, so it holds locally too. [CI]
