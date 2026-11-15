@@ -38,7 +38,8 @@ permissions:
 
 jobs:
   dotnet:
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    # A pull request from a fork runs on GitHub's runners, never on a self-hosted one.
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v7
         with:

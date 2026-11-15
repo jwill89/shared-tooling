@@ -1,11 +1,13 @@
 # syntax=docker/dockerfile:1
 # The image a self-hosted CI job runs in: Ubuntu 24.04, as GitHub's ubuntu-24.04 image,
 # with what the shared workflows expect to find rather than set up (PowerShell, Google
-# Chrome, PHP from the PPA setup-php uses, zstd for actions/cache's format, sudo for apt),
+# Chrome, the GitHub CLI, PHP from the PPA setup-php uses, zstd for actions/cache's format,
+# sudo for apt),
 # and the Actions runner. Each container takes one job and is removed, so every job
 # starts from this image as it was built.
 #
-# Start-CiRunners.ps1 builds it, passing the runner's newest release and its checksum.
+# CiRunner.psm1 builds it, passing the runner's newest release and its checksum, and the
+# scaler (scaler/) starts a container of it for each job.
 
 FROM ubuntu:24.04
 
@@ -49,6 +51,16 @@ RUN install -d -m 0755 /etc/apt/keyrings \
  && apt-get install -y --no-install-recommends google-chrome-stable \
  && rm -rf /etc/apt/sources.list.d/google-chrome.list* /var/lib/apt/lists/*
 
+# The GitHub CLI, as on the hosted image, for the release jobs' `gh release`; its current
+# release when the image is built.
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+ && chmod a+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends gh \
+ && rm -rf /etc/apt/sources.list.d/github-cli.list /var/lib/apt/lists/*
+
 # PHP and the extensions callers ask for, so setup-php finds them in place instead of
 # installing them on every job.
 RUN add-apt-repository -y ppa:ondrej/php \
@@ -77,15 +89,8 @@ RUN test -n "$RUNNER_VERSION" && test -n "$RUNNER_SHA256" \
  && rm -rf /var/lib/apt/lists/* \
  && chown -R runner:runner /home/runner
 
-# The just-in-time configuration arrives on standard input, so it is never on a command
-# line, and from Windows with a CR after it; the runner takes one job with it and exits.
-COPY --chmod=0755 <<'EOF' /usr/local/bin/run-one-job
-#!/usr/bin/env bash
-set -euo pipefail
-IFS= read -r jitconfig
-jitconfig="${jitconfig%$'\r'}"
-exec /home/runner/actions-runner/run.sh --jitconfig "$jitconfig"
-EOF
-
+# The runner reads its single-use configuration from ACTIONS_RUNNER_INPUT_JITCONFIG,
+# which the scaler sets, and clears it from its environment before any step runs; it
+# takes one job and exits.
 USER runner
-ENTRYPOINT ["/usr/local/bin/run-one-job"]
+ENTRYPOINT ["/home/runner/actions-runner/run.sh"]

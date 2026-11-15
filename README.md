@@ -21,7 +21,7 @@ Folders are named `<purpose>/<target>`. A project uses only the folders for the 
 | `test/php` | `coverage-check.php` (the floor for a clover report) and a base `phpunit.xml.dist` | The PHP projects |
 | `test/python` | `coverage_floor.py`, which fails a run whose `pyproject.toml` sets no coverage floor or package, for `python.yml` and `task shared:python:test` alike | Every Python project |
 | `repo` | `editorconfig` and `gitattributes`, copied in by `Sync-RepoFiles.ps1`, which also holds `CLAUDE.md` to its standard form; `Taskfile.yml`, the tasks every repo includes; `Update-SharedTooling.ps1` and `Test-SharedVersion.ps1`, which move a project to a release and check it stayed there; `Update-ChangelogLinks.ps1`, which writes and checks the CHANGELOG's compare links; `dependabot.example.yml` | Every repo |
-| [`runner`](runner/README.md) | Self-hosted Actions runners on a Windows machine: `CiRunner.psm1` keeps a ready runner for each private repo, each job in a fresh container (`Dockerfile`) in a WSL distro of its own (`setup-host.sh`) | The private repos whose `CI_RUNNER` variable is set |
+| [`runner`](runner/README.md) | Self-hosted Actions runners on a Windows machine: `CiRunner.psm1` runs the scaler (`scaler/`), which starts a fresh container (`Dockerfile`) for each job GitHub assigns a repo, side by side up to a limit, in a WSL distro of its own (`setup-host.sh`) | The repos whose `CI_RUNNER` variable is set |
 | `.github/workflows` | Reusable workflows: `web.yml`, `e2e.yml`, `go.yml`, `php.yml`, `python.yml`, `dotnet.yml`, `pwsh.yml`, `docs.yml`, `osv.yml`, and `codeql.yml` for a public repo | Every repo's CI |
 | [`standards`](standards/README.md) | The rules every project follows, by area, each marked with how it is checked; `README.md` is the index | Every repo's `CLAUDE.md` imports `@shared/standards/README.md` |
 
@@ -112,10 +112,6 @@ And per stack (each folder's README has the detail):
       uses: jwill89/shared-tooling/.github/workflows/docs.yml@v1.0.0
     osv:
       uses: jwill89/shared-tooling/.github/workflows/osv.yml@v1.0.0
-      permissions:
-        contents: read
-        actions: read
-        security-events: write
   ```
 
 - **CodeQL, in a public repo:** call `codeql.yml` with the languages the repo has, and turn CodeQL's default setup off in the repo's settings (Code security), since code scanning refuses an advanced setup's results beside it. CodeQL is free on a public repo; a private one would need GitHub's paid Code Security. Every language but Go is read without a build; Go is built, so a binary that embeds the front end's build waits for `web` and downloads its artifact, as `go.yml` does:
@@ -134,10 +130,10 @@ And per stack (each folder's README has the detail):
         security-events: write
   ```
 
-- **Self-hosted runners, in a private repo:** every shared workflow runs its jobs on the runner the repo's `CI_RUNNER` variable names, and on GitHub's `ubuntu-24.04` while it is unset. With a machine's runners up ([runner/README.md](runner/README.md)), `gh variable set CI_RUNNER --body self-hosted` moves the repo's jobs there, and its own jobs take the same line, `runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}`; `gh variable delete CI_RUNNER` sends them back. `osv.yml` stays on GitHub's runners, since Google's workflow inside it names its own. A public repo keeps GitHub's runners: they are free there, and a self-hosted one would run other people's pull requests.
+- **Self-hosted runners:** every shared workflow runs its jobs on the runners the repo's `CI_RUNNER` variable names, and on GitHub's `ubuntu-24.04` while it is unset or for a pull request from a fork. With a machine's runners set up ([runner/README.md](runner/README.md)) and started with `task shared:runner:start`, `gh variable set CI_RUNNER --body wsl` moves the repo's jobs there, and its own jobs take the same line, `runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}`; `gh variable delete CI_RUNNER` sends them back. A public repo first requires approval for outside contributors' workflow runs, since a fork's pull request runs its own copy of the workflows (runner/README.md, Setting it up).
 - **CHANGELOG:** `task shared:changelog:links` writes the compare link under each version heading, in the change that adds the version's section; `docs.yml` fails on a heading without one. A repo with a second part versioned apart passes `docs.yml` both files (`changelogs: CHANGELOG.md plugin/CHANGELOG.md`) and writes the second's links with `-- -Path plugin/CHANGELOG.md -TagPrefix plugin-v` (`standards/docs-and-agents.md`).
 - **Vulnerabilities:** copy `repo/osv-scanner.example.toml` beside each npm lockfile as `osv-scanner.toml`, keeping only the advisories that lockfile has, and add `task shared:vuln` to the project's `task check`.
-- **Pushing:** add `push: { interactive: true, cmds: [task: shared:push] }`, so `task push` takes the in-range updates Dependabot would open (`task shared:deps` lists them, `task shared:deps:update` takes them), scans for advisories, runs `task check`, and pushes. Majors are only listed, for Dependabot to open one by one.
+- **Pushing:** add `push: { interactive: true, cmds: [task: shared:push] }`, so `task push` takes the in-range updates Dependabot would open (`task shared:deps` lists them, `task shared:deps:update` takes them), starts the self-hosted runners when the repo's CI uses them, pushes, and follows the CI run to its verdict; CI does the checking. Majors are only listed, for Dependabot to open one by one.
 
 A fresh clone needs `git submodule update --init` once (or `git clone --recurse-submodules`). The repo is public, so CI fetches it with the default token.
 
@@ -187,7 +183,7 @@ A release for one stack moves the submodule for every project that takes it, but
 
 `AGENTS.md` is the guide to changing this repo: its conventions, the traps, and the steps for a new rule, workflow, deploy function or lint config, and for a release.
 
-`.github/workflows/ci.yml` runs the same tools on this repo, and `task check` runs them all locally: PSScriptAnalyzer on its scripts, what `docs.yml` checks (markdownlint on its docs, the repo files and `CLAUDE.md`, the workflow refs with `-Shared .`, since this repo is its own shared folder, and the CHANGELOG's compare links), the sync tool linted by its own template and checked by govulncheck, the shared ruff config loading on `test/python`'s script (ruff and mypy at pinned versions through `uvx`, so uv must be installed), actionlint on the workflows, every `lint/web` config and `test/*` preset loading from its own install (`task presets`), and OSV-Scanner over its lockfiles. CI also runs CodeQL over its JavaScript, Python, Go and workflows through `codeql.yml`, which has no local counterpart, since it reports to GitHub's code scanning. `task setup` installs what those loads need, and `task push` takes the in-range dependency updates, scans, checks and pushes, as it does in a project.
+`.github/workflows/ci.yml` runs the same tools on this repo, and `task check` runs them all locally: PSScriptAnalyzer on its scripts, what `docs.yml` checks (markdownlint on its docs, the repo files and `CLAUDE.md`, the workflow refs with `-Shared .`, since this repo is its own shared folder, and the CHANGELOG's compare links), the sync tool linted by its own template and checked by govulncheck, the shared ruff config loading on `test/python`'s script (ruff and mypy at pinned versions through `uvx`, so uv must be installed), actionlint on the workflows, every `lint/web` config and `test/*` preset loading from its own install (`task presets`), and OSV-Scanner over its lockfiles. CI also runs CodeQL over its JavaScript, Python, Go and workflows through `codeql.yml`, which has no local counterpart, since it reports to GitHub's code scanning. `task setup` installs what those loads need, and `task push` takes the in-range dependency updates, pushes and follows CI, as it does in a project.
 
 ## License
 

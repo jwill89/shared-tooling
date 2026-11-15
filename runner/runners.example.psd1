@@ -1,29 +1,35 @@
 # The self-hosted runners' settings, read by runner/CiRunner.psm1. Copy this file to
 # %USERPROFILE%\.ci-runner\runners.psd1 (Install-CiRunner does on its first run) and list
-# your private repos there; it stays on this machine, outside every repo.
+# your repos there; it stays on this machine, outside every repo.
 @{
     # The account that owns the repos.
     Owner = 'owner'
 
-    # Each private repo the runners serve, with how many of its jobs may run at once. A
-    # personal account's runner serves one repo, so every repo gets its own. A public repo
-    # stays on GitHub's own runners, free and out of reach of other people's pull requests.
-    Repos = @{
-        'app'       = 1
-        'other-app' = 2
-    }
+    # Each repo the runners serve. Each gets a scale set of its own, since a personal
+    # account's runners serve one repo, and runs as many jobs at once as MaxJobs allows.
+    Repos = @(
+        'app'
+        'other-app'
+    )
 
     # The rest are optional; these are the defaults.
 
-    # The WSL distro the containers run in (Install-CiRunner -Distro).
-    # Distro     = 'ci-runner'
+    # The scale sets' name: the label a repo's CI_RUNNER variable names, and the start of
+    # each runner's name.
+    # Name      = 'wsl'
 
-    # The labels each runner carries; a repo's CI_RUNNER variable names one of them.
-    # Labels     = @('self-hosted', 'linux', 'x64')
+    # How many jobs may run at once across every repo; the rest wait in GitHub's queue.
+    # Defaults to as many as Memory holds at 1.5 GB each, and at most one per processor.
+    # MaxJobs   = 7
 
-    # The start of each runner's name, which Stop-CiRunner uses to find its own.
-    # NamePrefix = 'wsl'
+    # The CPUs and memory the running jobs share, however many there are. Default to half
+    # the distro's CPUs, and three quarters of its memory.
+    # Cpus      = 16
+    # Memory    = '12g'
 
     # The memory one job's container may use.
-    # Memory     = '8g'
+    # JobMemory = '8g'
+
+    # The WSL distro the containers run in (Install-CiRunner -Distro).
+    # Distro    = 'ci-runner'
 }

@@ -1,8 +1,9 @@
 name: Vulnerabilities
 
-# One OSV-Scanner pass over every lockfile the repo has (npm, Go, Composer, pip,
-# NuGet), through Google's own reusable workflow. Go modules keep govulncheck too
-# (go.yml), since it checks whether the vulnerable code is actually called.
+# One OSV-Scanner pass over every lockfile the repo tracks (npm, Go, Composer, pip, NuGet),
+# through the script `task shared:vuln` runs, so CI and a local check scan with the same
+# scanner at the same version. Go modules keep govulncheck too (go.yml), since it checks
+# whether the vulnerable code is actually called.
 #
 # An advisory in lint, test or build tooling whose fix no dependent's range takes is
 # passed over by an osv-scanner.toml beside that lockfile, from
@@ -10,16 +11,16 @@ name: Vulnerabilities
 #
 #   osv:
 #     uses: jwill89/shared-tooling/.github/workflows/osv.yml@v1.0.0
-#     permissions:
-#       contents: read
-#       actions: read
-#       security-events: write
 
 on:
   workflow_call:
     inputs:
+      shared-path:
+        description: Where shared-tooling is checked out, relative to the repo.
+        type: string
+        default: shared
       upload-sarif:
-        description: Upload the findings to Security > Code scanning (needs code scanning on the repo).
+        description: Ignored; the scan uploads nothing to code scanning. Kept so a call that still passes it runs.
         type: boolean
         default: false
 
@@ -28,12 +29,23 @@ permissions:
 
 jobs:
   osv:
-    permissions:
-      contents: read
-      actions: read
-      security-events: write
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.7.0
-    with:
-      upload-sarif: ${{ inputs.upload-sarif }}
-      # The shared-tooling submodule's own lockfiles are its CI's to scan.
-      checkout-submodules: false
+    # A pull request from a fork runs on GitHub's runners, never on a self-hosted one.
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          persist-credentials: false
+
+      # The scanner builds with `go run`, at the Go shared-tooling's own module names; its
+      # build comes back from the cache until the script pins another release.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ inputs.shared-path }}/lint/go/go.mod
+          cache-dependency-path: ${{ inputs.shared-path }}/repo/Invoke-VulnerabilityScan.ps1
+
+      - name: Scan the lockfiles
+        shell: pwsh
+        env:
+          SHARED: ${{ inputs.shared-path }}
+        run: '& (Join-Path $env:SHARED "repo/Invoke-VulnerabilityScan.ps1") -Path .'

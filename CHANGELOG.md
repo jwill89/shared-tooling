@@ -8,6 +8,18 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Added
+
+- `task shared:runner:start`, `shared:runner:stop` and `shared:runner:status`, in every repo, start, stop and show this machine's self-hosted runners through `runner/Invoke-CiRunner.ps1`, which works through the module the runners were installed from. Start waits until the scaler takes jobs; stop also shuts the runners' WSL distro down, so WSL can give its memory back. They replace shared-tooling's own `task runner:start`, `runner:stop` and `runner:status`.
+
+### Changed
+
+- `osv.yml` runs `repo/Invoke-VulnerabilityScan.ps1`, the scan `task shared:vuln` runs, in place of Google's OSV-Scanner workflow, so CI scans with the same OSV-Scanner release as a local check and runs on the calling repo's `CI_RUNNER` like the other workflows. It takes a `shared-path` input (`shared` by default), no longer needs the `actions: read` and `security-events: write` permissions a call gave it, and ignores `upload-sarif`: nothing goes to code scanning.
+- `runner/`'s image has the GitHub CLI, which the projects' release jobs call.
+- `runner/` starts each job's container when GitHub assigns the job, through a scaler on GitHub's runner scale set client (`runner/scaler/`), in place of a ready runner per slot. A run's jobs go side by side, up to `MaxJobs` across all the repos, and nothing but the scaler runs between jobs. Every job's container runs in the `ci.slice` systemd slice, whose `Cpus` and `Memory` cap what the running jobs share. In `runners.psd1`, `Repos` is a list of names; `Name` (`wsl` by default) names each repo's scale set and is the label `CI_RUNNER` takes in place of `self-hosted`; `Memory` is all the jobs' memory and `JobMemory` one job's; `Labels` and `NamePrefix` are gone. By default the jobs share half the distro's CPUs and three quarters of its memory, and `MaxJobs` is as many jobs as that memory holds at 1.5 GB each. The runners no longer start at sign-in: the "CI runners" task runs only when `task shared:runner:start` starts it (run `task runner:install` again to drop the old trigger).
+- `task shared:push` no longer runs the OSV scan and `task check` before pushing, which CI runs a minute later on the same machine. It takes the in-range updates as before and commits them without a check, starts the self-hosted runners when the repo's `CI_RUNNER` variable names them, pushes, then follows the commit's CI runs, printing each job as it ends, and fails with the failed steps' log when a run fails. `-SkipCheck` is gone; `-NoWait` pushes without following CI, and `-WaitMinutes` (30) bounds the wait.
+- Every shared workflow sends a pull request from a fork to GitHub's `ubuntu-24.04`, whatever the repo's `CI_RUNNER` names, so a public repo can use the self-hosted runners once it requires approval for outside contributors' runs (runner/README.md).
+
 ## [2.12.0] - 2026-11-15
 
 ### Added

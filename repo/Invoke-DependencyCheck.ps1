@@ -7,7 +7,7 @@
     the ones inside their ranges.
 
 .DESCRIPTION
-    What `task shared:deps` and `task shared:push` run, so updates are taken before a push
+    What `task shared:deps` and `task shared:push` run, so updates are taken with a push
     rather than arriving as Dependabot's pull requests after it. For each ecosystem the repo
     tracks (the shared/ submodule left out), it finds the available updates:
 

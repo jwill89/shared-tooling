@@ -17,8 +17,9 @@
 # nothing when the host already runs it; `task deploy -- -Force` deploys it again.
 #
 # A project's `task push` wraps `shared:push`: it takes the in-range updates Dependabot
-# would open (`shared:deps`), scans the lockfiles for advisories (`shared:vuln`, also part
-# of its `task check`), runs `task check`, then pushes (standards/packages.md, Updates).
+# would open (`shared:deps`), starts this machine's runners when the repo's CI uses them
+# (`shared:runner:start`), pushes, and follows the CI run, which does the checking
+# (standards/packages.md, Updates).
 #
 # A project's `task check` calls `shared:docs:check` for everything docs.yml checks, so a
 # check docs.yml gains arrives with the release, and adds the checks whose numbers and
@@ -146,8 +147,25 @@ tasks:
     cmds:
       - pwsh -NoProfile -File "{{.SHARED}}/repo/Invoke-VulnerabilityScan.ps1" -Path .
 
+  # This machine's self-hosted runners (runner/README.md), which run the CI of every repo
+  # whose CI_RUNNER variable names them, and only between a start and a stop.
+  runner:start:
+    desc: Start this machine's self-hosted runners - the WSL distro, Docker and the scaler - and wait until they take jobs
+    cmds:
+      - pwsh -NoProfile -File "{{.SHARED}}/runner/Invoke-CiRunner.ps1" -Action Start
+
+  runner:stop:
+    desc: Stop this machine's self-hosted runners and shut their WSL distro down, giving its memory back; jobs queue on GitHub until the next start
+    cmds:
+      - pwsh -NoProfile -File "{{.SHARED}}/runner/Invoke-CiRunner.ps1" -Action Stop
+
+  runner:status:
+    desc: Show this machine's self-hosted runners - the loop, the scaler and its last lines, the jobs' limits, and the jobs running now
+    cmds:
+      - pwsh -NoProfile -File "{{.SHARED}}/runner/Invoke-CiRunner.ps1" -Action Status
+
   push:
-    desc: Take the in-range updates Dependabot would open, scan for advisories, run task check, then git push (-- -Yes, -SkipUpdates, -SkipCheck)
+    desc: Take the in-range updates Dependabot would open, start the self-hosted runners if the repo uses them, git push, and follow CI to its verdict (-- -Yes, -SkipUpdates, -NoWait)
     interactive: true
     cmds:
       - pwsh -NoProfile -File "{{.SHARED}}/repo/Invoke-Push.ps1" -Path . {{.CLI_ARGS}}

@@ -2,8 +2,9 @@ name: CI
 
 # shared-tooling's own checks, the same `task check` runs: its scripts with its own
 # analyzer settings, its docs with its own Markdown config and the CHANGELOG's links, the
-# golangci sync tool linted by the template it ships, the shared ruff config loading on
-# the Python script it ships, every workflow with actionlint,
+# golangci sync tool linted by the template it ships, the runners' scaler as go.yml checks
+# a module, the shared ruff config loading on the Python script it ships, every workflow
+# with actionlint,
 # every lint/web config and test preset loading from its own install, and OSV-Scanner
 # over the lockfiles. Then CodeQL over its JavaScript, Python, Go and workflows, which
 # runs here only: it needs GitHub's code scanning.
@@ -28,7 +29,8 @@ jobs:
       shared-path: .
 
   go:
-    runs-on: ubuntu-24.04
+    # A pull request from a fork runs on GitHub's runners, never on a self-hosted one.
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}
     defaults:
       run:
         working-directory: lint/go
@@ -51,8 +53,35 @@ jobs:
       # here before it reaches a project.
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
+  # go.yml's steps, which can't be called here: it finds the sync tool under shared/.
+  scaler:
+    # A pull request from a fork runs on GitHub's runners, never on a self-hosted one.
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}
+    defaults:
+      run:
+        working-directory: runner/scaler
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: runner/scaler/go.mod
+          cache-dependency-path: runner/scaler/go.sum
+      - run: go run . -dir ../../runner/scaler -check
+        working-directory: lint/go
+      - run: go vet ./...
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+          install-mode: goinstall
+          working-directory: runner/scaler
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - run: go test -race -shuffle=on ./...
+
   python:
-    runs-on: ubuntu-24.04
+    # A pull request from a fork runs on GitHub's runners, never on a self-hosted one.
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -68,7 +97,8 @@ jobs:
       - run: uvx mypy@2.4.0 --strict test/python
 
   workflows:
-    runs-on: ubuntu-24.04
+    # A pull request from a fork runs on GitHub's runners, never on a self-hosted one.
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -79,7 +109,8 @@ jobs:
       - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 
   web:
-    runs-on: ubuntu-24.04
+    # A pull request from a fork runs on GitHub's runners, never on a self-hosted one.
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -100,10 +131,8 @@ jobs:
 
   osv:
     uses: ./.github/workflows/osv.yml
-    permissions:
-      contents: read
-      actions: read
-      security-events: write
+    with:
+      shared-path: .
 
   codeql:
     uses: ./.github/workflows/codeql.yml

@@ -45,6 +45,16 @@ tasks:
       # The version go.yml defaults to, as CI runs it.
       - go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
+  scaler:
+    desc: The runners' scaler, as ci.yml's scaler job checks it - its golangci config is current, vet, golangci-lint, govulncheck and its tests
+    dir: runner/scaler
+    cmds:
+      - go run -C ../../lint/go . -dir ../../runner/scaler -check
+      - go vet ./...
+      - golangci-lint run ./...
+      - go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - go test -shuffle=on ./...
+
   lint:workflows:
     desc: actionlint over every workflow, at the version CI runs
     cmds:
@@ -61,7 +71,7 @@ tasks:
       - pwsh -NoProfile -File scripts/New-Release.ps1 {{.CLI_ARGS}}
 
   push:
-    desc: Take the in-range updates Dependabot would open, scan for advisories, run task check, then git push (-- -Yes, -SkipUpdates, -SkipCheck)
+    desc: Take the in-range updates Dependabot would open, start the self-hosted runners if the repo uses them, git push, and follow CI to its verdict (-- -Yes, -SkipUpdates, -NoWait)
     interactive: true
     cmds:
       - task: shared:push
@@ -70,26 +80,13 @@ tasks:
     desc: Everything CI runs
     cmds:
       - task: lint
+      - task: scaler
       - task: presets
       - task: shared:vuln
 
-  # This machine's self-hosted runners (runner/README.md).
+  # This machine's self-hosted runners (runner/README.md), set up from this repo, which
+  # every repo then starts and stops with shared:runner:start and shared:runner:stop.
   runner:install:
-    desc: Set up the self-hosted runners on this machine - the WSL distro with Docker, the config and the sign-in task
+    desc: Set up the self-hosted runners on this machine - the WSL distro with Docker, the config and the task that runs them
     cmds:
       - pwsh -NoProfile -Command "Import-Module ./runner/CiRunner.psm1; Install-CiRunner"
-
-  runner:start:
-    desc: Start the self-hosted runners now, through their sign-in task
-    cmds:
-      - pwsh -NoProfile -Command "Start-ScheduledTask -TaskName 'CI runners'"
-
-  runner:stop:
-    desc: Stop the self-hosted runners and deregister them, until runner:start or the next sign-in
-    cmds:
-      - pwsh -NoProfile -Command "Import-Module ./runner/CiRunner.psm1; Stop-CiRunner"
-
-  runner:status:
-    desc: Show the self-hosted runners - the loop, their containers, and each repo's runners on GitHub
-    cmds:
-      - pwsh -NoProfile -Command "Import-Module ./runner/CiRunner.psm1; Get-CiRunnerStatus | Format-Table Repo, Name, Status, Busy"

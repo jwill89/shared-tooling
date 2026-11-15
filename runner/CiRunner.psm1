@@ -1,11 +1,13 @@
 #Requires -Version 7.4
 
-# Self-hosted GitHub Actions runners on this Windows machine: one ready runner per slot of
-# each private repo in the config, each taking one job in a fresh container in a WSL
-# distro of its own, then replaced. runner/README.md says how the parts fit.
+# Self-hosted GitHub Actions runners on this Windows machine: each job of each repo in the
+# config runs in a fresh container in a WSL distro of its own, started when GitHub assigns
+# the job and removed when it ends. runner/README.md says how the parts fit.
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
+
+Add-Type -AssemblyName System.Formats.Tar
 
 # Not under AppData: a packaged app's processes (a terminal inside one, say) read and write
 # their own copy of AppData, so the sign-in task and such a terminal would each see files
@@ -14,9 +16,14 @@ $script:StateDir = Join-Path $env:USERPROFILE '.ci-runner'
 $script:DefaultConfigPath = Join-Path $script:StateDir 'runners.psd1'
 $script:PidPath = Join-Path $script:StateDir 'supervisor.pid'
 $script:LogDir = Join-Path $script:StateDir 'logs'
-$script:ImageName = 'ci-runner'
-$script:SlotLabel = 'ci-runner.slot'
 $script:TaskName = 'CI runners'
+$script:JobImage = 'ci-runner'
+$script:ScalerImage = 'ci-scaler'
+$script:ScalerContainer = 'ci-scaler'
+# The label the scaler puts on every job container (scaler/repo.go).
+$script:JobLabel = 'ci-runner.job'
+# The systemd slice every job's container runs in, whose limits the jobs share.
+$script:Slice = 'ci.slice'
 
 #region Private helpers
 
@@ -38,30 +45,46 @@ function Read-CiConfig {
             throw "The runner config at $Path has no $key."
         }
     }
+    if ($config.Repos -is [System.Collections.IDictionary]) {
+        throw "The runner config at $Path gives Repos as a table of slots. It is a list of names now, such as @('app', 'site'): a repo runs as many jobs at once as MaxJobs allows."
+    }
     $defaults = @{
-        Distro     = 'ci-runner'
-        Labels     = @('self-hosted', 'linux', 'x64')
-        NamePrefix = 'wsl'
-        Memory     = '8g'
+        Distro    = 'ci-runner'
+        Name      = 'wsl'
+        JobMemory = '8g'
     }
     foreach ($key in $defaults.Keys) {
         if (-not $config.ContainsKey($key)) {
             $config[$key] = $defaults[$key]
         }
     }
-    # Every value reaches a command line or an API path, so each is held to a plain shape.
+    $config.Repos = @($config.Repos)
+    # Every value reaches a command line, an API path or a limit, so each is held to a plain shape.
     if ($config.Owner -notmatch '^[A-Za-z0-9-]+$') { throw "The config's Owner '$($config.Owner)' isn't an account name." }
     if ($config.Distro -notmatch '^[A-Za-z0-9._-]+$') { throw "The config's Distro '$($config.Distro)' isn't a distro name." }
-    if ($config.NamePrefix -notmatch '^[a-z0-9-]+$') { throw "The config's NamePrefix '$($config.NamePrefix)' may hold only a-z, 0-9 and -." }
-    if ($config.Memory -notmatch '^\d+[kmg]$') { throw "The config's Memory '$($config.Memory)' isn't a size such as 8g." }
-    foreach ($label in $config.Labels) {
-        if ($label -notmatch '^[A-Za-z0-9._-]+$') { throw "The config's label '$label' isn't a plain name." }
+    if ($config.Name -notmatch '^[a-z0-9][a-z0-9-]{0,39}$') { throw "The config's Name '$($config.Name)' may hold only a-z, 0-9 and -." }
+    if ($config.JobMemory -notmatch '^\d+[mg]$') { throw "The config's JobMemory '$($config.JobMemory)' isn't a size such as 8g." }
+    if ($config.ContainsKey('Memory') -and $config.Memory -notmatch '^\d+[mg]$') { throw "The config's Memory '$($config.Memory)' isn't a size such as 12g." }
+    if ($config.ContainsKey('MaxJobs') -and ($config.MaxJobs -isnot [int] -or $config.MaxJobs -lt 1)) { throw "The config's MaxJobs '$($config.MaxJobs)' isn't a whole number of 1 or more." }
+    if ($config.ContainsKey('Cpus') -and (($config.Cpus -isnot [int] -and $config.Cpus -isnot [double]) -or $config.Cpus -le 0)) {
+        throw "The config's Cpus '$($config.Cpus)' isn't a number above 0."
     }
-    foreach ($repo in $config.Repos.Keys) {
+    foreach ($repo in $config.Repos) {
         if ($repo -notmatch '^[A-Za-z0-9._-]+$') { throw "The config's repo '$repo' isn't a repo name." }
-        if ([int] $config.Repos[$repo] -lt 1) { throw "The config gives $repo $($config.Repos[$repo]) slots; it needs at least 1." }
+    }
+    if (@($config.Repos | Sort-Object -Unique).Count -ne $config.Repos.Count) {
+        throw 'The config lists a repo twice.'
     }
     return $config
+}
+
+function ConvertTo-CiByte {
+    param([Parameter(Mandatory)] [string] $Size)
+    $number = [long] $Size.Substring(0, $Size.Length - 1)
+    if ($Size.EndsWith('g')) {
+        return $number * 1GB
+    }
+    return $number * 1MB
 }
 
 function Invoke-CiDistro {
@@ -85,10 +108,33 @@ function Invoke-CiDistro {
 }
 
 function Test-CiDistro {
-    param([Parameter(Mandatory)] [string] $Distro)
+    # Whether the distro is installed, or with -Running, running: asking it anything else
+    # through wsl.exe would start it.
+    param(
+        [Parameter(Mandatory)] [string] $Distro,
+        [switch] $Running
+    )
+    $list = if ($Running) { wsl.exe --list --running --quiet } else { wsl.exe --list --quiet }
     # wsl.exe writes its lists in UTF-16, which reaches PowerShell with NULs between letters.
-    $names = (wsl.exe --list --quiet) -replace "`0", '' | ForEach-Object { $_.Trim() }
+    $names = $list -replace "`0", '' | ForEach-Object { $_.Trim() }
     return $names -contains $Distro
+}
+
+function Get-CiLoop {
+    # The running Start-CiRunner process that supervisor.pid names, or nothing. The file
+    # outlives a reboot, after which its number may belong to another process, so the
+    # process must be PowerShell and older than the file.
+    if (-not (Test-Path -LiteralPath $script:PidPath)) {
+        return
+    }
+    $file = Get-Item -LiteralPath $script:PidPath
+    if ((Get-Content -LiteralPath $file.FullName -Raw) -notmatch '^\d+') {
+        return
+    }
+    $process = Get-Process -Id ([int] $Matches[0]) -ErrorAction SilentlyContinue
+    if ($process -and $process.Name -eq 'pwsh' -and $process.StartTime -le $file.LastWriteTime) {
+        return $process
+    }
 }
 
 function Wait-CiDocker {
@@ -102,6 +148,33 @@ function Wait-CiDocker {
         Start-Sleep -Seconds 2
     }
     throw "Docker isn't answering in the $Distro distro. Look at: wsl -d $Distro -u root -- systemctl status docker"
+}
+
+function Set-CiLimit {
+    # Writes the systemd slice every job's container runs in, so the jobs together use at
+    # most the config's Cpus and Memory, and returns the limits. Cpus defaults to half the
+    # distro's processors, leaving the rest to whatever else the machine is doing; Memory
+    # to three quarters of the distro's; and MaxJobs to as many jobs as Memory holds at
+    # 1.5 GB each, about what a front end's build and tests peak at with their file cache,
+    # and no more than one per processor.
+    [CmdletBinding(SupportsShouldProcess)]
+    param([Parameter(Mandatory)] [hashtable] $Config)
+    $size = @(Invoke-CiDistro -Distro $Config.Distro -Command 'sh', '-c', 'nproc && sed -n "s/^MemTotal: *\([0-9]*\) kB$/\1/p" /proc/meminfo')
+    $processors = [int] $size[0]
+    $cpus = if ($Config.ContainsKey('Cpus')) { [double] $Config.Cpus } else { [Math]::Max(1, [Math]::Floor($processors / 2)) }
+    $memory = if ($Config.ContainsKey('Memory')) { ConvertTo-CiByte $Config.Memory } else { [long] ([long] $size[1] * 1KB * 0.75) }
+    $maxJobs = if ($Config.ContainsKey('MaxJobs')) { $Config.MaxJobs } else { [int] [Math]::Max(1, [Math]::Min($processors, [Math]::Floor($memory / 1.5GB))) }
+    $unit = "[Unit]`nDescription=CI jobs, which share these limits`n`n[Slice]`nCPUQuota=$([int] ($cpus * 100))%`nMemoryMax=$memory`n"
+    if ($PSCmdlet.ShouldProcess($script:Slice, 'Set the jobs'' limits')) {
+        Invoke-CiDistro -Distro $Config.Distro -InputText $unit -Command @(
+            'sh', '-c', 'tr -d "\r" > "/etc/systemd/system/$0" && systemctl daemon-reload', $script:Slice
+        ) | Out-Null
+    }
+    return [pscustomobject]@{
+        Cpus    = $cpus
+        Memory  = $memory
+        MaxJobs = $maxJobs
+    }
 }
 
 function Get-CiRunnerRelease {
@@ -123,43 +196,112 @@ function Get-CiRunnerRelease {
     return [pscustomobject]@{ Version = $version; Sha256 = $Matches[1] }
 }
 
-function Update-CiImage {
-    # Builds the job image for the runner's newest release and this Dockerfile, unless it is
-    # already built, then removes the older ones no container uses. Returns the image's tag.
+function Build-CiImage {
+    # Builds an image in the distro from the given files (name to text), unless one of the
+    # same files and build arguments is built already, then removes the older ones of that
+    # name no container uses. Returns the image's tag. The files reach the distro on
+    # standard input, as a tar in base64: the distro can't read the Windows drive, and a
+    # PowerShell pipe carries only text.
     [CmdletBinding(SupportsShouldProcess)]
-    param([Parameter(Mandatory)] [string] $Distro)
-    $release = Get-CiRunnerRelease
-    $dockerfile = (Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'Dockerfile')).Replace("`r", '')
-    $bytes = [Text.Encoding]::UTF8.GetBytes($dockerfile)
-    $hash = ([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes))).Substring(0, 12).ToLowerInvariant()
-    $tag = '{0}:{1}-{2}' -f $script:ImageName, $release.Version, $hash
+    param(
+        [Parameter(Mandatory)] [string] $Distro,
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [System.Collections.IDictionary] $Files,
+        [string[]] $BuildArgument = @(),
+        [string] $TagPrefix = ''
+    )
+    $texts = [ordered]@{}
+    foreach ($path in $Files.Keys | Sort-Object) {
+        $texts[$path] = ([string] $Files[$path]).Replace("`r", '')
+    }
+    $identity = (@($texts.Keys | ForEach-Object { "$_`n$($texts[$_])" }) + $BuildArgument) -join "`0"
+    $digest = [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($identity))
+    $tag = '{0}:{1}{2}' -f $Name, $TagPrefix, ([Convert]::ToHexString($digest).Substring(0, 12).ToLowerInvariant())
 
     Invoke-CiDistro -Distro $Distro -Command 'docker', 'image', 'inspect', '--format', '{{.Id}}', $tag -AllowFailure | Out-Null
-    if ($LASTEXITCODE -ne 0 -and $PSCmdlet.ShouldProcess($tag, 'Build the job image')) {
-        Write-CiLog "Building $tag (runner $($release.Version)); this takes a few minutes."
-        # The Dockerfile arrives on standard input with an empty context, since the distro
-        # can't read the Windows drive it lives on.
-        Invoke-CiDistro -Distro $Distro -InputText $dockerfile -Command @(
-            'sh', '-c', 'mkdir -p /tmp/ci-runner-context && tr -d "\r" > /tmp/ci-runner.Dockerfile && docker build --quiet --tag "$1" --build-arg RUNNER_VERSION="$2" --build-arg RUNNER_SHA256="$3" --file /tmp/ci-runner.Dockerfile /tmp/ci-runner-context',
-            'sh', $tag, $release.Version, $release.Sha256
-        ) | Out-Null
+    if ($LASTEXITCODE -ne 0 -and $PSCmdlet.ShouldProcess($tag, 'Build the image')) {
+        Write-CiLog "Building $tag; this takes a few minutes."
+        $buffer = [IO.MemoryStream]::new()
+        # Ustar, not pax: docker build tells a tar on standard input from a Dockerfile by its
+        # first 1 KB, which a pax tar fills with an extended header before the first file's.
+        $writer = [Formats.Tar.TarWriter]::new($buffer, [Formats.Tar.TarEntryFormat]::Ustar, $true)
+        try {
+            foreach ($path in $texts.Keys) {
+                $entry = [Formats.Tar.UstarTarEntry]::new([Formats.Tar.TarEntryType]::RegularFile, $path)
+                $entry.Mode = [IO.UnixFileMode] 'UserRead, UserWrite, GroupRead, OtherRead'
+                $entry.DataStream = [IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes($texts[$path]))
+                $writer.WriteEntry($entry)
+            }
+        } finally {
+            $writer.Dispose()
+        }
+        $context = [Convert]::ToBase64String($buffer.ToArray(), [Base64FormattingOptions]::InsertLineBreaks)
+        $arguments = foreach ($argument in $BuildArgument) { '--build-arg'; $argument }
+        Invoke-CiDistro -Distro $Distro -InputText $context -Command (@(
+                'sh', '-c', 'tr -d "\r" | base64 -d | docker build --quiet --tag "$0" "$@" -', $tag
+            ) + @($arguments)) | Out-Null
         Write-CiLog "Built $tag."
     }
 
-    $older = Invoke-CiDistro -Distro $Distro -Command 'docker', 'image', 'ls', $script:ImageName, '--format', '{{.Repository}}:{{.Tag}}' |
+    $older = Invoke-CiDistro -Distro $Distro -Command 'docker', 'image', 'ls', $Name, '--format', '{{.Repository}}:{{.Tag}}' |
         Where-Object { $_ -and $_ -ne $tag }
     foreach ($image in $older) {
-        if ($PSCmdlet.ShouldProcess($image, 'Remove the older job image')) {
+        if ($PSCmdlet.ShouldProcess($image, 'Remove the older image')) {
             # One a running job still uses stays until the next update.
             Invoke-CiDistro -Distro $Distro -Command 'docker', 'image', 'rm', $image -AllowFailure | Out-Null
         }
     }
-    Invoke-CiDistro -Distro $Distro -Command 'docker', 'image', 'prune', '--force' -AllowFailure | Out-Null
     return $tag
 }
 
+function Update-CiImage {
+    # Builds the job image for the runner's newest release, and the scaler's image from
+    # scaler/, each unless it is built already. Returns both tags.
+    [CmdletBinding(SupportsShouldProcess)]
+    param([Parameter(Mandatory)] [string] $Distro)
+    $release = Get-CiRunnerRelease
+    $job = Build-CiImage -Distro $Distro -Name $script:JobImage -TagPrefix "$($release.Version)-" `
+        -Files @{ Dockerfile = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'Dockerfile') } `
+        -BuildArgument "RUNNER_VERSION=$($release.Version)", "RUNNER_SHA256=$($release.Sha256)"
+
+    $source = @{}
+    Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'scaler') -File |
+        Where-Object { $_.Name -in 'Dockerfile', 'go.mod', 'go.sum' -or ($_.Extension -eq '.go' -and $_.Name -notlike '*_test.go') } |
+        ForEach-Object { $source[$_.Name] = Get-Content -Raw -LiteralPath $_.FullName }
+    $scaler = Build-CiImage -Distro $Distro -Name $script:ScalerImage -Files $source
+
+    Invoke-CiDistro -Distro $Distro -Command 'docker', 'image', 'prune', '--force' -AllowFailure | Out-Null
+    return [pscustomobject]@{ Job = $job; Scaler = $scaler }
+}
+
+function Get-CiScalerSetting {
+    # The scaler's settings as the one line of JSON it reads on standard input, with the
+    # token gh holds now, so a sign-in again reaches the scaler at its next start.
+    param(
+        [Parameter(Mandatory)] [hashtable] $Config,
+        [Parameter(Mandatory)] [pscustomobject] $Limits,
+        [Parameter(Mandatory)] [string] $Image
+    )
+    $token = gh auth token 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "gh has no token to give the scaler; sign in with gh auth login. $token"
+    }
+    return [ordered]@{
+        token        = "$token".Trim()
+        owner        = $Config.Owner
+        repos        = @($Config.Repos)
+        name         = $Config.Name
+        image        = $Image
+        maxJobs      = $Limits.MaxJobs
+        jobMemory    = ConvertTo-CiByte $Config.JobMemory
+        # Chrome needs more /dev/shm than Docker's 64 MB.
+        shmSize      = 2GB
+        cgroupParent = $script:Slice
+    } | ConvertTo-Json -Compress
+}
+
 function Get-CiGitHubRunner {
-    # This machine's runners on one repo, found by their name's prefix.
+    # This machine's runners on one repo, found by their name's start, the config's Name.
     param(
         [Parameter(Mandatory)] [hashtable] $Config,
         [Parameter(Mandatory)] [string] $Repo
@@ -170,7 +312,7 @@ function Get-CiGitHubRunner {
     }
     foreach ($line in $lines) {
         $id, $name, $status, $busy = $line -split "`t"
-        if ($name -like "$($Config.NamePrefix)-*") {
+        if ($name -like "$($Config.Name)-*") {
             [pscustomobject]@{ Repo = $Repo; Id = [long] $id; Name = $name; Status = $status; Busy = $busy -eq 'true' }
         }
     }
@@ -184,7 +326,7 @@ function Remove-CiGitHubRunner {
         [Parameter(Mandatory)] [hashtable] $Config,
         [switch] $All
     )
-    foreach ($repo in $Config.Repos.Keys) {
+    foreach ($repo in $Config.Repos) {
         $runners = @(Get-CiGitHubRunner -Config $Config -Repo $repo | Where-Object { $All -or $_.Status -eq 'offline' })
         foreach ($runner in $runners) {
             if ($PSCmdlet.ShouldProcess("$repo/$($runner.Name)", 'Deregister the runner')) {
@@ -197,66 +339,47 @@ function Remove-CiGitHubRunner {
     }
 }
 
+function Stop-CiScaler {
+    # Stops the scaler, which closes its sessions with GitHub first; the job containers
+    # keep running.
+    [CmdletBinding(SupportsShouldProcess)]
+    param([Parameter(Mandatory)] [string] $Distro)
+    if ($PSCmdlet.ShouldProcess($script:ScalerContainer, 'Stop the scaler')) {
+        Invoke-CiDistro -Distro $Distro -Command 'docker', 'stop', '--time', '30', $script:ScalerContainer -AllowFailure | Out-Null
+    }
+}
+
 function Remove-CiContainer {
     [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)] [string] $Distro)
-    $ids = Invoke-CiDistro -Distro $Distro -Command 'docker', 'ps', '--all', '--quiet', '--filter', "label=$script:SlotLabel"
-    if ($ids -and $PSCmdlet.ShouldProcess("$(@($ids).Count) runner containers", 'Remove')) {
+    $ids = Invoke-CiDistro -Distro $Distro -Command 'docker', 'ps', '--all', '--quiet', '--filter', "label=$script:JobLabel"
+    if ($ids -and $PSCmdlet.ShouldProcess("$(@($ids).Count) job containers", 'Remove')) {
         Invoke-CiDistro -Distro $Distro -Command (@('docker', 'rm', '--force') + @($ids)) | Out-Null
     }
 }
 
-# One slot: asks GitHub for a single-use runner, runs it in a fresh container until its one
-# job is done, and starts over. It runs as a thread job, so it brings what it needs.
-$script:SlotLoop = {
-    param($Config, $Repo, $Slot, $State, $LogPath)
-    $ErrorActionPreference = 'Stop'
-    $PSNativeCommandUseErrorActionPreference = $false
-    function Write-SlotLog([string] $Path, [string] $Message) {
-        Add-Content -LiteralPath $Path -Value ('{0:yyyy-MM-dd HH:mm:ss} {1}' -f (Get-Date), $Message)
+function Move-CiLog {
+    # Keeps one older copy of a log that has grown past 10 MB.
+    param([Parameter(Mandatory)] [string] $Path)
+    try {
+        if ((Test-Path -LiteralPath $Path) -and (Get-Item -LiteralPath $Path).Length -gt 10MB) {
+            Move-Item -LiteralPath $Path -Destination "$Path.old" -Force
+        }
+    } catch {
+        Write-Verbose "The log at $Path is busy; moving it next time. $_"
     }
+}
 
-    $container = "ci-$Repo-$Slot"
-    $delay = 5
-    while (-not $State.Stopping) {
-        $started = Get-Date
-        $code = 1
-        try {
-            $name = '{0}-{1}-{2}-{3:yyyyMMddHHmmss}' -f $Config.NamePrefix, $Repo, $Slot, $started
-            $ghArgs = @(
-                'api', '-X', 'POST', "repos/$($Config.Owner)/$Repo/actions/runners/generate-jitconfig",
-                '-f', "name=$name", '-F', 'runner_group_id=1', '-f', 'work_folder=_work'
-            )
-            foreach ($label in $Config.Labels) {
-                $ghArgs += '-f', "labels[]=$label"
-            }
-            $jitconfig = gh @ghArgs --jq '.encoded_jit_config' 2>&1
-            if ($LASTEXITCODE -ne 0) {
-                throw "GitHub refused a runner: $jitconfig"
-            }
-            wsl.exe -d $Config.Distro -u root --exec docker rm --force $container 2>&1 | Out-Null
-            Write-SlotLog $LogPath "$name waiting for a job in $($State.Image)"
-            $jitconfig | wsl.exe -d $Config.Distro -u root --exec docker run --interactive --rm --init `
-                --name $container --label "$($State.SlotLabel)=$Repo-$Slot" `
-                --shm-size 2g --memory $Config.Memory $State.Image 2>&1 |
-                ForEach-Object { Write-SlotLog $LogPath "  $_" }
-            $code = $LASTEXITCODE
-            Write-SlotLog $LogPath "$name finished (exit $code)"
-        } catch {
-            Write-SlotLog $LogPath "error: $_"
-        }
-        # A runner that ran its job starts over at once; one that failed fast waits longer
-        # each time, up to five minutes, so a fault doesn't spin.
-        if ($code -eq 0 -and ((Get-Date) - $started).TotalSeconds -ge 30) {
-            $delay = 5
-            continue
-        }
-        if (-not $State.Stopping) {
-            Write-SlotLog $LogPath "trying again in $delay s"
-            Start-Sleep -Seconds $delay
-            $delay = [Math]::Min($delay * 2, 300)
-        }
-    }
+# The scaler, run in the foreground in a thread job so its output reaches the log as it
+# comes. Its settings, the token among them, go to it on standard input.
+$script:ScalerRun = {
+    param($Distro, $Container, $Image, $Setting, $LogPath)
+    $PSNativeCommandUseErrorActionPreference = $false
+    wsl.exe -d $Distro -u root --exec docker rm --force $Container 2>&1 | Out-Null
+    $Setting | wsl.exe -d $Distro -u root --exec docker run --interactive --rm --init --name $Container `
+        --volume /var/run/docker.sock:/var/run/docker.sock $Image 2>&1 |
+        ForEach-Object { Add-Content -LiteralPath $LogPath -Value $_ }
+    $LASTEXITCODE
 }
 
 #endregion
@@ -266,7 +389,7 @@ $script:SlotLoop = {
 <#
 .SYNOPSIS
     Sets up this machine for the self-hosted runners: the WSL distro with Docker, the config
-    file, and a task that starts them at sign-in.
+    file, and the task that runs them.
 
 .DESCRIPTION
     In order, each step skipped where it's already done:
@@ -275,9 +398,10 @@ $script:SlotLoop = {
        from it, Docker Engine.
     3. Restarts the distro so its wsl.conf takes effect.
     4. Copies runners.example.psd1 to %USERPROFILE%\.ci-runner\runners.psd1 if no config
-       is there yet; list the private repos in it before starting.
-    5. Registers the "CI runners" scheduled task, which runs Start-CiRunner, hidden, each
-       time you sign in (skipped with -NoTask).
+       is there yet; list the repos in it before starting.
+    5. Registers the "CI runners" scheduled task, which runs Start-CiRunner, hidden and apart
+       from any terminal, when `task shared:runner:start` starts it (skipped with -NoTask).
+       Nothing starts it on its own: the runners run only between a start and a stop.
     A failed step throws and leaves the earlier ones done; running it again picks up there.
 
 .PARAMETER Distro
@@ -297,7 +421,7 @@ function Install-CiRunner {
         [switch] $NoTask
     )
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-        throw 'The GitHub CLI (gh) is not on PATH; the runners ask GitHub for their registrations through it.'
+        throw 'The GitHub CLI (gh) is not on PATH; the scaler signs in to GitHub with its token.'
     }
 
     if (-not (Test-CiDistro -Distro $Distro) -and $PSCmdlet.ShouldProcess($Distro, 'Install Ubuntu 24.04 as a WSL distro')) {
@@ -317,7 +441,7 @@ function Install-CiRunner {
     New-Item -ItemType Directory -Force -Path $script:LogDir | Out-Null
     if (-not (Test-Path -LiteralPath $script:DefaultConfigPath)) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'runners.example.psd1') -Destination $script:DefaultConfigPath
-        Write-Host "List your private repos in $script:DefaultConfigPath before starting the runners."
+        Write-Host "List your repos in $script:DefaultConfigPath before starting the runners."
     }
 
     if (-not $NoTask -and $PSCmdlet.ShouldProcess($script:TaskName, 'Register the scheduled task')) {
@@ -327,38 +451,39 @@ function Install-CiRunner {
         }
         $pwsh = (Get-Command pwsh).Source
         $user = "$env:USERDOMAIN\$env:USERNAME"
-        # conhost --headless keeps the console window from opening at every sign-in.
+        # conhost --headless keeps a console window from opening. The task has no trigger:
+        # Invoke-CiRunner.ps1 starts it, and Stop-CiRunner ends it.
         $action = New-ScheduledTaskAction -Execute 'conhost.exe' `
             -Argument "--headless `"$pwsh`" -NoProfile -NonInteractive -Command `"Import-Module '$module'; Start-CiRunner`""
-        $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-            -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew `
-            -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+            -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
         $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
-        Register-ScheduledTask -TaskName $script:TaskName -Action $action -Trigger $trigger `
+        Register-ScheduledTask -TaskName $script:TaskName -Action $action `
             -Settings $settings -Principal $principal -Force | Out-Null
-        Write-Host "The '$script:TaskName' task starts the runners at each sign-in; Start-ScheduledTask '$script:TaskName' starts them now."
+        Write-Host "Registered the '$script:TaskName' task; task shared:runner:start, in any repo, starts the runners."
     }
 }
 
 <#
 .SYNOPSIS
-    Runs the self-hosted runners until stopped: a ready runner for every slot in the config,
-    each job in a fresh container.
+    Runs the self-hosted runners until stopped: the scaler, which starts a fresh container
+    for each job GitHub assigns the repos in the config.
 
 .DESCRIPTION
-    What the "CI runners" task runs at sign-in. In order:
+    What the "CI runners" task runs, which `task shared:runner:start` starts. In order:
     1. Refuses to start while another copy runs (its process id is in
        %USERPROFILE%\.ci-runner\supervisor.pid).
-    2. Waits for Docker in the distro, removes containers and deregisters offline runners
-       an earlier run left.
-    3. Builds the job image for the runner's newest release if it isn't built yet.
-    4. Starts a loop for each slot: a single-use runner from GitHub's just-in-time API, run
-       in a container until its one job is done, then the next.
-    5. Every six hours, rebuilds the image when the runner has a new release (the slots take
-       it at their next job) and deregisters runners left offline.
-    Ctrl+C, or Stop-CiRunner, ends it. Logs go to %USERPROFILE%\.ci-runner\logs, one file
-    for this loop and one per slot.
+    2. Waits for Docker in the distro, sets the limits the jobs share (Set-CiLimit's
+       slice), and deregisters the offline runners an earlier run left.
+    3. Builds the job image for the runner's newest release, and the scaler's image, where
+       either isn't built yet.
+    4. Runs the scaler (scaler/) in a container with gh's token, and starts it again if it
+       stops. It holds a long poll open on each repo's scale set and starts a runner's
+       container for each job GitHub assigns it, up to MaxJobs at once across the repos.
+    5. Every six hours, rebuilds the job image when the runner has a new release, and
+       restarts the scaler on it; running jobs finish on the image they started on.
+    Ctrl+C, or Stop-CiRunner, ends it. Logs go to %USERPROFILE%\.ci-runner\logs:
+    supervisor.log for this loop, scaler.log for the scaler.
 
 .PARAMETER ConfigPath
     The config; defaults to %USERPROFILE%\.ci-runner\runners.psd1.
@@ -370,36 +495,33 @@ function Start-CiRunner {
     [CmdletBinding(SupportsShouldProcess)]
     param([string] $ConfigPath = $script:DefaultConfigPath)
     New-Item -ItemType Directory -Force -Path $script:LogDir | Out-Null
-    # Run hidden at sign-in, an error has nowhere to show but the log.
+    # Run hidden by the task, an error has nowhere to show but the log.
     try {
         $config = Read-CiConfig -Path $ConfigPath
 
-        if (Test-Path -LiteralPath $script:PidPath) {
-            $previous = Get-Content -LiteralPath $script:PidPath -Raw
-            if ($previous -match '^\d+' -and (Get-Process -Id ([int] $Matches[0]) -ErrorAction SilentlyContinue)) {
-                throw "The runners are already running, as process $($Matches[0]). Stop them with Stop-CiRunner."
-            }
+        $running = Get-CiLoop
+        if ($running) {
+            throw "The runners are already running, as process $($running.Id). Stop them with Stop-CiRunner."
         }
         if (-not $PSCmdlet.ShouldProcess("$($config.Repos.Count) repos", 'Start the runners')) {
             return
         }
         Set-Content -LiteralPath $script:PidPath -Value $PID
         Write-CiLog "The runner loop is starting, as process $PID."
-        # The runner writes UTF-8, which the slots' logs keep as it is.
+        # The scaler writes UTF-8, which its log keeps as it is.
         [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 
-        $slots = foreach ($repo in $config.Repos.Keys) { 1..[int] $config.Repos[$repo] | ForEach-Object { [pscustomobject]@{ Repo = $repo; Slot = $_ } } }
-        $state = [hashtable]::Synchronized(@{ Image = $null; Stopping = $false; SlotLabel = $script:SlotLabel })
-        $jobs = @{}
+        $logPath = Join-Path $script:LogDir 'scaler.log'
+        $job = $null
         try {
-            # At sign-in the network can come up after this starts, so the steps that reach
-            # GitHub get ten minutes before the start counts as failed.
+            # Just after a reboot or a sleep the network can come up after this starts, so the
+            # steps that reach GitHub get ten minutes before the start counts as failed.
             foreach ($attempt in 1..20) {
                 try {
                     Wait-CiDocker -Distro $config.Distro
-                    Remove-CiContainer -Distro $config.Distro
+                    $limits = Set-CiLimit -Config $config
+                    $images = Update-CiImage -Distro $config.Distro
                     Remove-CiGitHubRunner -Config $config
-                    $state.Image = Update-CiImage -Distro $config.Distro
                     break
                 } catch {
                     if ($attempt -eq 20) {
@@ -409,31 +531,46 @@ function Start-CiRunner {
                     Start-Sleep -Seconds 30
                 }
             }
-            $lastUpkeep = Get-Date
-            Write-CiLog "Starting $(@($slots).Count) runner slots for $($config.Repos.Count) repos on $($state.Image)."
+            Write-CiLog ("Serving {0} repos as '{1}': up to {2} jobs at once, sharing {3} CPUs and {4:N1} GB." -f
+                $config.Repos.Count, $config.Name, $limits.MaxJobs, $limits.Cpus, ($limits.Memory / 1GB))
 
+            $lastUpkeep = Get-Date
+            $nextStart = Get-Date
+            $delay = 5
             while ($true) {
-                foreach ($slot in $slots) {
-                    $key = "$($slot.Repo)-$($slot.Slot)"
-                    $job = $jobs[$key]
-                    if (-not $job -or $job.State -notin 'Running', 'NotStarted') {
-                        if ($job) {
-                            Write-CiLog "The $key slot stopped ($($job.State)); starting it again. $($job | Receive-Job 2>&1 | Out-String)"
-                            $job | Remove-Job -Force
+                Move-CiLog -Path $logPath
+                if (-not $job -or $job.State -notin 'Running', 'NotStarted') {
+                    if ($job) {
+                        $ran = (Get-Date) - $job.PSBeginTime
+                        Write-CiLog "The scaler stopped ($($job.State), exit $($job | Receive-Job 2>&1 | Select-Object -Last 1)) after $([int] $ran.TotalSeconds) s; the end of scaler.log says why."
+                        $job | Remove-Job -Force
+                        $job = $null
+                        # One that fails at once waits longer each time, up to five minutes.
+                        $delay = if ($ran.TotalSeconds -ge 60) { 5 } else { [Math]::Min($delay * 2, 300) }
+                        $nextStart = (Get-Date).AddSeconds($delay)
+                    }
+                    if ((Get-Date) -ge $nextStart) {
+                        try {
+                            $setting = Get-CiScalerSetting -Config $config -Limits $limits -Image $images.Job
+                            $job = Start-ThreadJob -Name 'scaler' -ScriptBlock $script:ScalerRun -ArgumentList @(
+                                $config.Distro, $script:ScalerContainer, $images.Scaler, $setting, $logPath
+                            )
+                            Write-CiLog "Started the scaler on $($images.Scaler), with jobs on $($images.Job)."
+                        } catch {
+                            Write-CiLog "Couldn't start the scaler, trying again in $delay s: $_"
+                            $nextStart = (Get-Date).AddSeconds($delay)
                         }
-                        $logPath = Join-Path $script:LogDir "$key.log"
-                        if ((Test-Path -LiteralPath $logPath) -and (Get-Item -LiteralPath $logPath).Length -gt 5MB) {
-                            Move-Item -LiteralPath $logPath -Destination "$logPath.old" -Force
-                        }
-                        $jobs[$key] = Start-ThreadJob -Name $key -ThrottleLimit (@($slots).Count + 1) -ScriptBlock $script:SlotLoop `
-                            -ArgumentList $config, $slot.Repo, $slot.Slot, $state, $logPath
                     }
                 }
                 if (((Get-Date) - $lastUpkeep).TotalHours -ge 6) {
                     $lastUpkeep = Get-Date
                     try {
-                        $state.Image = Update-CiImage -Distro $config.Distro
-                        Remove-CiGitHubRunner -Config $config
+                        $newer = Update-CiImage -Distro $config.Distro
+                        if ($newer.Job -ne $images.Job -or $newer.Scaler -ne $images.Scaler) {
+                            $images = $newer
+                            Write-CiLog "Restarting the scaler on the new images."
+                            Stop-CiScaler -Distro $config.Distro
+                        }
                     } catch {
                         Write-CiLog "Upkeep failed, trying again in six hours: $_"
                     }
@@ -441,18 +578,14 @@ function Start-CiRunner {
                 Start-Sleep -Seconds 30
             }
         } finally {
-            $state.Stopping = $true
-            Write-CiLog 'Stopping the runners.'
+            Write-CiLog 'Stopping the scaler; running jobs finish.'
             try {
-                Remove-CiContainer -Distro $config.Distro
+                Stop-CiScaler -Distro $config.Distro
             } catch {
-                Write-CiLog "Couldn't remove the containers: $_"
+                Write-CiLog "Couldn't stop the scaler: $_"
             }
-            $jobs.Values | Remove-Job -Force -ErrorAction SilentlyContinue
-            try {
-                Remove-CiGitHubRunner -Config $config -All
-            } catch {
-                Write-CiLog "Couldn't deregister the runners: $_"
+            if ($job) {
+                $job | Remove-Job -Force
             }
             Remove-Item -LiteralPath $script:PidPath -ErrorAction SilentlyContinue
         }
@@ -464,14 +597,18 @@ function Start-CiRunner {
 
 <#
 .SYNOPSIS
-    Stops the self-hosted runners: the loop, every runner container, and their registrations.
+    Stops the self-hosted runners: the loop, the scaler, every job container, their
+    registrations, and the WSL distro.
 
 .DESCRIPTION
-    Ends the Start-CiRunner process named in %USERPROFILE%\.ci-runner\supervisor.pid,
-    removes every runner container (a job running in one fails, as on a lost runner), and
-    deregisters this machine's runners from each repo in the config. A repo whose CI_RUNNER
-    variable names their label then waits for them; delete the variable to send its jobs to
-    GitHub's runners instead. The scheduled task starts them again at the next sign-in.
+    Ends the "CI runners" task and the Start-CiRunner process named in
+    %USERPROFILE%\.ci-runner\supervisor.pid, stops the scaler (which closes its sessions
+    with GitHub), removes every job container (a job running in one fails, as on a lost
+    runner), deregisters this machine's runners from each repo in the config, and shuts
+    the distro down. With no other distro running, WSL then stops its VM and gives its
+    memory back to Windows. The scale sets stay, so a repo whose CI_RUNNER variable names
+    them queues its jobs until the next start, and GitHub cancels a job that has waited 24
+    hours; delete the variable to send a repo's jobs to GitHub's runners instead.
 
 .PARAMETER ConfigPath
     The config; defaults to %USERPROFILE%\.ci-runner\runners.psd1.
@@ -483,26 +620,76 @@ function Stop-CiRunner {
     [CmdletBinding(SupportsShouldProcess)]
     param([string] $ConfigPath = $script:DefaultConfigPath)
     $config = Read-CiConfig -Path $ConfigPath
-    if (Test-Path -LiteralPath $script:PidPath) {
-        $previous = Get-Content -LiteralPath $script:PidPath -Raw
-        if ($previous -match '^\d+') {
-            $process = Get-Process -Id ([int] $Matches[0]) -ErrorAction SilentlyContinue
-            if ($process -and $PSCmdlet.ShouldProcess("process $($process.Id)", 'Stop the runner loop')) {
-                $process | Stop-Process -Force
-            }
-        }
-        Remove-Item -LiteralPath $script:PidPath -ErrorAction SilentlyContinue
+    $task = Get-ScheduledTask -TaskName $script:TaskName -ErrorAction SilentlyContinue
+    if ($task.State -eq 'Running' -and $PSCmdlet.ShouldProcess($script:TaskName, 'End the task')) {
+        $task | Stop-ScheduledTask
     }
-    if (Test-CiDistro -Distro $config.Distro) {
+    $loop = Get-CiLoop
+    if ($loop -and $PSCmdlet.ShouldProcess("process $($loop.Id)", 'Stop the runner loop')) {
+        $loop | Stop-Process -Force
+    }
+    Remove-Item -LiteralPath $script:PidPath -ErrorAction SilentlyContinue
+    if (Test-CiDistro -Distro $config.Distro -Running) {
+        Stop-CiScaler -Distro $config.Distro
         Remove-CiContainer -Distro $config.Distro
     }
     Remove-CiGitHubRunner -Config $config -All
+    if ((Test-CiDistro -Distro $config.Distro -Running) -and $PSCmdlet.ShouldProcess($config.Distro, 'Shut the distro down')) {
+        wsl.exe --terminate $config.Distro | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Couldn't shut the $($config.Distro) distro down (exit $LASTEXITCODE)."
+        }
+    }
 }
 
 <#
 .SYNOPSIS
-    Shows the runners: whether the loop is running, the containers in the distro, and each
-    repo's runners as GitHub sees them.
+    Waits until the runner loop has the scaler running, after the "CI runners" task starts.
+
+.DESCRIPTION
+    Returns once the scaler's container runs, which is when the repos' jobs start reaching
+    this machine. Throws if the loop isn't running after its first 30 seconds, with the end
+    of its log, or if the scaler isn't up within -TimeoutSeconds: a first start builds the
+    images, which takes a few minutes.
+
+.PARAMETER ConfigPath
+    The config; defaults to %USERPROFILE%\.ci-runner\runners.psd1.
+
+.PARAMETER TimeoutSeconds
+    How long to wait; ten minutes by default.
+
+.EXAMPLE
+    Start-ScheduledTask -TaskName 'CI runners'; Wait-CiRunner
+#>
+function Wait-CiRunner {
+    [CmdletBinding()]
+    param(
+        [string] $ConfigPath = $script:DefaultConfigPath,
+        [int] $TimeoutSeconds = 600
+    )
+    $config = Read-CiConfig -Path $ConfigPath
+    $began = Get-Date
+    while (((Get-Date) - $began).TotalSeconds -lt $TimeoutSeconds) {
+        if (Get-CiLoop) {
+            $scaler = Invoke-CiDistro -Distro $config.Distro -AllowFailure -Command @(
+                'docker', 'ps', '--quiet', '--filter', "name=^$script:ScalerContainer$"
+            )
+            if ($LASTEXITCODE -eq 0 -and $scaler) {
+                return
+            }
+        } elseif (((Get-Date) - $began).TotalSeconds -gt 30) {
+            $log = Get-Content -LiteralPath (Join-Path $script:LogDir 'supervisor.log') -Tail 5 -ErrorAction SilentlyContinue
+            throw "The runner loop isn't running. The end of supervisor.log:`n$($log -join "`n")"
+        }
+        Start-Sleep -Seconds 3
+    }
+    throw "The scaler wasn't up after $TimeoutSeconds s; supervisor.log and scaler.log in $script:LogDir say why."
+}
+
+<#
+.SYNOPSIS
+    Shows the runners: whether the loop and the scaler are running, the limits the jobs
+    share, the scaler's last lines, and a row for each job running now.
 
 .PARAMETER ConfigPath
     The config; defaults to %USERPROFILE%\.ci-runner\runners.psd1.
@@ -514,26 +701,37 @@ function Get-CiRunnerStatus {
     [CmdletBinding()]
     param([string] $ConfigPath = $script:DefaultConfigPath)
     $config = Read-CiConfig -Path $ConfigPath
-    $loop = 'not running'
-    if (Test-Path -LiteralPath $script:PidPath) {
-        $previous = Get-Content -LiteralPath $script:PidPath -Raw
-        if ($previous -match '^\d+' -and (Get-Process -Id ([int] $Matches[0]) -ErrorAction SilentlyContinue)) {
-            $loop = "running as process $($Matches[0])"
-        }
+    $loop = Get-CiLoop
+    Write-Host "Runner loop: $(if ($loop) { "running as process $($loop.Id)" } else { 'not running' }). Logs: $script:LogDir"
+    if (-not (Test-CiDistro -Distro $config.Distro)) {
+        Write-Host "The $($config.Distro) distro isn't installed; run Install-CiRunner."
+        return
     }
-    Write-Host "Runner loop: $loop. Logs: $script:LogDir"
-    if (Test-CiDistro -Distro $config.Distro) {
-        Invoke-CiDistro -Distro $config.Distro -AllowFailure -Command @(
-            'docker', 'ps', '--filter', "label=$script:SlotLabel", '--format', '{{.Names}}  {{.Status}}  {{.Image}}'
-        ) | ForEach-Object { Write-Host "  $_" }
-    } else {
-        Write-Host "  The $($config.Distro) distro isn't installed; run Install-CiRunner."
+    if (-not (Test-CiDistro -Distro $config.Distro -Running)) {
+        Write-Host "The $($config.Distro) distro is shut down; task shared:runner:start starts it."
+        return
     }
-    foreach ($repo in $config.Repos.Keys | Sort-Object) {
-        Get-CiGitHubRunner -Config $config -Repo $repo
+    $scaler = Invoke-CiDistro -Distro $config.Distro -AllowFailure -Command @(
+        'docker', 'ps', '--filter', "name=^$script:ScalerContainer$", '--format', '{{.Status}}'
+    )
+    Write-Host "Scaler: $(if ($scaler) { $scaler } else { 'not running' }), serving $($config.Repos.Count) repos as '$($config.Name)'."
+    $limits = Invoke-CiDistro -Distro $config.Distro -AllowFailure -Command @(
+        'systemctl', 'show', $script:Slice, '--property', 'CPUQuotaPerSecUSec,MemoryMax,MemoryCurrent'
+    )
+    Write-Host "Jobs' limits and use: $($limits -join ', ')"
+    $log = Join-Path $script:LogDir 'scaler.log'
+    if (Test-Path -LiteralPath $log) {
+        Get-Content -LiteralPath $log -Tail 5 | ForEach-Object { Write-Host "  $_" }
+    }
+    Invoke-CiDistro -Distro $config.Distro -AllowFailure -Command @(
+        'docker', 'ps', '--filter', "label=$script:JobLabel",
+        '--format', '{{.Label "ci-runner.repo"}}|{{.Label "ci-runner.runner"}}|{{.RunningFor}}|{{.Image}}'
+    ) | Where-Object { $_ } | ForEach-Object {
+        $repo, $runner, $running, $image = $_ -split '\|'
+        [pscustomobject]@{ Repo = $repo; Runner = $runner; Started = $running; Image = $image }
     }
 }
 
 #endregion
 
-Export-ModuleMember -Function Install-CiRunner, Start-CiRunner, Stop-CiRunner, Get-CiRunnerStatus
+Export-ModuleMember -Function Install-CiRunner, Start-CiRunner, Stop-CiRunner, Wait-CiRunner, Get-CiRunnerStatus

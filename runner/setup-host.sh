@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Prepares the WSL distro the CI runners live in, run as root inside it: systemd, no
 # Windows drives or programs reachable from it, and Docker Engine from Docker's own
-# repository. Safe to run again; Install-CiRunner.ps1 runs it, then restarts the distro so
+# repository. Safe to run again; Install-CiRunner runs it, then restarts the distro so
 # wsl.conf takes effect.
 set -euo pipefail
 
