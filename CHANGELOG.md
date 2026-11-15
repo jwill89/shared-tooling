@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-11-14
+
 ### Added
 
 - `lint/python/ruff.toml`: the shared ruff rules and formatter settings a Python project's `pyproject.toml` extends.
@@ -328,7 +330,8 @@ A major: a project's own Stylelint moves to 18.
 - `repo/`: the shared `.editorconfig` and `.gitattributes`, the Taskfile include, the Dependabot example, and `task shared:update` with its version check.
 - `.github/workflows`: reusable workflows for each stack (`web`, `go`, `php`, `dotnet`, `pwsh`, `docs`, `osv`).
 
-[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.9.0...HEAD
+[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.10.0...HEAD
+[2.10.0]: https://github.com/jwill89/shared-tooling/compare/v2.9.0...v2.10.0
 [2.9.0]: https://github.com/jwill89/shared-tooling/compare/v2.8.0...v2.9.0
 [2.8.0]: https://github.com/jwill89/shared-tooling/compare/v2.7.1...v2.8.0
 [2.7.1]: https://github.com/jwill89/shared-tooling/compare/v2.7.0...v2.7.1
