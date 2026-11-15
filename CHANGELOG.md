@@ -8,6 +8,11 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Added
+
+- `runner/` can give a repo's job containers the distro's Docker: list it in `runners.psd1`'s `DockerRepos`, and its jobs get the socket and a work folder under `/var/lib/ci-work` at the same path in the distro, so `docker run -v` on the job's own files works. The job image has Docker's command line and buildx.
+- `runner/` can run a repo's Windows jobs on this machine: list it in `WindowsRepos`, and a second scaler, built for Windows from `runner/scaler/` with this machine's Go, serves the scale set `<Name>-windows`, running each job from a fresh copy of the runner's Windows release as a process, as you, up to `WindowsMaxJobs` (1) at once. A job goes there with `runs-on: ${{ !github.event.pull_request.head.repo.fork && vars.CI_RUNNER && format('{0}-windows', vars.CI_RUNNER) || 'windows-2025' }}`. `task shared:runner:stop` ends its runners, and `shared:runner:status` shows them.
+
 ## [2.13.0] - 2026-11-15
 
 ### Added

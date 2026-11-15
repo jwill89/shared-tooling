@@ -1,9 +1,8 @@
 # syntax=docker/dockerfile:1
 # The image a self-hosted CI job runs in: Ubuntu 24.04, as GitHub's ubuntu-24.04 image,
 # with what the shared workflows expect to find rather than set up (PowerShell, Google
-# Chrome, the GitHub CLI, PHP from the PPA setup-php uses, zstd for actions/cache's format,
-# sudo for apt),
-# and the Actions runner. Each container takes one job and is removed, so every job
+# Chrome, the GitHub CLI, Docker's command line, PHP from the PPA setup-php uses, zstd for
+# actions/cache's format, sudo for apt), and the Actions runner. Each container takes one job and is removed, so every job
 # starts from this image as it was built.
 #
 # CiRunner.psm1 builds it, passing the runner's newest release and its checksum, and the
@@ -60,6 +59,17 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o 
  && apt-get update \
  && apt-get install -y --no-install-recommends gh \
  && rm -rf /etc/apt/sources.list.d/github-cli.list /var/lib/apt/lists/*
+
+# Docker's command line and buildx, as on the hosted image, for a job whose repo the
+# runners' config lets use the distro's Docker (DockerRepos); other jobs have no daemon to
+# reach.
+RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc \
+ && chmod a+r /etc/apt/keyrings/docker.asc \
+ && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" \
+      > /etc/apt/sources.list.d/docker.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin \
+ && rm -rf /etc/apt/sources.list.d/docker.list /var/lib/apt/lists/*
 
 # PHP and the extensions callers ask for, so setup-php finds them in place instead of
 # installing them on every job.

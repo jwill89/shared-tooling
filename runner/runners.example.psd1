@@ -32,4 +32,14 @@
 
     # The WSL distro the containers run in (Install-CiRunner -Distro).
     # Distro    = 'ci-runner'
+
+    # Repos (of Repos) whose job containers may use the distro's Docker, such as one that
+    # builds its packages in a container of its own. Such a job controls every container
+    # in the distro, so list only repos you would build on this machine anyway.
+    # DockerRepos = @('other-app')
+
+    # Repos (of Repos) whose Windows jobs run here, as processes, as you, on the scale set
+    # '<Name>-windows'; and how many may run at once. Building their scaler needs Go.
+    # WindowsRepos   = @('other-app')
+    # WindowsMaxJobs = 1
 }

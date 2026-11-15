@@ -30,6 +30,12 @@ func TestReadConfig(t *testing.T) {
 		{"a negative size", strings.Replace(valid, `"shmSize":2048`, `"shmSize":-1`, 1), "below 0"},
 		{"a parent that isn't a slice", strings.Replace(valid, `"ci.slice"`, `"/ci"`, 1), "slice"},
 		{"no parent", strings.Replace(valid, `"ci.slice"`, `""`, 1), ""},
+		{"an unknown backend", strings.Replace(valid, `"token"`, `"backend":"vm","token"`, 1), "neither"},
+		{"docker access for a repo served", strings.Replace(valid, `"token"`, `"dockerRepos":["app"],"workRoot":"/var/lib/ci-work","token"`, 1), ""},
+		{"docker access for a repo not served", strings.Replace(valid, `"token"`, `"dockerRepos":["other"],"workRoot":"/var/lib/ci-work","token"`, 1), "isn't one of the repos"},
+		{"docker access with no work root", strings.Replace(valid, `"token"`, `"dockerRepos":["app"],"token"`, 1), "workRoot"},
+		{"docker access with the root as work root", strings.Replace(valid, `"token"`, `"dockerRepos":["app"],"workRoot":"/","token"`, 1), "workRoot"},
+		{"the process backend without its folders", strings.Replace(valid, `"token"`, `"backend":"process","token"`, 1), "runnerDir and jobsDir"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

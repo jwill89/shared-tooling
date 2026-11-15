@@ -1,23 +1,16 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/actions/scaleset"
-	cerrdefs "github.com/containerd/errdefs"
-	"github.com/moby/moby/api/pkg/stdcopy"
-	"github.com/moby/moby/api/types/container"
-	"github.com/moby/moby/client"
 )
 
 const (
@@ -25,32 +18,25 @@ const (
 	runnerGroupID = 1
 	// idleGrace is how long a new runner may wait for a job before it can be retired.
 	idleGrace = 2 * time.Minute
-
-	// The labels on each job container, by which a restarted scaler finds the ones still
-	// running and the module's status and stop find them all.
-	labelJob      = "ci-runner.job"
-	labelRepo     = "ci-runner.repo"
-	labelRunner   = "ci-runner.runner"
-	labelRunnerID = "ci-runner.runner-id"
 )
 
-// runner is one job container and the registration GitHub knows it by.
+// runner is one runner the backend runs, and the registration GitHub knows it by.
 type runner struct {
-	id        int64
-	container string
-	started   time.Time
-	busy      bool
-	retiring  bool
+	id       int64
+	handle   string
+	started  time.Time
+	busy     bool
+	retiring bool
 }
 
 // repoScaler keeps one repo's scale set supplied with a runner for each job GitHub
 // assigns it.
 type repoScaler struct {
-	repo   string
-	config *Config
-	pool   *pool
-	docker *client.Client
-	log    *slog.Logger
+	repo    string
+	config  *Config
+	pool    *pool
+	backend backend
+	log     *slog.Logger
 
 	mu        sync.Mutex
 	github    *scaleset.Client
@@ -61,8 +47,8 @@ type repoScaler struct {
 	holdUntil time.Time
 }
 
-func newRepoScaler(repo string, config *Config, p *pool, docker *client.Client, log *slog.Logger) *repoScaler {
-	return &repoScaler{repo: repo, config: config, pool: p, docker: docker, log: log, runners: map[string]*runner{}}
+func newRepoScaler(repo string, config *Config, p *pool, b backend, log *slog.Logger) *repoScaler {
+	return &repoScaler{repo: repo, config: config, pool: p, backend: b, log: log, runners: map[string]*runner{}}
 }
 
 // run serves the repo until ctx ends, starting over after a failure: a lost connection,
@@ -165,7 +151,7 @@ func (s *repoScaler) ensureScaleSet(ctx context.Context, github *scaleset.Client
 		Name:          s.config.Name,
 		RunnerGroupID: runnerGroupID,
 		Labels:        []scaleset.Label{{Name: s.config.Name}},
-		// The image carries the runner's newest release, rebuilt as each one comes out.
+		// The runners are the runner's newest release, taken as each one comes out.
 		RunnerSetting: scaleset.RunnerSetting{DisableUpdate: true},
 	})
 	if err != nil {
@@ -237,8 +223,8 @@ func (s *repoScaler) converge(ctx context.Context, stats *scaleset.RunnerScaleSe
 	}
 }
 
-// startRunner asks GitHub for a single-use runner in the scale set and starts its
-// container, which takes one job and exits.
+// startRunner asks GitHub for a single-use runner in the scale set and has the backend
+// start it; it takes one job and exits.
 func (s *repoScaler) startRunner(ctx context.Context) error {
 	s.mu.Lock()
 	github, setID := s.github, s.scaleSet
@@ -248,7 +234,8 @@ func (s *repoScaler) startRunner(ctx context.Context) error {
 		return err
 	}
 	name := s.config.Name + "-" + suffix
-	jit, err := github.GenerateJitRunnerConfig(ctx, &scaleset.RunnerScaleSetJitRunnerSetting{Name: name, WorkFolder: "_work"}, setID)
+	work := s.backend.workFolder(s.repo, name)
+	jit, err := github.GenerateJitRunnerConfig(ctx, &scaleset.RunnerScaleSetJitRunnerSetting{Name: name, WorkFolder: work}, setID)
 	if err != nil {
 		return fmt.Errorf("get a runner from GitHub: %w", err)
 	}
@@ -256,55 +243,24 @@ func (s *repoScaler) startRunner(ctx context.Context) error {
 		return errors.New("GitHub's runner configuration names no runner")
 	}
 	id := int64(jit.Runner.ID)
-
-	initProcess := true
-	created, err := s.docker.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Name: "ci-" + s.repo + "-" + suffix,
-		Config: &container.Config{
-			Image: s.config.Image,
-			// The runner reads its configuration from here and clears it from its own
-			// environment, so the job's steps don't inherit it.
-			Env: []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=" + jit.EncodedJITConfig},
-			Labels: map[string]string{
-				labelJob:      s.config.Name,
-				labelRepo:     s.repo,
-				labelRunner:   name,
-				labelRunnerID: strconv.FormatInt(id, 10),
-			},
-		},
-		HostConfig: &container.HostConfig{
-			Init:    &initProcess,
-			ShmSize: s.config.ShmSize,
-			Resources: container.Resources{
-				Memory:       s.config.JobMemory,
-				CgroupParent: s.config.CgroupParent,
-			},
-		},
-	})
+	handle, err := s.backend.start(ctx, spec{name: name, repo: s.repo, runnerID: id, jitConfig: jit.EncodedJITConfig, workFolder: work})
 	if err != nil {
 		s.unregister(ctx, github, id)
-		return fmt.Errorf("create the container: %w", err)
+		return err
 	}
-	if _, err := s.docker.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
-		s.removeContainer(ctx, created.ID)
-		s.unregister(ctx, github, id)
-		return fmt.Errorf("start the container: %w", err)
-	}
-
-	r := &runner{id: id, container: created.ID, started: time.Now()}
-	s.track(ctx, name, r)
+	s.track(ctx, name, &runner{id: id, handle: handle, started: time.Now()})
 	s.log.Info("runner started", "runner", name)
 	return nil
 }
 
-// adopt takes on a job container an earlier run of the scaler left running. Its state is
+// adopt takes on a runner an earlier run of the scaler left running. Its state is
 // unknown, so it counts as busy: it exits after its job, or takes the next one.
-func (s *repoScaler) adopt(ctx context.Context, name, containerID string, id int64, started time.Time) {
-	s.track(ctx, name, &runner{id: id, container: containerID, started: started, busy: true})
-	s.log.Info("took on a running runner", "runner", name)
+func (s *repoScaler) adopt(ctx context.Context, f found) {
+	s.track(ctx, f.name, &runner{id: f.runnerID, handle: f.handle, started: f.started, busy: true})
+	s.log.Info("took on a running runner", "runner", f.name)
 }
 
-// track counts a runner against the machine's limit and watches its container.
+// track counts a runner against the machine's limit and watches it.
 func (s *repoScaler) track(ctx context.Context, name string, r *runner) {
 	s.mu.Lock()
 	s.runners[name] = r
@@ -313,20 +269,13 @@ func (s *repoScaler) track(ctx context.Context, name string, r *runner) {
 	go s.watch(ctx, name, r)
 }
 
-// watch waits for a runner's container to exit, which it does after its one job, then
-// removes the container and the registration and frees its place. When ctx ends it stops
-// waiting and leaves the container, which the next run adopts.
+// watch waits for a runner to exit, which it does after its one job, then removes what
+// it left and its registration and frees its place. When ctx ends it stops waiting, and
+// the backend's shutdown decides what becomes of the runner.
 func (s *repoScaler) watch(ctx context.Context, name string, r *runner) {
-	wait := s.docker.ContainerWait(ctx, r.container, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
-	code := int64(-1)
-	select {
-	case result := <-wait.Result:
-		code = result.StatusCode
-	case err := <-wait.Error:
-		if ctx.Err() != nil {
-			return
-		}
-		s.log.Warn("lost track of a runner's container", "runner", name, "error", err)
+	code, err := s.backend.wait(ctx, r.handle)
+	if err != nil {
+		return
 	}
 	ran := time.Since(r.started)
 
@@ -334,9 +283,9 @@ func (s *repoScaler) watch(ctx context.Context, name string, r *runner) {
 	busy, retiring := r.busy, r.retiring
 	s.mu.Unlock()
 	if code != 0 && !retiring {
-		s.log.Warn("runner exited with an error", "runner", name, "exit", code, "output", s.tail(ctx, r.container))
+		s.log.Warn("runner exited with an error", "runner", name, "exit", code, "output", s.backend.tail(ctx, r.handle))
 	}
-	s.removeContainer(ctx, r.container)
+	s.backend.remove(ctx, r.handle)
 
 	s.mu.Lock()
 	github := s.github
@@ -380,8 +329,8 @@ func (s *repoScaler) retire(ctx context.Context, name string) {
 		s.log.Info("kept an idle runner GitHub wouldn't remove", "runner", name, "error", err)
 		return
 	}
-	// watch then sees the container exit and frees its place.
-	s.removeContainer(ctx, r.container)
+	// watch then sees the runner exit and frees its place.
+	s.backend.remove(ctx, r.handle)
 	s.log.Info("retired an idle runner", "runner", name)
 }
 
@@ -392,27 +341,6 @@ func (s *repoScaler) unregister(ctx context.Context, github *scaleset.Client, id
 	if err := github.RemoveRunner(context.WithoutCancel(ctx), id); err != nil && !isNotFound(err) {
 		s.log.Warn("couldn't remove a runner's registration", "runnerId", id, "error", err)
 	}
-}
-
-func (s *repoScaler) removeContainer(ctx context.Context, id string) {
-	_, err := s.docker.ContainerRemove(context.WithoutCancel(ctx), id, client.ContainerRemoveOptions{Force: true})
-	if err != nil && !cerrdefs.IsNotFound(err) {
-		s.log.Warn("couldn't remove a container", "container", id, "error", err)
-	}
-}
-
-// tail returns the last lines a container wrote, to say why a runner failed.
-func (s *repoScaler) tail(ctx context.Context, id string) string {
-	logs, err := s.docker.ContainerLogs(context.WithoutCancel(ctx), id, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Tail: "20"})
-	if err != nil {
-		return "(no output: " + err.Error() + ")"
-	}
-	defer func() { _ = logs.Close() }() // opened to read
-	var out bytes.Buffer
-	if _, err := stdcopy.StdCopy(&out, &out, logs); err != nil {
-		return "(no output: " + err.Error() + ")"
-	}
-	return strings.TrimSpace(out.String())
 }
 
 func isNotFound(err error) bool {

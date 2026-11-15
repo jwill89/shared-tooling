@@ -24,6 +24,13 @@ $script:ScalerContainer = 'ci-scaler'
 $script:JobLabel = 'ci-runner.job'
 # The systemd slice every job's container runs in, whose limits the jobs share.
 $script:Slice = 'ci.slice'
+# Where a job with Docker access keeps its work folder in the distro, at the same path in
+# its container, so a path it hands `docker run -v` means the same to Docker.
+$script:WorkRoot = '/var/lib/ci-work'
+# The Windows runners: the runner release they copy for each job, each job's copy, their
+# own Go and tool caches, the scaler's build, and the file that stops it.
+$script:WindowsDir = Join-Path $script:StateDir 'windows'
+$script:WindowsStop = Join-Path $script:StateDir 'windows.stop'
 
 #region Private helpers
 
@@ -49,9 +56,12 @@ function Read-CiConfig {
         throw "The runner config at $Path gives Repos as a table of slots. It is a list of names now, such as @('app', 'site'): a repo runs as many jobs at once as MaxJobs allows."
     }
     $defaults = @{
-        Distro    = 'ci-runner'
-        Name      = 'wsl'
-        JobMemory = '8g'
+        Distro         = 'ci-runner'
+        Name           = 'wsl'
+        JobMemory      = '8g'
+        DockerRepos    = @()
+        WindowsRepos   = @()
+        WindowsMaxJobs = 1
     }
     foreach ($key in $defaults.Keys) {
         if (-not $config.ContainsKey($key)) {
@@ -59,6 +69,14 @@ function Read-CiConfig {
         }
     }
     $config.Repos = @($config.Repos)
+    $config.DockerRepos = @($config.DockerRepos)
+    $config.WindowsRepos = @($config.WindowsRepos)
+    foreach ($key in 'DockerRepos', 'WindowsRepos') {
+        foreach ($repo in $config[$key]) {
+            if ($repo -notin $config.Repos) { throw "The config's $key names '$repo', which isn't in its Repos." }
+        }
+    }
+    if ($config.WindowsMaxJobs -isnot [int] -or $config.WindowsMaxJobs -lt 1) { throw "The config's WindowsMaxJobs '$($config.WindowsMaxJobs)' isn't a whole number of 1 or more." }
     # Every value reaches a command line, an API path or a limit, so each is held to a plain shape.
     if ($config.Owner -notmatch '^[A-Za-z0-9-]+$') { throw "The config's Owner '$($config.Owner)' isn't an account name." }
     if ($config.Distro -notmatch '^[A-Za-z0-9._-]+$') { throw "The config's Distro '$($config.Distro)' isn't a distro name." }
@@ -178,9 +196,9 @@ function Set-CiLimit {
 }
 
 function Get-CiRunnerRelease {
-    # The runner's newest release and the checksum its notes give for the Linux x64 archive.
-    # GitHub stops sending jobs to a runner that falls too far behind, so the image follows
-    # the newest release rather than a pinned one.
+    # The runner's newest release and the checksums its notes give for the Linux and Windows
+    # x64 archives. GitHub stops sending jobs to a runner that falls too far behind, so the
+    # runners follow the newest release rather than a pinned one.
     $json = gh api repos/actions/runner/releases/latest 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Couldn't read the runner's newest release: $json"
@@ -190,10 +208,14 @@ function Get-CiRunnerRelease {
         throw "The runner's newest release has an unexpected tag, '$($release.tag_name)'."
     }
     $version = $Matches[1]
-    if ($release.body -notmatch '<!-- BEGIN SHA linux-x64 -->([0-9a-f]{64})<!-- END SHA linux-x64 -->') {
-        throw "The runner's release $version lists no checksum for linux-x64."
+    $sums = @{}
+    foreach ($platform in 'linux-x64', 'win-x64') {
+        if ($release.body -notmatch "<!-- BEGIN SHA $platform -->([0-9a-f]{64})<!-- END SHA $platform -->") {
+            throw "The runner's release $version lists no checksum for $platform."
+        }
+        $sums[$platform] = $Matches[1]
     }
-    return [pscustomobject]@{ Version = $version; Sha256 = $Matches[1] }
+    return [pscustomobject]@{ Version = $version; Sha256 = $sums['linux-x64']; WindowsSha256 = $sums['win-x64'] }
 }
 
 function Build-CiImage {
@@ -255,11 +277,14 @@ function Build-CiImage {
 }
 
 function Update-CiImage {
-    # Builds the job image for the runner's newest release, and the scaler's image from
-    # scaler/, each unless it is built already. Returns both tags.
+    # Builds the job image for the runner's release (Get-CiRunnerRelease), and the scaler's
+    # image from scaler/, each unless it is built already. Returns both tags.
     [CmdletBinding(SupportsShouldProcess)]
-    param([Parameter(Mandatory)] [string] $Distro)
-    $release = Get-CiRunnerRelease
+    param(
+        [Parameter(Mandatory)] [string] $Distro,
+        [Parameter(Mandatory)] [pscustomobject] $Release
+    )
+    $release = $Release
     $job = Build-CiImage -Distro $Distro -Name $script:JobImage -TagPrefix "$($release.Version)-" `
         -Files @{ Dockerfile = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'Dockerfile') } `
         -BuildArgument "RUNNER_VERSION=$($release.Version)", "RUNNER_SHA256=$($release.Sha256)"
@@ -274,30 +299,145 @@ function Update-CiImage {
     return [pscustomobject]@{ Job = $job; Scaler = $scaler }
 }
 
+function Get-CiToken {
+    # The token gh holds now, so a sign-in again reaches a scaler at its next start.
+    $token = gh auth token 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "gh has no token to give the scaler; sign in with gh auth login. $token"
+    }
+    return "$token".Trim()
+}
+
 function Get-CiScalerSetting {
-    # The scaler's settings as the one line of JSON it reads on standard input, with the
-    # token gh holds now, so a sign-in again reaches the scaler at its next start.
+    # The Linux scaler's settings, as the one line of JSON it reads on standard input.
     param(
         [Parameter(Mandatory)] [hashtable] $Config,
         [Parameter(Mandatory)] [pscustomobject] $Limits,
         [Parameter(Mandatory)] [string] $Image
     )
-    $token = gh auth token 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "gh has no token to give the scaler; sign in with gh auth login. $token"
-    }
     return [ordered]@{
-        token        = "$token".Trim()
+        token        = Get-CiToken
         owner        = $Config.Owner
         repos        = @($Config.Repos)
         name         = $Config.Name
-        image        = $Image
         maxJobs      = $Limits.MaxJobs
+        image        = $Image
         jobMemory    = ConvertTo-CiByte $Config.JobMemory
         # Chrome needs more /dev/shm than Docker's 64 MB.
         shmSize      = 2GB
         cgroupParent = $script:Slice
+        dockerRepos  = @($Config.DockerRepos)
+        workRoot     = $script:WorkRoot
     } | ConvertTo-Json -Compress
+}
+
+function Get-CiWindowsScalerSetting {
+    # The Windows scaler's settings: a process for each job, from a copy of RunnerDir, with
+    # Go's caches and the tool cache of the runners' own, so a job neither writes to yours
+    # nor downloads its tools afresh.
+    param(
+        [Parameter(Mandatory)] [hashtable] $Config,
+        [Parameter(Mandatory)] [string] $RunnerDir
+    )
+    return [ordered]@{
+        token     = Get-CiToken
+        owner     = $Config.Owner
+        repos     = @($Config.WindowsRepos)
+        name      = "$($Config.Name)-windows"
+        maxJobs   = $Config.WindowsMaxJobs
+        backend   = 'process'
+        stopFile  = $script:WindowsStop
+        runnerDir = $RunnerDir
+        jobsDir   = Join-Path $script:WindowsDir 'jobs'
+        env       = [ordered]@{
+            GOPATH               = Join-Path $script:WindowsDir 'go'
+            GOCACHE              = Join-Path $script:WindowsDir 'go-build'
+            RUNNER_TOOL_CACHE    = Join-Path $script:WindowsDir 'toolcache'
+            AGENT_TOOLSDIRECTORY = Join-Path $script:WindowsDir 'toolcache'
+        }
+    } | ConvertTo-Json -Compress
+}
+
+function Update-CiWindowsRunner {
+    # Makes ready what the Windows runners run, each only where it isn't already: the
+    # runner's newest release, extracted once and copied for each job, and the scaler,
+    # built from scaler/ with this machine's Go. Removes the older ones nothing runs.
+    # Returns both paths.
+    [CmdletBinding(SupportsShouldProcess)]
+    param([Parameter(Mandatory)] [pscustomobject] $Release)
+    if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
+        throw 'The Windows runners need Go on PATH, which builds their scaler.'
+    }
+    New-Item -ItemType Directory -Force -Path $script:WindowsDir | Out-Null
+
+    $runnerDir = Join-Path $script:WindowsDir "runner-$($Release.Version)"
+    if (-not (Test-Path -LiteralPath (Join-Path $runnerDir '.complete')) -and $PSCmdlet.ShouldProcess($runnerDir, 'Extract the Windows runner')) {
+        Write-CiLog "Fetching the Windows runner $($Release.Version)."
+        $zip = Join-Path $script:WindowsDir "actions-runner-win-x64-$($Release.Version).zip"
+        $url = "https://github.com/actions/runner/releases/download/v$($Release.Version)/actions-runner-win-x64-$($Release.Version).zip"
+        Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+        $sum = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($sum -ne $Release.WindowsSha256) {
+            Remove-Item -LiteralPath $zip
+            throw "The Windows runner's archive has the checksum $sum, not the $($Release.WindowsSha256) its release notes give."
+        }
+        Remove-Item -LiteralPath $runnerDir -Recurse -Force -ErrorAction SilentlyContinue
+        Expand-Archive -LiteralPath $zip -DestinationPath $runnerDir
+        Remove-Item -LiteralPath $zip
+        Set-Content -LiteralPath (Join-Path $runnerDir '.complete') -Value $Release.Version
+    }
+
+    $source = Join-Path $PSScriptRoot 'scaler'
+    $files = Get-ChildItem -LiteralPath $source -File |
+        Where-Object { $_.Name -in 'go.mod', 'go.sum' -or ($_.Extension -eq '.go' -and $_.Name -notlike '*_test.go') } |
+        Sort-Object Name
+    $identity = ($files | ForEach-Object { "$($_.Name)`n$((Get-Content -Raw -LiteralPath $_.FullName).Replace("`r", ''))" }) -join "`0"
+    $digest = [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($identity))
+    $bin = Join-Path $script:WindowsDir 'bin'
+    $exe = Join-Path $bin ('scaler-{0}.exe' -f [Convert]::ToHexString($digest).Substring(0, 12).ToLowerInvariant())
+    if (-not (Test-Path -LiteralPath $exe) -and $PSCmdlet.ShouldProcess($exe, 'Build the Windows scaler')) {
+        Write-CiLog "Building $exe."
+        New-Item -ItemType Directory -Force -Path $bin | Out-Null
+        $env:CGO_ENABLED = '0'
+        try {
+            $output = go build -C $source -trimpath -o $exe . 2>&1
+        } finally {
+            Remove-Item Env:\CGO_ENABLED
+        }
+        if ($LASTEXITCODE -ne 0) {
+            throw "Couldn't build the Windows scaler: $($output -join "`n")"
+        }
+    }
+
+    # Older ones go once nothing runs them; a scaler still running one keeps it for now.
+    Get-ChildItem -LiteralPath $script:WindowsDir -Directory -Filter 'runner-*' |
+        Where-Object { $_.FullName -ne $runnerDir } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -LiteralPath $bin -File -Filter 'scaler-*.exe' -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -ne $exe } | Remove-Item -Force -ErrorAction SilentlyContinue
+    return [pscustomobject]@{ RunnerDir = $runnerDir; Scaler = $exe }
+}
+
+function Stop-CiWindowsScaler {
+    # Stops the Windows scaler through its stop file, which ends its runners: a job running
+    # on one fails. Whatever outlives it, a scaler or a runner a crash left, is ended here.
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+    if (-not (Test-Path -LiteralPath $script:WindowsDir) -or -not $PSCmdlet.ShouldProcess('the Windows scaler', 'Stop')) {
+        return
+    }
+    $mine = { param($p) $p.ExecutablePath -and $p.ExecutablePath.StartsWith($script:WindowsDir, [StringComparison]::OrdinalIgnoreCase) }
+    $scalers = @(Get-CimInstance Win32_Process -Filter "Name LIKE 'scaler-%.exe'" | Where-Object { & $mine $_ })
+    if ($scalers) {
+        Set-Content -LiteralPath $script:WindowsStop -Value 'stop'
+        $deadline = (Get-Date).AddSeconds(45)
+        while ((Get-Date) -lt $deadline -and ($scalers | Where-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })) {
+            Start-Sleep -Seconds 1
+        }
+    }
+    foreach ($process in Get-CimInstance Win32_Process | Where-Object { & $mine $_ }) {
+        taskkill.exe /T /F /PID $process.ProcessId 2>&1 | Out-Null
+    }
+    Remove-Item -LiteralPath $script:WindowsStop -ErrorAction SilentlyContinue
 }
 
 function Get-CiGitHubRunner {
@@ -373,12 +513,20 @@ function Move-CiLog {
 # The scaler, run in the foreground in a thread job so its output reaches the log as it
 # comes. Its settings, the token among them, go to it on standard input.
 $script:ScalerRun = {
-    param($Distro, $Container, $Image, $Setting, $LogPath)
+    param($Distro, $Container, $Image, $Setting, $LogPath, $WorkRoot)
     $PSNativeCommandUseErrorActionPreference = $false
     wsl.exe -d $Distro -u root --exec docker rm --force $Container 2>&1 | Out-Null
     $Setting | wsl.exe -d $Distro -u root --exec docker run --interactive --rm --init --name $Container `
-        --volume /var/run/docker.sock:/var/run/docker.sock $Image 2>&1 |
+        --volume /var/run/docker.sock:/var/run/docker.sock --volume "${WorkRoot}:${WorkRoot}" $Image 2>&1 |
         ForEach-Object { Add-Content -LiteralPath $LogPath -Value $_ }
+    $LASTEXITCODE
+}
+
+# The Windows scaler, run the same way.
+$script:WindowsScalerRun = {
+    param($Exe, $Setting, $LogPath)
+    $PSNativeCommandUseErrorActionPreference = $false
+    $Setting | & $Exe 2>&1 | ForEach-Object { Add-Content -LiteralPath $LogPath -Value $_ }
     $LASTEXITCODE
 }
 
@@ -511,8 +659,15 @@ function Start-CiRunner {
         # The scaler writes UTF-8, which its log keeps as it is.
         [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 
-        $logPath = Join-Path $script:LogDir 'scaler.log'
-        $job = $null
+        # A scaler for the Linux containers, and one for the Windows processes when the
+        # config names Windows repos; each runs in a thread job and starts again if it stops.
+        $scalers = [ordered]@{
+            linux = [pscustomobject]@{ Log = Join-Path $script:LogDir 'scaler.log'; Job = $null; Delay = 5; NextStart = Get-Date }
+        }
+        if ($config.WindowsRepos) {
+            $scalers.windows = [pscustomobject]@{ Log = Join-Path $script:LogDir 'scaler-windows.log'; Job = $null; Delay = 5; NextStart = Get-Date }
+        }
+        $windows = $null
         try {
             # Just after a reboot or a sleep the network can come up after this starts, so the
             # steps that reach GitHub get ten minutes before the start counts as failed.
@@ -520,7 +675,11 @@ function Start-CiRunner {
                 try {
                     Wait-CiDocker -Distro $config.Distro
                     $limits = Set-CiLimit -Config $config
-                    $images = Update-CiImage -Distro $config.Distro
+                    $release = Get-CiRunnerRelease
+                    $images = Update-CiImage -Distro $config.Distro -Release $release
+                    if ($config.WindowsRepos) {
+                        $windows = Update-CiWindowsRunner -Release $release
+                    }
                     Remove-CiGitHubRunner -Config $config
                     break
                 } catch {
@@ -533,43 +692,67 @@ function Start-CiRunner {
             }
             Write-CiLog ("Serving {0} repos as '{1}': up to {2} jobs at once, sharing {3} CPUs and {4:N1} GB." -f
                 $config.Repos.Count, $config.Name, $limits.MaxJobs, $limits.Cpus, ($limits.Memory / 1GB))
+            if ($config.WindowsRepos) {
+                Write-CiLog ("Serving {0} repos' Windows jobs as '{1}-windows': up to {2} at once." -f
+                    $config.WindowsRepos.Count, $config.Name, $config.WindowsMaxJobs)
+            }
 
             $lastUpkeep = Get-Date
-            $nextStart = Get-Date
-            $delay = 5
             while ($true) {
-                Move-CiLog -Path $logPath
-                if (-not $job -or $job.State -notin 'Running', 'NotStarted') {
-                    if ($job) {
-                        $ran = (Get-Date) - $job.PSBeginTime
-                        Write-CiLog "The scaler stopped ($($job.State), exit $($job | Receive-Job 2>&1 | Select-Object -Last 1)) after $([int] $ran.TotalSeconds) s; the end of scaler.log says why."
-                        $job | Remove-Job -Force
-                        $job = $null
-                        # One that fails at once waits longer each time, up to five minutes.
-                        $delay = if ($ran.TotalSeconds -ge 60) { 5 } else { [Math]::Min($delay * 2, 300) }
-                        $nextStart = (Get-Date).AddSeconds($delay)
+                foreach ($name in @($scalers.Keys)) {
+                    $scaler = $scalers[$name]
+                    Move-CiLog -Path $scaler.Log
+                    if ($scaler.Job -and $scaler.Job.State -in 'Running', 'NotStarted') {
+                        continue
                     }
-                    if ((Get-Date) -ge $nextStart) {
-                        try {
+                    if ($scaler.Job) {
+                        $ran = (Get-Date) - $scaler.Job.PSBeginTime
+                        Write-CiLog "The $name scaler stopped ($($scaler.Job.State), exit $($scaler.Job | Receive-Job 2>&1 | Select-Object -Last 1)) after $([int] $ran.TotalSeconds) s; the end of $(Split-Path -Leaf $scaler.Log) says why."
+                        $scaler.Job | Remove-Job -Force
+                        $scaler.Job = $null
+                        # One that fails at once waits longer each time, up to five minutes.
+                        $scaler.Delay = if ($ran.TotalSeconds -ge 60) { 5 } else { [Math]::Min($scaler.Delay * 2, 300) }
+                        $scaler.NextStart = (Get-Date).AddSeconds($scaler.Delay)
+                    }
+                    if ((Get-Date) -lt $scaler.NextStart) {
+                        continue
+                    }
+                    try {
+                        if ($name -eq 'linux') {
                             $setting = Get-CiScalerSetting -Config $config -Limits $limits -Image $images.Job
-                            $job = Start-ThreadJob -Name 'scaler' -ScriptBlock $script:ScalerRun -ArgumentList @(
-                                $config.Distro, $script:ScalerContainer, $images.Scaler, $setting, $logPath
+                            $scaler.Job = Start-ThreadJob -Name 'scaler' -ScriptBlock $script:ScalerRun -ArgumentList @(
+                                $config.Distro, $script:ScalerContainer, $images.Scaler, $setting, $scaler.Log, $script:WorkRoot
                             )
-                            Write-CiLog "Started the scaler on $($images.Scaler), with jobs on $($images.Job)."
-                        } catch {
-                            Write-CiLog "Couldn't start the scaler, trying again in $delay s: $_"
-                            $nextStart = (Get-Date).AddSeconds($delay)
+                            Write-CiLog "Started the linux scaler on $($images.Scaler), with jobs on $($images.Job)."
+                        } else {
+                            $setting = Get-CiWindowsScalerSetting -Config $config -RunnerDir $windows.RunnerDir
+                            $scaler.Job = Start-ThreadJob -Name 'scaler-windows' -ScriptBlock $script:WindowsScalerRun -ArgumentList @(
+                                $windows.Scaler, $setting, $scaler.Log
+                            )
+                            Write-CiLog "Started the windows scaler, $($windows.Scaler), with jobs on $($windows.RunnerDir)."
                         }
+                    } catch {
+                        Write-CiLog "Couldn't start the $name scaler, trying again in $($scaler.Delay) s: $_"
+                        $scaler.NextStart = (Get-Date).AddSeconds($scaler.Delay)
                     }
                 }
                 if (((Get-Date) - $lastUpkeep).TotalHours -ge 6) {
                     $lastUpkeep = Get-Date
                     try {
-                        $newer = Update-CiImage -Distro $config.Distro
+                        $release = Get-CiRunnerRelease
+                        $newer = Update-CiImage -Distro $config.Distro -Release $release
                         if ($newer.Job -ne $images.Job -or $newer.Scaler -ne $images.Scaler) {
                             $images = $newer
-                            Write-CiLog "Restarting the scaler on the new images."
+                            Write-CiLog 'Restarting the linux scaler on the new images.'
                             Stop-CiScaler -Distro $config.Distro
+                        }
+                        if ($config.WindowsRepos) {
+                            $newer = Update-CiWindowsRunner -Release $release
+                            if ($newer.RunnerDir -ne $windows.RunnerDir -or $newer.Scaler -ne $windows.Scaler) {
+                                $windows = $newer
+                                Write-CiLog 'Restarting the windows scaler on the new runner or build.'
+                                Stop-CiWindowsScaler
+                            }
                         }
                     } catch {
                         Write-CiLog "Upkeep failed, trying again in six hours: $_"
@@ -578,14 +761,19 @@ function Start-CiRunner {
                 Start-Sleep -Seconds 30
             }
         } finally {
-            Write-CiLog 'Stopping the scaler; running jobs finish.'
+            Write-CiLog 'Stopping the scalers; running Linux jobs finish, Windows ones end.'
             try {
                 Stop-CiScaler -Distro $config.Distro
+                if ($config.WindowsRepos) {
+                    Stop-CiWindowsScaler
+                }
             } catch {
-                Write-CiLog "Couldn't stop the scaler: $_"
+                Write-CiLog "Couldn't stop the scalers: $_"
             }
-            if ($job) {
-                $job | Remove-Job -Force
+            foreach ($scaler in $scalers.Values) {
+                if ($scaler.Job) {
+                    $scaler.Job | Remove-Job -Force
+                }
             }
             Remove-Item -LiteralPath $script:PidPath -ErrorAction SilentlyContinue
         }
@@ -629,6 +817,7 @@ function Stop-CiRunner {
         $loop | Stop-Process -Force
     }
     Remove-Item -LiteralPath $script:PidPath -ErrorAction SilentlyContinue
+    Stop-CiWindowsScaler
     if (Test-CiDistro -Distro $config.Distro -Running) {
         Stop-CiScaler -Distro $config.Distro
         Remove-CiContainer -Distro $config.Distro
@@ -703,6 +892,16 @@ function Get-CiRunnerStatus {
     $config = Read-CiConfig -Path $ConfigPath
     $loop = Get-CiLoop
     Write-Host "Runner loop: $(if ($loop) { "running as process $($loop.Id)" } else { 'not running' }). Logs: $script:LogDir"
+    if ($config.WindowsRepos) {
+        $windows = @(Get-Process -Name 'scaler-*' -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($script:WindowsDir, [StringComparison]::OrdinalIgnoreCase) })
+        $jobs = @(Get-ChildItem -LiteralPath (Join-Path $script:WindowsDir 'jobs') -Directory -ErrorAction SilentlyContinue)
+        Write-Host ("Windows scaler: {0}, serving {1} repos as '{2}-windows'; {3} runner(s) up." -f
+            $(if ($windows) { "running as process $($windows[0].Id)" } else { 'not running' }), $config.WindowsRepos.Count, $config.Name, $jobs.Count)
+        $log = Join-Path $script:LogDir 'scaler-windows.log'
+        if (Test-Path -LiteralPath $log) {
+            Get-Content -LiteralPath $log -Tail 3 | ForEach-Object { Write-Host "  $_" }
+        }
+    }
     if (-not (Test-CiDistro -Distro $config.Distro)) {
         Write-Host "The $($config.Distro) distro isn't installed; run Install-CiRunner."
         return

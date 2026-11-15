@@ -71,6 +71,8 @@ jobs:
       - run: go run . -dir ../../runner/scaler -check
         working-directory: lint/go
       - run: go vet ./...
+      # The build the Windows scaler runs, which the steps here otherwise never compile.
+      - run: GOOS=windows go vet ./...
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15.0

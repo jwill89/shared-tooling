@@ -5,14 +5,16 @@ Runs the repos' CI on a Windows machine instead of GitHub's runners, so it costs
 ## How it fits together
 
 - **The distro** (`ci-runner`, Ubuntu 24.04) runs Docker Engine and nothing else. `setup-host.sh` turns off its Windows drives and Windows programs, so a job's packages can't reach either.
-- **The job image** (`Dockerfile`) is Ubuntu 24.04 like GitHub's `ubuntu-24.04`, with what the shared workflows expect to find (PowerShell, Chrome, the GitHub CLI, PHP, zstd, passwordless sudo) and the Actions runner. The other tools come from the setup actions, as on GitHub.
+- **The job image** (`Dockerfile`) is Ubuntu 24.04 like GitHub's `ubuntu-24.04`, with what the shared workflows expect to find (PowerShell, Chrome, the GitHub CLI, Docker's command line, PHP, zstd, passwordless sudo) and the Actions runner. The other tools come from the setup actions, as on GitHub.
 - **The scaler** (`scaler/`, a Go program on GitHub's [runner scale set client](https://github.com/actions/scaleset)) gives each repo a runner scale set named by the config's `Name`, which is the label a job's `runs-on` names. It holds a long poll open on each set; when GitHub assigns a set jobs, it starts a single-use runner per job in a container of the job image, and removes the container once the runner has taken its job and exited. It runs in a container of its own, talking to Docker through its socket.
 - **The limits.** At most `MaxJobs` jobs run at once across all the repos, and the rest wait in GitHub's queue. Every job's container runs in one systemd slice, `ci.slice`, which caps the CPU and memory the running jobs share, however many there are. Each poll tells GitHub how many more jobs the machine takes, so it assigns no more than that.
 - **The loop** (`Start-CiRunner`, run hidden by the "CI runners" task) sets the limits, builds both images, runs the scaler with `gh`'s token, and starts it again if it stops. Every six hours it rebuilds the job image when the runner has a new release, since GitHub stops sending jobs to a runner that falls too far behind, and restarts the scaler on it.
 - **On demand.** Nothing starts the runners on its own. `task shared:runner:start`, in any repo, starts them, and `task shared:runner:stop` stops them and shuts the distro down, so WSL's VM gives its memory back while you aren't working. Both go through the module the task was installed from (`Invoke-CiRunner.ps1`), so every repo drives the same runners whatever release it is on.
 - **A personal account's runners serve one repo,** so each repo has a scale set of its own.
+- **Docker for a job, by repo.** A job container has no Docker, unless its repo is one of the config's `DockerRepos`: then it gets the distro's Docker socket, and a work folder under `/var/lib/ci-work` at the same path in the distro, so a path the job hands `docker run -v` means the same to Docker. That lets the job control every container in the distro, and through WSL's VM reach your other distros, so it is for repos whose code you would build on this machine anyway.
+- **Windows jobs.** A repo in the config's `WindowsRepos` also gets a scale set named `<Name>-windows`, served by a second copy of the scaler built for Windows (with this machine's Go). For each job it copies the runner's Windows release (kept in `%USERPROFILE%\.ci-runner\windows`) to a folder of its own and runs it as a process, as you, with Go's caches and the tool cache of its own; up to `WindowsMaxJobs` (1) at once. The job uses what is installed on this machine (Go's C compiler, Inno Setup), and can reach whatever you can, so it too is for your own repos. A workflow sends a job there with `runs-on: ${{ !github.event.pull_request.head.repo.fork && vars.CI_RUNNER && format('{0}-windows', vars.CI_RUNNER) || 'windows-2025' }}`.
 
-The token reaches the scaler on standard input, never a command line or a container's environment, and the job containers never see it. A runner's single-use configuration is in its container's environment, which the runner clears before any step runs.
+The token reaches the scalers on standard input, never a command line or a container's environment, and the jobs never see it. A runner's single-use configuration is in its environment, which the runner clears before any step runs.
 
 ## Setting it up
 
@@ -27,7 +29,7 @@ You need WSL 2, PowerShell 7.4 or later, and `gh` signed in with the `repo` scop
    gh variable set CI_RUNNER --body wsl --repo owner/app
    ```
 
-   The shared workflows read the variable. A job of the project's own takes the same line, `runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}`. A Windows job stays on GitHub's runners.
+   The shared workflows read the variable. A job of the project's own takes the same line, `runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}`, and a Windows one the line under Windows jobs above.
 
 5. In a public repo, first require approval for every outside contributor's workflow runs, under Settings → Actions → General, or:
 
@@ -48,7 +50,7 @@ In any repo on a release that has them:
 | Start them, before pushing | `task shared:runner:start`. Jobs queued while they were stopped start then. |
 | Stop them, and give WSL's memory back | `task shared:runner:stop`. A job running then fails, and new jobs queue until the next start. |
 | See what's running | `task shared:runner:status`: the scaler, the limits and what the jobs use now, its last lines, and a row per running job |
-| Read a job's output | GitHub's run page, as with any job; `%USERPROFILE%\.ci-runner\logs` has `supervisor.log` for the loop and `scaler.log` for each job's start and end |
+| Read a job's output | GitHub's run page, as with any job; `%USERPROFILE%\.ci-runner\logs` has `supervisor.log` for the loop, and `scaler.log` and `scaler-windows.log` for each job's start and end |
 | Add a repo, or change a limit | Edit the config, then stop and start them |
 | Send a repo back to GitHub's runners | `gh variable delete CI_RUNNER --repo owner/app` |
 | Take a change to `Dockerfile` or `scaler/` | Stop and start them, which builds the new image |
@@ -67,4 +69,5 @@ While the runners are stopped, or the machine is off or asleep, a repo's jobs wa
 - **Nothing carries over between jobs.** Each job starts from the image, so the setup actions and the cache action fetch what they need each time, as on GitHub. zstd is in the image, so the runners and GitHub's share the cache.
 - **The tools baked into the image** are PowerShell at the `Dockerfile`'s pinned version, Chrome's and the GitHub CLI's current releases when the image was built, and PHP 8.5 with its common extensions. Raise a version there and restart the runners.
 - **A job may use up to the config's `JobMemory`** (8 GB by default), and `/dev/shm` is 2 GB, which Chrome needs.
-- **CodeQL downloads its bundle in every job,** which GitHub's image has in place.
+- **A job with Docker access** leaves its images, build cache and named volumes in the distro's Docker, so its next run starts warm; `task shared:runner:stop` doesn't clear them.
+- **A Windows job** keeps its Go caches and tool cache between jobs, unlike a container, and doesn't share yours.

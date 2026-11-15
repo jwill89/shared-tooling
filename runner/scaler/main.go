@@ -1,31 +1,32 @@
-// Command scaler runs GitHub Actions jobs for a set of repos, each in a fresh container,
+// Command scaler runs GitHub Actions jobs for a set of repos, each on a fresh runner,
 // starting a runner only when a job is waiting for one.
 //
 // Each repo gets a runner scale set, which GitHub matches jobs to by its name. The
 // scaler holds a long poll open on each, and when GitHub assigns a set jobs, it starts a
-// single-use runner per job in a container of the job image; the runner takes its job
-// and exits, and its container is removed. Nothing runs between jobs but the polls.
-// MaxJobs caps the jobs running at once across every repo, and the rest wait in
-// GitHub's queue.
+// single-use runner per job; the runner takes its job and exits, and what it left is
+// removed. Nothing runs between jobs but the polls. MaxJobs caps the jobs running at
+// once across every repo, and the rest wait in GitHub's queue.
 //
-// It reads its settings as one line of JSON on standard input (Config), and talks to
-// Docker through the socket the container mounts. CiRunner.psm1 builds and runs it.
+// The backend says where a runner runs: "docker" starts a container of the job image
+// for each, through the Docker socket the scaler's own container mounts; "process"
+// starts a copy of an extracted runner release as a process on this machine, for the
+// Windows jobs a container can't take.
+//
+// It reads its settings as one line of JSON on standard input (Config). It stops on
+// SIGINT or SIGTERM, or when StopFile appears, which is how CiRunner.psm1 stops it on
+// Windows, where no signal reaches it. CiRunner.psm1 builds and runs it.
 package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
-	"strconv"
 	"sync"
 	"syscall"
 	"time"
-
-	cerrdefs "github.com/containerd/errdefs"
-	"github.com/moby/moby/api/types/container"
-	"github.com/moby/moby/client"
 )
 
 func main() {
@@ -44,26 +45,43 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	docker, err := client.New(client.FromEnv)
-	if err != nil {
-		return fmt.Errorf("connect to Docker: %w", err)
-	}
-	defer func() {
-		if err := docker.Close(); err != nil {
-			log.Warn("couldn't close the Docker client", "error", err)
+	if config.StopFile != "" {
+		ctx, stop = context.WithCancel(ctx)
+		defer stop()
+		if err := watchStopFile(ctx, config.StopFile, stop); err != nil {
+			return err
 		}
-	}()
+	}
+
+	var b backend
+	switch config.Backend {
+	case backendProcess:
+		b, err = newProcessBackend(&config, log)
+	default:
+		b, err = newDockerBackend(ctx, &config, log)
+	}
+	if err != nil {
+		return err
+	}
 
 	p := newPool(config.MaxJobs)
 	scalers := make(map[string]*repoScaler, len(config.Repos))
 	for _, repo := range config.Repos {
-		scalers[repo] = newRepoScaler(repo, &config, p, docker, log.With("repo", repo))
+		scalers[repo] = newRepoScaler(repo, &config, p, b, log.With("repo", repo))
 	}
-	if err := adoptContainers(ctx, docker, scalers, log); err != nil {
+	left, err := b.running(ctx)
+	if err != nil {
 		return err
 	}
+	for _, f := range left {
+		if s := scalers[f.repo]; s != nil {
+			s.adopt(ctx, f)
+		} else {
+			b.remove(ctx, f.handle)
+		}
+	}
 
-	log.Info("serving", "repos", len(config.Repos), "maxJobs", config.MaxJobs, "image", config.Image)
+	log.Info("serving", "backend", config.Backend, "repos", len(config.Repos), "maxJobs", config.MaxJobs)
 	var wg sync.WaitGroup
 	for i, repo := range config.Repos {
 		s := scalers[repo]
@@ -78,27 +96,31 @@ func run(log *slog.Logger) error {
 		})
 	}
 	wg.Wait()
-	log.Info("stopped; job containers still running finish their jobs")
+	b.shutdown(context.WithoutCancel(ctx))
+	log.Info("stopped")
 	return nil
 }
 
-// adoptContainers takes on the job containers an earlier run left running, and removes
-// the ones that stopped or belong to a repo no longer served.
-func adoptContainers(ctx context.Context, docker *client.Client, scalers map[string]*repoScaler, log *slog.Logger) error {
-	found, err := docker.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: make(client.Filters).Add("label", labelJob)})
-	if err != nil {
-		return fmt.Errorf("list the job containers: %w", err)
+// watchStopFile removes a stop file an earlier run left, then calls stop once the file
+// appears again.
+func watchStopFile(ctx context.Context, path string, stop context.CancelFunc) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("clear the stop file: %w", err)
 	}
-	for _, c := range found.Items {
-		s := scalers[c.Labels[labelRepo]]
-		id, err := strconv.ParseInt(c.Labels[labelRunnerID], 10, 64)
-		if s == nil || err != nil || c.State != container.StateRunning {
-			if _, err := docker.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
-				log.Warn("couldn't remove a stopped job container", "container", c.ID, "error", err)
+	go func() {
+		tick := time.NewTicker(2 * time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				if _, err := os.Stat(path); err == nil {
+					stop()
+					return
+				}
 			}
-			continue
 		}
-		s.adopt(ctx, c.Labels[labelRunner], c.ID, id, time.Unix(c.Created, 0))
-	}
+	}()
 	return nil
 }
