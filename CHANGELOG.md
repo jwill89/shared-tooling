@@ -8,6 +8,10 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Fixed
+
+- `runner/`: building the job image, at a start, at the six-hourly check or by hand, no longer removes the image a running scaler names, which left every job it was given queued. The scaler names `ci-runner:current`, which each build moves to the newest image, so new jobs take a rebuilt image at once; only a change to `scaler/` restarts the scaler.
+
 ## [2.15.0] - 2026-11-15
 
 ### Added

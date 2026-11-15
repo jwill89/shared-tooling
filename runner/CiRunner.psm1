@@ -224,17 +224,20 @@ function Get-CiRunnerRelease {
 
 function Build-CiImage {
     # Builds an image in the distro from the given files (name to text), unless one of the
-    # same files and build arguments is built already, then removes the older ones of that
-    # name no container uses. Returns the image's tag. The files reach the distro on
-    # standard input, as a tar in base64: the distro can't read the Windows drive, and a
-    # PowerShell pipe carries only text.
+    # same files and build arguments is built already, points the -Alias tag at it, then
+    # removes the older ones of that name no container uses. Returns the image's tag. A
+    # scaler that names the alias rather than the tag takes the new image at its next
+    # container, and never names one this removed. The files reach the distro on standard
+    # input, as a tar in base64: the distro can't read the Windows drive, and a PowerShell
+    # pipe carries only text.
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)] [string] $Distro,
         [Parameter(Mandatory)] [string] $Name,
         [Parameter(Mandatory)] [System.Collections.IDictionary] $Files,
         [string[]] $BuildArgument = @(),
-        [string] $TagPrefix = ''
+        [string] $TagPrefix = '',
+        [string] $Alias = ''
     )
     $texts = [ordered]@{}
     foreach ($path in $Files.Keys | Sort-Object) {
@@ -269,8 +272,12 @@ function Build-CiImage {
         Write-CiLog "Built $tag."
     }
 
+    $aliasTag = if ($Alias) { "${Name}:$Alias" }
+    if ($aliasTag -and $PSCmdlet.ShouldProcess($aliasTag, "Point it at $tag")) {
+        Invoke-CiDistro -Distro $Distro -Command 'docker', 'tag', $tag, $aliasTag | Out-Null
+    }
     $older = Invoke-CiDistro -Distro $Distro -Command 'docker', 'image', 'ls', $Name, '--format', '{{.Repository}}:{{.Tag}}' |
-        Where-Object { $_ -and $_ -ne $tag }
+        Where-Object { $_ -and $_ -ne $tag -and $_ -ne $aliasTag }
     foreach ($image in $older) {
         if ($PSCmdlet.ShouldProcess($image, 'Remove the older image')) {
             # One a running job still uses stays until the next update.
@@ -289,7 +296,7 @@ function Update-CiImage {
         [Parameter(Mandatory)] [pscustomobject] $Release
     )
     $release = $Release
-    $job = Build-CiImage -Distro $Distro -Name $script:JobImage -TagPrefix "$($release.Version)-" `
+    $job = Build-CiImage -Distro $Distro -Name $script:JobImage -TagPrefix "$($release.Version)-" -Alias 'current' `
         -Files @{ Dockerfile = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'Dockerfile') } `
         -BuildArgument "RUNNER_VERSION=$($release.Version)", "RUNNER_SHA256=$($release.Sha256)"
 
@@ -316,8 +323,7 @@ function Get-CiScalerSetting {
     # The Linux scaler's settings, as the one line of JSON it reads on standard input.
     param(
         [Parameter(Mandatory)] [hashtable] $Config,
-        [Parameter(Mandatory)] [pscustomobject] $Limits,
-        [Parameter(Mandatory)] [string] $Image
+        [Parameter(Mandatory)] [pscustomobject] $Limits
     )
     return [ordered]@{
         token        = Get-CiToken
@@ -325,7 +331,9 @@ function Get-CiScalerSetting {
         repos        = @($Config.Repos)
         name         = $Config.Name
         maxJobs      = $Limits.MaxJobs
-        image        = $Image
+        # The alias Build-CiImage moves to each new build, so a rebuild reaches the next job
+        # without a restart and never leaves the scaler naming a removed image.
+        image        = "$($script:JobImage):current"
         jobMemory    = ConvertTo-CiByte $Config.JobMemory
         # Chrome needs more /dev/shm than Docker's 64 MB.
         shmSize      = 2GB
@@ -759,7 +767,7 @@ function Start-CiRunner {
                     }
                     try {
                         if ($name -eq 'linux') {
-                            $setting = Get-CiScalerSetting -Config $config -Limits $limits -Image $images.Job
+                            $setting = Get-CiScalerSetting -Config $config -Limits $limits
                             $scaler.Job = Start-ThreadJob -Name 'scaler' -ScriptBlock $script:ScalerRun -ArgumentList @(
                                 $config.Distro, $script:ScalerContainer, $images.Scaler, $setting, $scaler.Log, $script:WorkRoot
                             )
@@ -782,11 +790,14 @@ function Start-CiRunner {
                         Limit-CiCache -Config $config
                         $release = Get-CiRunnerRelease
                         $newer = Update-CiImage -Distro $config.Distro -Release $release
-                        if ($newer.Job -ne $images.Job -or $newer.Scaler -ne $images.Scaler) {
-                            $images = $newer
-                            Write-CiLog 'Restarting the linux scaler on the new images.'
+                        if ($newer.Job -ne $images.Job) {
+                            Write-CiLog "New jobs start on $($newer.Job)."
+                        }
+                        if ($newer.Scaler -ne $images.Scaler) {
+                            Write-CiLog 'Restarting the linux scaler on its new image.'
                             Stop-CiScaler -Distro $config.Distro
                         }
+                        $images = $newer
                         if ($config.WindowsRepos) {
                             $newer = Update-CiWindowsRunner -Release $release
                             if ($newer.RunnerDir -ne $windows.RunnerDir -or $newer.Scaler -ne $windows.Scaler) {
