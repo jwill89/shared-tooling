@@ -33,6 +33,9 @@ const (
 	dockerSocket = "/var/run/docker.sock"
 	// runnerUID is the job image's runner user, which owns a job's work folder.
 	runnerUID = 1001
+	// cacheMount is where every job container has the shared cache volume, which the job
+	// image's environment points Go, npm and Composer at.
+	cacheMount = "/ci-cache"
 )
 
 // dockerBackend runs each runner in a fresh container of the job image. A repo listed in
@@ -96,6 +99,11 @@ func (b *dockerBackend) start(ctx context.Context, s spec) (string, error) {
 			CgroupParent: b.config.CgroupParent,
 		},
 	}
+	if b.config.CacheVolume != "" {
+		// Docker makes the volume on first use from the image's /ci-cache, so it belongs
+		// to the runner user.
+		host.Binds = append(host.Binds, b.config.CacheVolume+":"+cacheMount)
+	}
 	if b.access[s.repo] {
 		if err := os.MkdirAll(s.workFolder, 0o750); err != nil {
 			return "", fmt.Errorf("make the work folder: %w", err)
@@ -104,7 +112,7 @@ func (b *dockerBackend) start(ctx context.Context, s spec) (string, error) {
 			return "", fmt.Errorf("give the work folder to the runner user: %w", err)
 		}
 		labels[labelWork] = s.workFolder
-		host.Binds = []string{dockerSocket + ":" + dockerSocket, s.workFolder + ":" + s.workFolder}
+		host.Binds = append(host.Binds, dockerSocket+":"+dockerSocket, s.workFolder+":"+s.workFolder)
 		host.GroupAdd = []string{strconv.Itoa(b.gid)}
 	}
 	created, err := b.docker.ContainerCreate(ctx, client.ContainerCreateOptions{

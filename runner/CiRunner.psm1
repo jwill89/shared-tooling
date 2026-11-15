@@ -27,6 +27,8 @@ $script:Slice = 'ci.slice'
 # Where a job with Docker access keeps its work folder in the distro, at the same path in
 # its container, so a path it hands `docker run -v` means the same to Docker.
 $script:WorkRoot = '/var/lib/ci-work'
+# The Docker volume of download and build caches every Linux job shares (/ci-cache).
+$script:CacheVolume = 'ci-cache'
 # The Windows runners: the runner release they copy for each job, each job's copy, their
 # own Go and tool caches, the scaler's build, and the file that stops it.
 $script:WindowsDir = Join-Path $script:StateDir 'windows'
@@ -62,6 +64,7 @@ function Read-CiConfig {
         DockerRepos    = @()
         WindowsRepos   = @()
         WindowsMaxJobs = 1
+        CacheSize      = '30g'
     }
     foreach ($key in $defaults.Keys) {
         if (-not $config.ContainsKey($key)) {
@@ -82,6 +85,7 @@ function Read-CiConfig {
     if ($config.Distro -notmatch '^[A-Za-z0-9._-]+$') { throw "The config's Distro '$($config.Distro)' isn't a distro name." }
     if ($config.Name -notmatch '^[a-z0-9][a-z0-9-]{0,39}$') { throw "The config's Name '$($config.Name)' may hold only a-z, 0-9 and -." }
     if ($config.JobMemory -notmatch '^\d+[mg]$') { throw "The config's JobMemory '$($config.JobMemory)' isn't a size such as 8g." }
+    if ($config.CacheSize -notmatch '^\d+[mg]$') { throw "The config's CacheSize '$($config.CacheSize)' isn't a size such as 30g." }
     if ($config.ContainsKey('Memory') -and $config.Memory -notmatch '^\d+[mg]$') { throw "The config's Memory '$($config.Memory)' isn't a size such as 12g." }
     if ($config.ContainsKey('MaxJobs') -and ($config.MaxJobs -isnot [int] -or $config.MaxJobs -lt 1)) { throw "The config's MaxJobs '$($config.MaxJobs)' isn't a whole number of 1 or more." }
     if ($config.ContainsKey('Cpus') -and (($config.Cpus -isnot [int] -and $config.Cpus -isnot [double]) -or $config.Cpus -le 0)) {
@@ -328,6 +332,7 @@ function Get-CiScalerSetting {
         cgroupParent = $script:Slice
         dockerRepos  = @($Config.DockerRepos)
         workRoot     = $script:WorkRoot
+        cacheVolume  = $script:CacheVolume
     } | ConvertTo-Json -Compress
 }
 
@@ -352,6 +357,7 @@ function Get-CiWindowsScalerSetting {
         env       = [ordered]@{
             GOPATH               = Join-Path $script:WindowsDir 'go'
             GOCACHE              = Join-Path $script:WindowsDir 'go-build'
+            GOLANGCI_LINT_CACHE  = Join-Path $script:WindowsDir 'golangci-lint'
             RUNNER_TOOL_CACHE    = Join-Path $script:WindowsDir 'toolcache'
             AGENT_TOOLSDIRECTORY = Join-Path $script:WindowsDir 'toolcache'
         }
@@ -415,6 +421,35 @@ function Update-CiWindowsRunner {
     Get-ChildItem -LiteralPath $bin -File -Filter 'scaler-*.exe' -ErrorAction SilentlyContinue |
         Where-Object { $_.FullName -ne $exe } | Remove-Item -Force -ErrorAction SilentlyContinue
     return [pscustomobject]@{ RunnerDir = $runnerDir; Scaler = $exe }
+}
+
+function Limit-CiCache {
+    # Empties the jobs' caches once one has grown past the config's CacheSize, while no job
+    # is using it: the Linux jobs' volume, and the Windows jobs' Go caches and tool cache.
+    # Go trims its own build cache; the module and npm caches only grow, and a job after
+    # this fetches what it needs again.
+    [CmdletBinding(SupportsShouldProcess)]
+    param([Parameter(Mandatory)] [hashtable] $Config)
+    $limit = ConvertTo-CiByte $Config.CacheSize
+    if (Test-CiDistro -Distro $Config.Distro -Running) {
+        $size = Invoke-CiDistro -Distro $Config.Distro -AllowFailure -Command @(
+            'sh', '-c', 'du -sb "/var/lib/docker/volumes/$0/_data" 2>/dev/null | cut -f1', $script:CacheVolume
+        )
+        $busy = Invoke-CiDistro -Distro $Config.Distro -Command 'docker', 'ps', '--quiet', '--filter', "label=$script:JobLabel"
+        if ([long] "0$size" -gt $limit -and -not $busy -and $PSCmdlet.ShouldProcess($script:CacheVolume, 'Empty the Linux jobs'' cache')) {
+            Invoke-CiDistro -Distro $Config.Distro -Command 'docker', 'volume', 'rm', $script:CacheVolume | Out-Null
+            Write-CiLog ('Emptied the Linux jobs'' cache, which had grown to {0:N1} GB.' -f ([long] $size / 1GB))
+        }
+    }
+    $folders = 'go', 'go-build', 'golangci-lint', 'toolcache' | ForEach-Object { Join-Path $script:WindowsDir $_ } | Where-Object { Test-Path -LiteralPath $_ }
+    if ($folders) {
+        $size = (Get-ChildItem -LiteralPath $folders -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+        $busy = Get-ChildItem -LiteralPath (Join-Path $script:WindowsDir 'jobs') -Directory -ErrorAction SilentlyContinue
+        if ($size -gt $limit -and -not $busy -and $PSCmdlet.ShouldProcess('the Windows jobs'' caches', 'Empty')) {
+            $folders | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+            Write-CiLog ('Emptied the Windows jobs'' caches, which had grown to {0:N1} GB.' -f ($size / 1GB))
+        }
+    }
 }
 
 function Stop-CiWindowsScaler {
@@ -622,16 +657,20 @@ function Install-CiRunner {
     1. Refuses to start while another copy runs (its process id is in
        %USERPROFILE%\.ci-runner\supervisor.pid).
     2. Waits for Docker in the distro, sets the limits the jobs share (Set-CiLimit's
-       slice), and deregisters the offline runners an earlier run left.
+       slice), empties a cache grown past CacheSize (Limit-CiCache), and deregisters the
+       offline runners an earlier run left.
     3. Builds the job image for the runner's newest release, and the scaler's image, where
-       either isn't built yet.
+       either isn't built yet; with WindowsRepos, readies the Windows runner and builds
+       the Windows scaler too.
     4. Runs the scaler (scaler/) in a container with gh's token, and starts it again if it
        stops. It holds a long poll open on each repo's scale set and starts a runner's
        container for each job GitHub assigns it, up to MaxJobs at once across the repos.
-    5. Every six hours, rebuilds the job image when the runner has a new release, and
-       restarts the scaler on it; running jobs finish on the image they started on.
+       With WindowsRepos, runs the Windows scaler beside it the same way.
+    5. Every six hours, empties a cache grown past CacheSize, rebuilds what the runner's
+       new release or a change to scaler/ needs, and restarts a scaler on it; running
+       Linux jobs finish on the image they started on.
     Ctrl+C, or Stop-CiRunner, ends it. Logs go to %USERPROFILE%\.ci-runner\logs:
-    supervisor.log for this loop, scaler.log for the scaler.
+    supervisor.log for this loop, scaler.log and scaler-windows.log for the scalers.
 
 .PARAMETER ConfigPath
     The config; defaults to %USERPROFILE%\.ci-runner\runners.psd1.
@@ -675,6 +714,7 @@ function Start-CiRunner {
                 try {
                     Wait-CiDocker -Distro $config.Distro
                     $limits = Set-CiLimit -Config $config
+                    Limit-CiCache -Config $config
                     $release = Get-CiRunnerRelease
                     $images = Update-CiImage -Distro $config.Distro -Release $release
                     if ($config.WindowsRepos) {
@@ -739,6 +779,7 @@ function Start-CiRunner {
                 if (((Get-Date) - $lastUpkeep).TotalHours -ge 6) {
                     $lastUpkeep = Get-Date
                     try {
+                        Limit-CiCache -Config $config
                         $release = Get-CiRunnerRelease
                         $newer = Update-CiImage -Distro $config.Distro -Release $release
                         if ($newer.Job -ne $images.Job -or $newer.Scaler -ne $images.Scaler) {

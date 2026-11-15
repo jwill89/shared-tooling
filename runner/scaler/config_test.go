@@ -36,6 +36,8 @@ func TestReadConfig(t *testing.T) {
 		{"docker access with no work root", strings.Replace(valid, `"token"`, `"dockerRepos":["app"],"token"`, 1), "workRoot"},
 		{"docker access with the root as work root", strings.Replace(valid, `"token"`, `"dockerRepos":["app"],"workRoot":"/","token"`, 1), "workRoot"},
 		{"the process backend without its folders", strings.Replace(valid, `"token"`, `"backend":"process","token"`, 1), "runnerDir and jobsDir"},
+		{"a cache volume", strings.Replace(valid, `"token"`, `"cacheVolume":"ci-cache","token"`, 1), ""},
+		{"a cache volume that's a path", strings.Replace(valid, `"token"`, `"cacheVolume":"/var/cache","token"`, 1), "volume name"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -8,6 +8,19 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Added
+
+- `runner/`'s image has yq (mikefarah's, as on GitHub's image), which a project's release script may read YAML with.
+- `runner/` keeps the jobs' download and build caches between jobs: every Linux job mounts the `ci-cache` volume at `/ci-cache`, where the image points Go's module and build caches, golangci-lint's, npm's and Composer's, and the Windows jobs keep theirs, golangci-lint's now among them, under `%USERPROFILE%\.ci-runner\windows`. `runners.psd1`'s `CacheSize` (30 GB) caps each; a start or the six-hourly check empties one grown past it.
+
+### Changed
+
+- On a self-hosted runner, `go.yml`, `osv.yml`, `web.yml`, `e2e.yml` and `php.yml` skip GitHub's cache for Go's caches, golangci-lint's, npm's download cache and Composer's `vendor`, which the runner keeps itself; `node_modules` still goes through it, for a run's later jobs. On GitHub's runners nothing changes. A project's own job takes `cache: ${{ runner.environment == 'github-hosted' }}` on `setup-go` and `skip-cache: ${{ runner.environment != 'github-hosted' }}` on golangci-lint's action (runner/README.md).
+
+### Removed
+
+- `codeql.yml`, and `standards/security.md`'s rule that a public repo runs CodeQL: the owner decided it isn't worth running, and no project calls the workflow.
+
 ## [2.14.0] - 2026-11-15
 
 ### Added

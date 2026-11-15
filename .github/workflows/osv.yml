@@ -43,6 +43,8 @@ jobs:
         with:
           go-version-file: ${{ inputs.shared-path }}/lint/go/go.mod
           cache-dependency-path: ${{ inputs.shared-path }}/repo/Invoke-VulnerabilityScan.ps1
+          # A self-hosted runner keeps Go's caches itself (runner/README.md).
+          cache: ${{ runner.environment == 'github-hosted' }}
 
       - name: Scan the lockfiles
         shell: pwsh

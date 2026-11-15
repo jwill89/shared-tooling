@@ -98,9 +98,11 @@ jobs:
       # this branch's or the default branch's, and `npm ci --prefer-offline` takes every
       # package it already holds from there. Only what changed is fetched, so a Font
       # Awesome package is downloaded again only when its own version changes.
+      # A self-hosted runner keeps npm's download cache itself (runner/README.md), so it
+      # never travels to GitHub's; node_modules does, since a run's later jobs restore it.
       - name: Restore the npm cache
         id: npm-cache
-        if: steps.deps.outputs.cache-hit != 'true'
+        if: runner.environment == 'github-hosted' && steps.deps.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v6
         with:
           path: ~/.npm
@@ -133,7 +135,7 @@ jobs:
           key: ${{ steps.deps.outputs.cache-primary-key }}
 
       - name: Save the npm cache
-        if: steps.deps.outputs.cache-hit != 'true' && steps.npm-cache.outputs.cache-hit != 'true'
+        if: runner.environment == 'github-hosted' && steps.deps.outputs.cache-hit != 'true' && steps.npm-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: ~/.npm

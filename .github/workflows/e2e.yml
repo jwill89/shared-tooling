@@ -120,9 +120,11 @@ jobs:
           path: ${{ inputs.dir }}/node_modules
           key: node-modules-${{ runner.os }}-${{ hashFiles(format('{0}/package-lock.json', inputs.dir), format('{0}/.nvmrc', inputs.dir), 'shared/lint/web/*.js', 'shared/lint/web/*.json', 'shared/test/a11y/*.js', 'shared/test/a11y/*.json') }}
 
+      # A self-hosted runner keeps npm's download cache itself (runner/README.md), so it
+      # never travels to GitHub's; node_modules does, since a run's later jobs restore it.
       - name: Restore the npm cache
         id: npm-cache
-        if: steps.deps.outputs.cache-hit != 'true'
+        if: runner.environment == 'github-hosted' && steps.deps.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v6
         with:
           path: ~/.npm
@@ -155,7 +157,7 @@ jobs:
           key: ${{ steps.deps.outputs.cache-primary-key }}
 
       - name: Save the npm cache
-        if: steps.deps.outputs.cache-hit != 'true' && steps.npm-cache.outputs.cache-hit != 'true'
+        if: runner.environment == 'github-hosted' && steps.deps.outputs.cache-hit != 'true' && steps.npm-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: ~/.npm
@@ -172,6 +174,8 @@ jobs:
         with:
           go-version-file: ${{ inputs.go-version-file }}
           cache-dependency-path: '**/go.sum'
+          # A self-hosted runner keeps Go's caches itself (runner/README.md).
+          cache: ${{ runner.environment == 'github-hosted' }}
 
       - uses: shivammathur/setup-php@v2
         if: inputs.php-version != ''
@@ -181,8 +185,9 @@ jobs:
           coverage: none
           tools: composer
 
+      # A self-hosted runner keeps Composer's download cache itself (runner/README.md).
       - name: Restore Composer packages
-        if: inputs.php-version != '' && inputs.composer-dir != ''
+        if: runner.environment == 'github-hosted' && inputs.php-version != '' && inputs.composer-dir != ''
         uses: actions/cache@v6
         with:
           path: ${{ inputs.composer-dir }}/vendor

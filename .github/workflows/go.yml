@@ -85,10 +85,13 @@ jobs:
           submodules: true
           persist-credentials: false
 
+      # On a self-hosted runner Go's caches live on the runner (runner/README.md), so nothing
+      # goes to GitHub's cache from there.
       - uses: actions/setup-go@v7
         with:
           go-version-file: ${{ inputs.dir }}/go.mod
           cache-dependency-path: ${{ inputs.dir }}/go.sum
+          cache: ${{ runner.environment == 'github-hosted' }}
 
       - name: Download ${{ inputs.download-artifact }}
         if: inputs.download-artifact != ''
@@ -121,6 +124,7 @@ jobs:
           version: ${{ inputs.golangci-lint-version }}
           install-mode: goinstall
           working-directory: ${{ inputs.dir }}
+          skip-cache: ${{ runner.environment != 'github-hosted' }}
 
       - name: govulncheck
         env:

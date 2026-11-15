@@ -1,9 +1,10 @@
 # syntax=docker/dockerfile:1
 # The image a self-hosted CI job runs in: Ubuntu 24.04, as GitHub's ubuntu-24.04 image,
-# with what the shared workflows expect to find rather than set up (PowerShell, Google
-# Chrome, the GitHub CLI, Docker's command line, PHP from the PPA setup-php uses, zstd for
-# actions/cache's format, sudo for apt), and the Actions runner. Each container takes one job and is removed, so every job
-# starts from this image as it was built.
+# with what the shared workflows and the projects' scripts expect to find rather than set
+# up (PowerShell, Google Chrome, the GitHub CLI, Docker's command line, yq, PHP from the
+# PPA setup-php uses, zstd for actions/cache's format, sudo for apt), and the Actions
+# runner. Each container takes one job and is removed, so every job starts from this
+# image as it was built.
 #
 # CiRunner.psm1 builds it, passing the runner's newest release and its checksum, and the
 # scaler (scaler/) starts a container of it for each job.
@@ -14,6 +15,8 @@ ARG RUNNER_VERSION
 ARG RUNNER_SHA256
 ARG POWERSHELL_VERSION=7.6.10
 ARG POWERSHELL_SHA256=81a5a944702b116ea74c88b01ba5f1f46b1cd7c42c36d85e1bae90de1230b4d1
+ARG YQ_VERSION=4.54.1
+ARG YQ_SHA256=8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f
 ARG PHP_VERSION=8.5
 
 # The tool cache where the hosted image keeps it, so the setup actions share one layout;
@@ -24,6 +27,16 @@ ENV DEBIAN_FRONTEND=noninteractive \
     AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache \
     RUNNER_TOOL_CACHE=/opt/hostedtoolcache \
     runner=self-hosted
+
+# The download and build caches every job shares, on the volume the scaler mounts at
+# /ci-cache, so a job starts warm and the shared workflows send nothing to GitHub's cache
+# from these runners. Each tool here locks or writes its cache atomically, so jobs running
+# side by side can share it.
+ENV GOMODCACHE=/ci-cache/go/mod \
+    GOCACHE=/ci-cache/go/build \
+    GOLANGCI_LINT_CACHE=/ci-cache/golangci-lint \
+    npm_config_cache=/ci-cache/npm \
+    COMPOSER_CACHE_DIR=/ci-cache/composer
 
 # Build tools for cgo and the race detector, git, archives, and zstd, without which
 # actions/cache writes another format and misses every cache a hosted run saved.
@@ -39,6 +52,12 @@ RUN curl -fsSL -o /tmp/pwsh.deb \
  && apt-get update \
  && apt-get install -y --no-install-recommends /tmp/pwsh.deb \
  && rm -rf /tmp/pwsh.deb /var/lib/apt/lists/*
+
+# yq (mikefarah's, as on the hosted image), which a release script reads YAML with.
+RUN curl -fsSL -o /usr/local/bin/yq \
+      "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64" \
+ && echo "${YQ_SHA256}  /usr/local/bin/yq" | sha256sum -c - \
+ && chmod 0755 /usr/local/bin/yq
 
 # Chrome for the end-to-end suites, which run in the machine's own Chrome. Its package
 # adds an apt source of its own, removed so a job's apt-get update reads only Ubuntu's.
@@ -86,7 +105,7 @@ RUN groupadd --gid 1001 runner \
  && useradd --uid 1001 --gid runner --shell /bin/bash --create-home runner \
  && echo 'runner ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/runner \
  && chmod 0440 /etc/sudoers.d/runner \
- && install -d -o runner -g runner /opt/hostedtoolcache /usr/share/dotnet
+ && install -d -o runner -g runner /opt/hostedtoolcache /usr/share/dotnet /ci-cache
 
 WORKDIR /home/runner/actions-runner
 RUN test -n "$RUNNER_VERSION" && test -n "$RUNNER_SHA256" \

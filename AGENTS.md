@@ -37,7 +37,6 @@ The lint, test, CI and deploy pieces a set of projects share, held by each as a 
 - **A package version that doesn't move.** npm refreshes a project's copy of `lint/web` or `test/a11y` only when its `version` changes, so the release task sets both to the release's number; nothing else edits them.
 - **A binary in the repo.** `*.exe` and build output are ignored, since a Windows build once shipped inside `lint/go`; the sync tool runs with `go run`.
 - **systemd's start limit.** Failed restarts can use it up, and systemd then refuses the rollback's restart and leaves the service down, so every restart in a rollback runs `systemctl reset-failed` first.
-- **CodeQL's default setup.** Code scanning refuses an advanced setup's results beside the default one, so a repo calling `codeql.yml` turns the default setup off.
 - **A packaged app's AppData.** A process started from a packaged Windows app (a terminal inside one, an agent's shell) writes to its own copy of AppData, which a scheduled task never sees, so `runner/` keeps its state in `%USERPROFILE%\.ci-runner`.
 - **A pipe from PowerShell into `wsl.exe`.** Each line arrives with a CR after it, so whatever reads it in the distro drops CRs first (`tr -d '\r'`, or the runner image's `${jitconfig%$'\r'}`).
 - **A tar on `docker build`'s standard input.** It tells a tar from a Dockerfile by the first 1 KB, which a pax tar, .NET's default, fills with an extended header, so the tar is read as a Dockerfile; `runner/` writes ustar.

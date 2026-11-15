@@ -30,6 +30,10 @@
     # The memory one job's container may use.
     # JobMemory = '8g'
 
+    # How large the jobs' download and build caches may grow before the runners empty
+    # them: the Linux jobs' volume, and the Windows jobs' caches, each.
+    # CacheSize = '30g'
+
     # The WSL distro the containers run in (Install-CiRunner -Distro).
     # Distro    = 'ci-runner'
 

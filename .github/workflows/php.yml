@@ -62,7 +62,10 @@ jobs:
           coverage: ${{ inputs.coverage }}
           tools: composer
 
+      # A self-hosted runner keeps Composer's download cache itself (runner/README.md), so
+      # vendor/ doesn't travel to GitHub's.
       - name: Restore Composer packages
+        if: runner.environment == 'github-hosted'
         uses: actions/cache@v6
         with:
           path: ${{ inputs.dir }}/vendor

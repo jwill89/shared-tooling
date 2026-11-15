@@ -50,6 +50,9 @@ type Config struct {
 	// WorkRoot holds those repos' work folders, at the same path in the distro as in the
 	// container (docker).
 	WorkRoot string `json:"workRoot"`
+	// CacheVolume is the Docker volume every job container mounts at /ci-cache, which
+	// keeps the download and build caches between jobs; empty mounts none (docker).
+	CacheVolume string `json:"cacheVolume"`
 
 	// RunnerDir is an extracted runner release, copied for each job (process).
 	RunnerDir string `json:"runnerDir"`
@@ -132,6 +135,8 @@ func (c Config) validateDocker(served map[string]bool) error {
 		return fmt.Errorf("cgroupParent %q isn't a systemd slice", c.CgroupParent)
 	case len(c.DockerRepos) > 0 && (!path.IsAbs(c.WorkRoot) || path.Clean(c.WorkRoot) == "/"):
 		return errors.New("dockerRepos needs workRoot, an absolute path below /")
+	case c.CacheVolume != "" && !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`).MatchString(c.CacheVolume):
+		return fmt.Errorf("cacheVolume %q isn't a volume name", c.CacheVolume)
 	}
 	for _, r := range c.DockerRepos {
 		if !served[r] {
