@@ -19,6 +19,10 @@
 # A project's `task push` wraps `shared:push`: it takes the in-range updates Dependabot
 # would open (`shared:deps`), scans the lockfiles for advisories (`shared:vuln`, also part
 # of its `task check`), runs `task check`, then pushes (standards/packages.md, Updates).
+#
+# A project's `task check` calls `shared:docs:check` for everything docs.yml checks, so a
+# check docs.yml gains arrives with the release, and adds the checks whose numbers and
+# folders are its own: the coverage floors, the specs' type-check, the generated files.
 version: '3'
 
 vars:
@@ -44,9 +48,17 @@ tasks:
       - pwsh -NoProfile -File "{{.SHARED}}/repo/Sync-RepoFiles.ps1" -Path .
 
   repo:check:
-    desc: Fail if .editorconfig or .gitattributes differ from the shared ones
+    desc: Fail if .editorconfig or .gitattributes differ from the shared ones, or CLAUDE.md isn't in the standard form
     cmds:
       - pwsh -NoProfile -File "{{.SHARED}}/repo/Sync-RepoFiles.ps1" -Path . -Check
+
+  docs:check:
+    desc: Everything docs.yml checks - the Markdown, the repo files and CLAUDE.md, the shared workflow refs, the CHANGELOG links (CHANGELOGS='CHANGELOG.md plugin/CHANGELOG.md')
+    cmds:
+      - task: lint:md
+      - task: repo:check
+      - task: version:check
+      - pwsh -NoProfile -File "{{.SHARED}}/repo/Update-ChangelogLinks.ps1" -Check -Path "{{.CHANGELOGS | default "CHANGELOG.md"}}"
 
   golangci:sync:
     desc: Write the Go module's .golangci.yml from the shared template (-- -dir backend for a module in a folder)
@@ -76,9 +88,9 @@ tasks:
       - pwsh -NoProfile -File "{{.SHARED}}/test/go/Invoke-GoCoverage.ps1" -Path "{{.DIR | default "."}}" -Floor {{.FLOOR}} -Exclude "{{.EXCLUDE}}" -CoverPkg "{{.COVERPKG}}"
 
   web:specs:
-    desc: Type-check a front end's Vitest specs under its tsconfig.vitest.json, as web.yml does (DIR=web)
+    desc: Type-check a front end's Vitest specs under its tsconfig.vitest.json, as web.yml does (DIR=web; -- --fix writes or fixes the file instead)
     cmds:
-      - node "{{.SHARED}}/test/web/typecheck-specs.mjs" "{{.DIR | default "web"}}"
+      - node "{{.SHARED}}/test/web/typecheck-specs.mjs" "{{.DIR | default "web"}}" {{.CLI_ARGS}}
 
   python:setup:
     desc: Make .venv with uv on the Python .python-version names, then install the dev requirements, every hash checked (DIR=. REQUIREMENTS=requirements-dev.txt)
@@ -112,7 +124,7 @@ tasks:
   version:check:
     desc: Fail if the shared workflow refs don't name the release the submodule holds
     cmds:
-      - pwsh -NoProfile -File "{{.SHARED}}/repo/Test-SharedVersion.ps1"
+      - pwsh -NoProfile -File "{{.SHARED}}/repo/Test-SharedVersion.ps1" -Shared "{{.SHARED}}"
 
   deploy:
     desc: Run scripts/deploy.ps1 (pass its flags after --, e.g. -- -SkipBuild)

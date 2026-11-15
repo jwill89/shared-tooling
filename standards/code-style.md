@@ -39,7 +39,7 @@ Each rule ends with how it is checked. Names are in [naming.md](naming.md), CSS 
 - A setting that is invalid or can't be read is an error that names it, and the service refuses to start rather than fall back silently. [test]
 - An unknown, empty or omitted enum value reads as the safe default, so an unknown value can never grant something. [review]
 - An error is logged once, where it is handled, not returned past the handler to be logged again. [review]
-- A 4xx the client caused isn't logged; 5xx and uncaught errors are. [review]
+- A 4xx response is logged at info, never as an error, and without a stack trace, so scanners and clients' mistakes never read as an outage; a 5xx or an uncaught error is logged as an error, in full. [review]
 - Background and batch work can be stopped and run again: a restart stops it, the next run picks up what is left, and one failing item fails only itself. [review]
 - A record of an outside item is removed only when the platform confirms the item is gone (Discord's Unknown Member, 10007). Any other error keeps it. [review]
 - A 404 on a delete counts as done. [review]

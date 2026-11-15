@@ -15,7 +15,10 @@ The shared deploy module (SharedDeploy, in `deploy/pwsh`) does most of a deploy.
 - Every deploy config names its SSH user; nothing defaults to root. [module]
 - Missing settings fail the deploy before it builds or connects, all listed in one error. [module]
 - Nothing tracked reveals the server's layout: the example config holds placeholders only (see [security.md](security.md)). [review]
-- In a public repo, these are placeholders wherever they would appear: the certificate's name, paths on the server, service users, ports and admin email addresses. That covers the docs (`docs/ops.md` included), cron files, unit and vhost templates and `.env.example`, each filled from the deploy config or written as `<cert>`, `<web root>`, `<port>` and the like. The site's public hostnames may be written out. [review]
+- In a public repo, these are placeholders wherever they would appear: the certificate's name, paths on the server, the users the project creates, the app's port and admin email addresses. That covers the docs (`docs/ops.md` included), cron files, unit and vhost templates and `.env.example`, each filled from the deploy config or written as `<cert>`, `<web root>`, `<service user>` and the like. The site's public hostnames may be written out. [review]
+- In a public repo, the app's port lives only in the deploy config, as `AppPort`: `docs/ops.md` names the setting rather than the number, and the vhost and unit templates are filled from it. A private repo writes the number in `docs/ops.md`. [review]
+- `www-data`, the distro's own Apache user, may be written out in a public repo, as may any account the distro makes; an account the project creates (a service user) is a placeholder. [review]
+- Local development ports, in a README, a Vite config or a test config, aren't host details and may be written out. [review]
 - A deploy ships the newest release: the newest tag CI made on main, with the tags fetched first (`Get-DeployRelease`). HEAD need not carry it, and commits after it (a shared-tooling update, work not yet released) are not part of it. [module]
 - The release is checked out into a folder of its own, with its submodules and an `npm ci` from its lockfiles, and built and packed from there (`New-ReleaseTree`, then `Remove-ReleaseTree` in a `finally`). Nothing uncommitted and no package installed for HEAD reaches it. npm takes the packages from its cache by the lockfile's integrity, so nothing already downloaded, a Font Awesome kit included, is fetched again. Untracked files a deploy needs (a bot's unit, a local `.env`) are read from the checkout. [module]
 - The host records the release each deploy leaves running, in `~/.shared-deploy/<name>` of the SSH user, once the site has passed its checks (`Set-DeployedRelease`); a rolled-back deploy leaves the record as it was. A deploy reads it first (`Get-DeployedRelease`) and does nothing when the host already runs the release; `-Force` deploys it again. [review]
@@ -85,12 +88,13 @@ The shared deploy module (SharedDeploy, in `deploy/pwsh`) does most of a deploy.
 - A service that writes log files gets `LogsDirectory=`, never a writable `/var/log`. [review]
 - Units restart on failure: `Restart=on-failure` with a `RestartSec=` pause. [review]
 - A service that can grow gets a memory cap (`MemoryMax=`), since the droplet's memory is tight. [review]
+- The cap comes from the service's own measured peak, not a guess or another service's figure: after a stretch of normal use since it last started (a week, say, read before the next deploy restarts it), read systemd's `MemoryPeak` for the service (`Get-ServiceMemory`, or `systemctl show -p MemoryPeak <service>` on the host) and set `MemoryMax=` to about twice it, rounded up. `docs/ops.md` records the peak, the cap and the date measured, and the service is measured again when its work changes. [review]
 - Heavy or long work (backfills, maintenance scripts, a worker's external tools) runs outside the request path, never in a web request, at the lowest CPU and I/O priority (`nice -n 19`, `chrt --idle`, `ionice -c3`). [review]
 - A Go worker is the same binary run as a subcommand under its own unit, capped in CPU and memory, with no network. [review]
 
 ## Apache and Cloudflare
 
-- A web app listens on the loopback address only, on a port of its own that no other site on the host uses; the project's `docs/ops.md` records it. [review]
+- A web app listens on the loopback address only, on a port of its own that no other site on the host uses; the project's `docs/ops.md` records it, as the `AppPort` setting in a public repo. [review]
 - Cloudflare fronts every name. [review]
 - Each site has one vhost file, `/etc/apache2/sites-available/<name>.conf`, holding its port-80 redirect to HTTPS and its port-443 site. `<name>` is the service's name (`ServiceName`) for an app that runs a service, whether it ships as a binary or as a folder of code (`Switch-RemoteDirectory -ServiceName`), and the site's `ServerName` for a site Apache serves from a folder, in lower case. The name follows this rule, so it is not a deploy setting. [module]
 - The vhost is a template in the repo, and every deploy ships it: filled from the deploy config, checked with `apachectl configtest`, the previous file kept for rollback (`-Vhost` on `Install-ServiceBinary`, `Switch-RemoteDirectory` or `Switch-RemoteItemSet`). [module]
@@ -134,8 +138,10 @@ The cache headers a site sends; [performance.md](performance.md) has the rest of
 - Every backup kept on the droplet is compressed with gzip and checked with `gzip -t` before it takes its place: a database's daily copy or deploy snapshot also passes `PRAGMA integrity_check` first, and a folder's archive a full `tar` listing. [module]
 - Every project with a database has a daily backup timer, which the deploy installs and checks after the smoke check (`Install-BackupTimer`). [module]
 - The daily job writes a dated `VACUUM INTO` copy beside the database, as the database's own user, and keeps 28 days. [module]
-- A folder that only the host holds, such as a site's uploads, has a daily backup timer of its own (`Install-BackupTimer -Folder`): a dated `.tar.gz` of the folder, made as its owner into a folder outside it and outside the web root, 28 days kept unless the project keeps fewer for a large folder. [module]
-- Each deploy pulls a fresh archive of such a folder to the dev machine, as it pulls the database, unless run with `-NoDbPull`: three kept, the host's copy removed (`Copy-LiveFolder`). [module]
+- A folder is host-only when its files are in no git repo, no deploy rebuilds them, and no database holds them: a site's uploads, say. A file stored in a database is backed up with the database and needs no folder backup, and nor does a build's output, a cache the site rebuilds, or a copy of what the repo holds. [review]
+- Each project names in `docs/ops.md` the size up to which it archives a host-only folder on the host, and records each such folder's size with the date it was measured. [review]
+- A host-only folder under that size has a daily backup timer of its own (`Install-BackupTimer -Folder`): a dated `.tar.gz` of the folder, made as its owner into a folder outside it and outside the web root, 28 days kept unless the project keeps fewer, with what needn't be kept left out (`-Exclude`, such as a cache). Each deploy also pulls a fresh archive of it to the dev machine, as it pulls the database, unless run with `-NoDbPull`: three kept, the host's copy removed (`Copy-LiveFolder`). [module]
+- A host-only folder over that size gets no archive on the droplet, whose disk it would fill. Each deploy instead brings a copy of it on the dev machine up to date, unless run with `-NoDbPull`: only the files that are new or changed are fetched, each checked against the host's SHA-256, nothing is written on the host, and no local file is deleted unless the deploy passes `-Delete` (`Sync-LiveFolder`). That copy is the folder's backup, and `docs/ops.md` says where it is kept. [module]
 - A new or changed timer runs once before it is kept; if that run fails, the deploy fails, saying the site is live but its backup isn't. [module]
 - A project whose app has its own backup command runs it from the same timer (`-Command`), and that command checks and compresses its copies the same way. [review]
 - A deploy that touches a database snapshots it first with `sqlite3 .backup`: after the service stops, or before a PHP site's migrations (`Install-ServiceBinary -Database`, `Backup-RemoteDatabase`). [module]
@@ -151,6 +157,7 @@ The cache headers a site sends; [performance.md](performance.md) has the rest of
 
 - A restore stops the site's writes first (the service, or `php artisan down`), removes the `-wal` and `-shm` files, and decompresses the backup over the database in place as the database's user (`gunzip -c <backup> > <db>`), which keeps its owner and mode. The module prints the exact command. [review]
 - A folder's restore stops what writes to it, moves the live folder aside and unpacks the archive beside it as root, which keeps every file's owner (`tar -xzf <archive> -C <parent>`); the backup job's header on the host gives the line with its paths. [review]
+- A large folder comes back from its copy on the dev machine the same way: packed there with Windows' tar as pax (`tar --format=pax -czf`, so names keep their UTF-8), uploaded on the deploy's connection (`Invoke-Upload`), unpacked beside the live folder as root, then given to the folder's owner (`chown -R`). [review]
 - Each project restore-drills its backup for real before launch, from steps in its `docs/ops.md`: restore into a scratch file or folder, check `PRAGMA integrity_check`, and match row counts, file counts or known figures against live. A project already live owes one drill on the host, the same way. The date the drill last ran goes in `docs/ops.md`. [review]
 - A change to a production database outside the app's migrations follows the rules in [database.md](database.md). [review]
 
@@ -162,12 +169,20 @@ The cache headers a site sends; [performance.md](performance.md) has the rest of
 
 ## What docs/ops.md holds
 
-Each project's `docs/ops.md` is the runbook for its live site, and holds each of these under a heading of its own. A section that doesn't apply says so in a line, with the reason (a static site with nothing only the host holds has no backups to restore).
+Each project's `docs/ops.md` is the runbook for its live site, and holds each of these under a heading of its own. A section that doesn't apply says so in a line, with the reason.
 
-- **Host setup.** The one-time setup as an idempotent script, run once as root and safe to run again: the service user, the folders with their owners and modes, the env file, the certificate's names and DNS. A static or PHP site on the shared host, which has no service user or env file of its own, writes the commands it needs instead, each safe to run again: its folders with their owner and mode, its `.env` from `.env.example` (PHP), the PHP extensions it needs, its DNS, and a check that the shared certificate covers its names. Either way it records the site's port and the paths the deploy config names, as placeholders in a public repo. [review]
-- **Backups.** What is backed up, by which timer, where the copies go and how many are kept. [review]
+- **Host setup.** The one-time setup as an idempotent script, run once as root and safe to run again: the service user, the folders with their owners and modes, the env file, the certificate's names and DNS. A static or PHP site on the shared host, which has no service user or env file of its own, writes the commands it needs instead, each safe to run again: its folders with their owner and mode, its `.env` from `.env.example` (PHP), the PHP extensions it needs, its DNS, and a check that the shared certificate covers its names. Either way it records the paths the deploy config names (placeholders in a public repo) and the site's port: the number in a private repo, the `AppPort` setting in a public one. For each service with a `MemoryMax=`, it records the peak the cap came from and the date it was measured. [review]
+- **Backups.** What is backed up, by which timer, where the copies go and how many are kept. Each host-only folder with its size and the date measured, the size up to which the project archives one on the host, and for a larger one where its copy on the dev machine is kept. [review]
 - **Restore steps.** For each backup, the commands that put it back, starting with stopping the site's writes. [review]
 - **Restore drill.** The drill's steps, and the date it last ran on the host. [review]
+- **Backups and restore,** in place of the three above, for a static, PHP or Grav site with nothing on the host to back up: one section saying none applies, and why. Once the site holds anything host-only, a database or a folder, the three sections come back. [review]
+
+  ```markdown
+  ## Backups and restore
+
+  None, because nothing lives only on the host: the site is the release's files, which the repo and its tags hold, and it keeps no database, uploads or other files of its own there. A lost host is rebuilt from the host setup above and a deploy (`task deploy -- -Force`).
+  ```
+
 - **Production-only checks.** What can only be checked on production, run after every deploy. [review]
 - **Upgrading to x.y.z.** One heading per release that needs steps beyond the deploy, with its steps in order; the release's CHANGELOG entry points here. [review]
 - **Rolling back.** How to put the previous release back when the deploy's own rollback didn't: the `.old` copies and the `Restore-` steps the deploy uses, and the database snapshot's restore command. [review]

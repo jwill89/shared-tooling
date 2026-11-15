@@ -12,6 +12,7 @@
 | `@jwill89/lint-web` named `defineConfigWithVueTs`, `vueTsConfigs` | Re-exported from this package's install, for a project that needs more of them (see "One copy of each plugin"). |
 | `@jwill89/lint-web/react` | ESLint for React + TypeScript: the same curated rules on `strictTypeChecked`, React's hooks rules, and JSX accessibility from `eslint-plugin-jsx-a11y-x` (rules named `jsx-a11y-x/…`). |
 | `@jwill89/lint-web/js` | ESLint for plain JavaScript, a static site's own scripts with no Vue, React or TypeScript: ESLint's recommended rules and the curated rules that apply to JavaScript, with browser globals, and Node's for the config files at the root. |
+| `@jwill89/lint-web/js` named `tseslint` | typescript-eslint, re-exported from this package's install, for a plain-JavaScript site whose `jsconfig.json` or `tsconfig.json` sets `checkJs` and that adds the type-checked rules. |
 | `@jwill89/lint-web/prettier` | `semi: false`, `singleQuote: true`, `printWidth: 100`, `trailingComma: 'all'`, with type declarations for a `prettier.config.ts`. |
 | `@jwill89/lint-web/stylelint` | `stylelint-config-standard` and `stylelint-config-recommended-vue`, BEM-style kebab-case classes, kebab-case custom properties, grouped tokens. Named export `paletteRules(message)` adds the palette rule. |
 | `@jwill89/lint-web/stylelint/tailwind` | Tailwind 4's at-rules and its `--color-*: initial` custom properties, layered on the above. |
@@ -39,6 +40,12 @@ The project holds shared-tooling as a submodule at `shared/`, so from a front en
 
    ```bash
    npm install -D ../shared/lint/web eslint prettier typescript stylelint
+   ```
+
+   A static site with no Vue, React or TypeScript, which takes only `/js` and Prettier, installs fewer (npm adds TypeScript beside them, as the package's peer):
+
+   ```bash
+   npm install -D ../shared/lint/web eslint prettier
    ```
 
    Once step 4 has removed the project's own copies of the plugins, run `npm dedupe`. A lockfile from before can keep an older copy nested under another package (an older `eslint-plugin-vue` under `@vue/eslint-config-typescript`, say), and ESLint warns that it is replacing one copy with the other.
@@ -96,13 +103,34 @@ The project holds shared-tooling as a submodule at `shared/`, so from a front en
    }
    ```
 
-   A static site with no Vue, React or TypeScript takes the plain-JavaScript config and Prettier's, and installs `eslint prettier` (npm adds TypeScript beside them, as the package's peer):
+   `task shared:update` writes it where it is missing, or adds the base to an `extends` that lacks it (`task shared:web:specs -- --fix` does the same at any time). An app with one `tsconfig.json` and its specs beside the code extends that file instead, and leaves the specs out of it; the base file's header shows both files.
+
+   A static site with no Vue, React or TypeScript takes the plain-JavaScript config and Prettier's (the `prettier.config.js` above):
 
    ```js
    // eslint.config.js
    import shared from '@jwill89/lint-web/js'
 
    export default [{ ignores: ['dist/**', 'vendor/**'] }, ...shared]
+   ```
+
+   A site that type-checks its scripts, with `"checkJs": true` in a `jsconfig.json`, may add typescript-eslint's type-checked rules on top, from the `tseslint` this package re-exports, for the files its `jsconfig.json` takes in. Those rules come with typescript-eslint's switch-off of the core rules TypeScript already checks (`no-undef` among them), so the site's lint also runs `tsc --noEmit -p jsconfig.json`, which reports them:
+
+   ```js
+   // eslint.config.js
+   import shared, { tseslint } from '@jwill89/lint-web/js'
+
+   const typed = ['assets/js/**/*.js']
+
+   export default [
+     { ignores: ['dist/**', 'vendor/**'] },
+     ...shared,
+     ...tseslint.configs.recommendedTypeChecked.map((config) => ({ ...config, files: typed })),
+     {
+       files: typed,
+       languageOptions: { parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname } },
+     },
+   ]
    ```
 
 4. Remove what the package now supplies from the project's own `devDependencies`: `eslint-plugin-vue`, `eslint-plugin-vuejs-accessibility`, `@vue/eslint-config-typescript`, `@vue/eslint-config-prettier`, `stylelint-config-standard`, `stylelint-config-recommended-vue`, `postcss-html`, `@vue/tsconfig`, and the old `@jwill89/eslint-config`.

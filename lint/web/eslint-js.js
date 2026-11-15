@@ -13,7 +13,13 @@ import globals from 'globals'
  *
  * Every file is read as an ES module. A classic script, whose top-level functions a page
  * calls from its markup, is listed by the project with `sourceType: 'script'`.
+ *
+ * A site whose jsconfig.json or tsconfig.json sets checkJs may add typescript-eslint's
+ * type-checked rules for its scripts, from this package's own install (the `tseslint`
+ * export), so the project installs no second copy.
  */
+export { default as tseslint } from 'typescript-eslint'
+
 export default [
   {
     ...js.configs.recommended,

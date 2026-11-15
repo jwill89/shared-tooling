@@ -57,6 +57,8 @@ What every project tests, how it tests it, and where each stack keeps and runs i
 - A React app's specs use the same preset and the same rules; only the mounting library differs. [review]
 - Specs import `describe`, `it`, `expect` and `vi` from `vitest` (`globals: false`) and type-check under their own `tsconfig.vitest.json`, so app code stays free of Node types. [CI]
 - That file lists the app's own config first and `lint/web`'s base after it, which adds Node's types and takes in the specs the app config leaves out: `"extends": ["./tsconfig.app.json", "@jwill89/lint-web/tsconfig.vitest.json"]`. `web.yml` fails an app with Vitest specs that has no such file, or one that leaves a spec out, then type-checks the specs with it (vue-tsc where the app has it, else tsc); `task shared:web:specs` runs the same locally. [CI]
+- An app with one `tsconfig.json` and its specs beside the code (`*.test.ts`) does the same with that file: its `tsconfig.json` leaves the specs out (`"exclude": ["src/**/*.test.ts"]`), so the app's own check never sees Node's types, and its `tsconfig.vitest.json` is `"extends": ["./tsconfig.json", "@jwill89/lint-web/tsconfig.vitest.json"]` with `"include": ["src/**/*.ts"]`. [CI]
+- `task shared:update` writes `tsconfig.vitest.json` where it is missing, extending `tsconfig.app.json` (or the lone `tsconfig.json`) and then the base, or adds the base to an `extends` that lacks it, and names what it can't put right; `task shared:web:specs -- --fix` does the same at any time. [review]
 - Component and view specs mount with `@vue/test-utils` and fake the server at one seam: a stubbed `fetch`, a mocked `useApi`, or a `stubApi` that fails the test on any call it didn't declare. [review]
 - Module-level state is reset in `beforeEach`. [review]
 - Every new composable, component and view gets a spec that covers the states and error paths a user can reach, not only the happy path. [review]
@@ -84,6 +86,7 @@ What every project tests, how it tests it, and where each stack keeps and runs i
 - Coverage counts lines in the app's package. Its startup wiring (the WSGI entry point) and dev tools stay out of the count, through `omit` or by sitting outside `source`. [review]
 - A web app is tested over HTTP through its framework's test client (Flask's `test_client()`), each response checked against the committed OpenAPI spec (openapi-core, from the dev requirements). [test]
 - Locally, `task shared:python:test` holds the floor as CI does, and `task shared:python:lint` runs the same lint and type checks. [review]
+- Python scripts in a project that isn't a Python project (a data script beside a Go service) have no tests, no floor and no `python.yml` call of their own, and aren't linted with ruff or mypy: only their requirements are watched, by Dependabot and OSV-Scanner ([packages.md](packages.md#python)). [review]
 
 ## End-to-end (Playwright)
 

@@ -19,8 +19,14 @@
     origin remote unless -RepoUrl names it), so a version CI has not tagged yet gets the
     link its tag will answer. Every link reference for a version or Unreleased is
     rewritten, newest first, in one block at the foot; any other link reference stays
-    where it is. Tags already made are read only to warn about a version below the
-    newest that has none, which usually means the wrong -TagPrefix.
+    where it is.
+
+    The tags already made are read for two things. When the oldest versions listed were
+    never tagged while a newer one was, the oldest tagged version links to its own tag
+    page, since a compare with a tag that doesn't exist finds nothing, and each version
+    never tagged is named with the two ways out: tag that release's commit, or drop its
+    heading. Any other version below the newest with no tag is named too, which usually
+    means the wrong -TagPrefix.
 
     With -Check it changes nothing, and fails when a heading has no link reference or a
     version link reference has no heading: what the shared docs.yml workflow runs.
@@ -110,13 +116,28 @@ foreach ($file in $Path) {
     }
     $url = $url.TrimEnd('/')
 
+    # The oldest versions never tagged, while a version above them was: the oldest tagged
+    # version links to its own tag page instead of a compare with them. Tags are only known
+    # here once a repo has some, so a repo before its first release links every version as
+    # its tag will answer.
+    $tags = @(git -C $folder tag --list "$TagPrefix*" 2>$null)
+    $tagged = @($versions | Where-Object { $tags -contains "$TagPrefix$_" })
+    $neverTagged = [System.Collections.Generic.List[string]]::new()
+    $oldest = $versions.Count - 1
+    if ($tagged) {
+        while ($oldest -gt 0 -and $tagged -notcontains $versions[$oldest]) {
+            $neverTagged.Insert(0, $versions[$oldest])
+            $oldest--
+        }
+    }
+
     $lines = [System.Collections.Generic.List[string]]::new()
     if ($names -contains 'Unreleased') {
         $lines.Add($(if ($versions) { "[Unreleased]: $url/compare/$TagPrefix$($versions[0])...HEAD" } else { "[Unreleased]: $url/commits/HEAD" }))
     }
     for ($i = 0; $i -lt $versions.Count; $i++) {
         $tag = "$TagPrefix$($versions[$i])"
-        $lines.Add($(if ($i + 1 -lt $versions.Count) { "[$($versions[$i])]: $url/compare/$TagPrefix$($versions[$i + 1])...$tag" } else { "[$($versions[$i])]: $url/releases/tag/$tag" }))
+        $lines.Add($(if ($i -lt $oldest) { "[$($versions[$i])]: $url/compare/$TagPrefix$($versions[$i + 1])...$tag" } else { "[$($versions[$i])]: $url/releases/tag/$tag" }))
     }
 
     $body = [regex]::Replace($text, "$referencePattern\n?", '').TrimEnd("`n")
@@ -128,8 +149,11 @@ foreach ($file in $Path) {
         Write-Output "${file}: compare links already current."
     }
 
-    $tags = @(git -C $folder tag --list "$TagPrefix*" 2>$null)
-    $untagged = @($versions | Select-Object -Skip 1 | Where-Object { $tags -notcontains "$TagPrefix$_" })
+    foreach ($version in $neverTagged) {
+        Write-Warning ("${file}: $version was never tagged (there is no $TagPrefix$version), so its heading links to a tag page that doesn't exist, and " +
+            "$($versions[$oldest]) links to its own tag page. Tag $version's release commit as $TagPrefix$version, or drop the $version heading (standards/docs-and-agents.md).")
+    }
+    $untagged = @($versions | Select-Object -Skip 1 | Where-Object { $tags -notcontains "$TagPrefix$_" -and -not $neverTagged.Contains($_) })
     if ($tags -and $untagged) {
         Write-Warning "${file}: no tag for $(($untagged | ForEach-Object { "$TagPrefix$_" }) -join ', '); check -TagPrefix."
     }

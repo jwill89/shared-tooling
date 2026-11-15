@@ -20,7 +20,10 @@
         the project's own copy of any of their peers (lint/web's ESLint, Prettier,
         Stylelint and TypeScript, test/a11y's Playwright) that falls outside the range
         the release declares, with `npm install -D <tool>@<range>`;
-      - then re-installs the packages, so npm takes the new copy.
+      - then re-installs the packages, so npm takes the new copy;
+      - in each front end with Vitest specs, writes the specs' tsconfig.vitest.json where it
+        is missing, or adds the shared base to the extends of one that lacks it, and names
+        anything it leaves for the owner (test/web/typecheck-specs.mjs --fix).
 
     A release that raises a peer, such as v2.0.0's Stylelint 18, would otherwise leave
     the project uninstallable: npm refuses the new package beside the old tool. Raised
@@ -292,6 +295,22 @@ if (-not $SkipInstall) {
         }
     } finally {
         Pop-Location
+    }
+}
+
+# Each front end with Vitest gets its specs' tsconfig.vitest.json written, or the shared
+# base added to its extends, as web.yml checks it; what can't be put right is named.
+if (Get-Command node -ErrorAction SilentlyContinue) {
+    foreach ($manifest in git -C $root ls-files | Where-Object { $_ -match '(^|/)package\.json$' -and $_ -notmatch "^$([regex]::Escape($sharedRel))/" }) {
+        $path = Join-Path $root $manifest
+        if ((Get-Content -Raw -LiteralPath $path).Contains('"vitest"')) {
+            $dir = Split-Path -Parent $path
+            Write-Host "  The specs' tsconfig.vitest.json in $(Split-Path -Parent $manifest)"
+            node (Join-Path $shared 'test/web/typecheck-specs.mjs') $dir --fix
+            if ($LASTEXITCODE) {
+                Write-Warning "Put $(Join-Path (Split-Path -Parent $manifest) 'tsconfig.vitest.json') right by hand, as above; web.yml fails without it."
+            }
+        }
     }
 }
 

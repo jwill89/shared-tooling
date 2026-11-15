@@ -8,21 +8,24 @@ What each repo doc holds, how docs and copy are written, how a change goes from 
 - **AGENTS.md** is the repo's one deep guide, for agents and developers alike, and is read before any change. [review]
 - AGENTS.md gives the conventions with their reasons, a "known traps" list naming the failure each trap prevents, and a recipe or checklist for each common change (an endpoint, a field, a setting, a feature) that new work is run against. [review]
 - AGENTS.md links to `shared/standards/README.md`, for agents that don't read CLAUDE.md. [review]
-- AGENTS.md names each departure from the shared standards with its reason, and keeps a separate "Not yet meeting the standards" list: what falls short of which rule, and since when. The project meets the standards when that list is empty and holds every gap there is ([README.md](README.md#where-a-project-may-differ)). [review]
+- AGENTS.md names each departure from the shared standards with its reason, under "Departures from the standards", and keeps a separate "Not yet meeting the standards" list: what falls short of which rule, and since when. The project meets the standards when that list is empty and holds every gap there is ([README.md](README.md#where-a-project-may-differ), which has a line of each and the way an older single list is split). [review]
+- A departure waiting on a decision the owner hasn't made isn't a reason: it is listed under "Not yet meeting the standards", naming what it waits for, until the owner decides. [review]
 - **docs/ops.md** is the runbook for the live site, and holds what [deploy-and-ops.md](deploy-and-ops.md#what-docsopsmd-holds) lists. [review]
-- **CLAUDE.md** imports `@AGENTS.md` and `@shared/standards/README.md`, and the repo's own rules live in AGENTS.md. [review]
+- **CLAUDE.md** is exactly the form in [README.md](README.md#how-a-repo-uses-this-guide): it imports `@AGENTS.md` and `@shared/standards/README.md`, and the repo's own rules live in AGENTS.md. `task shared:repo:check` and `docs.yml` fail on any other form, or on a missing AGENTS.md. [CI]
 - **CONTRIBUTING.md** only says how to propose and submit a change: how to report a bug (steps, expected, actual, environment), and to open an issue before anything beyond a small, obvious fix. [review]
 - **CHANGELOG.md** is the only changelog (one per versioned part, below). It lists what a user could notice, and any deploy that changes behaviour; for shared-tooling, a user is a project that takes the release. What an entry says is under [What a changelog entry says](#what-a-changelog-entry-says). [review]
 - Git history, subjects and bodies, is the record of every change, so there is no second changelog file. [review]
 - CHANGELOG.md follows Keep a Changelog: an `## [Unreleased]` section at the top collects bullets under Added, Changed, Deprecated, Removed, Fixed or Security, and a release turns it into `## [x.y.z] - YYYY-MM-DD`. [review]
 - Every `## [x.y.z]` heading and `## [Unreleased]` has its compare link, as a link reference at the foot of the file: each version against the one before it, the oldest to its own tag, and Unreleased against the newest. [CI]
 - The links are written by tooling, not by hand: `task shared:changelog:links` writes or refreshes them from the headings, the tag names and the origin remote, so a project runs it in the change that adds a version's section (CI tags the version once it lands), and shared-tooling's `task release` writes its own. `docs.yml` fails on a heading without one. [CI]
-- A repo with two parts versioned and tagged apart, such as an app and its Dalamud plugin, keeps one CHANGELOG.md per part: the app's at the root, tagged `vX.Y.Z`, and the other's in that part's folder (`plugin/CHANGELOG.md`), tagged with the folder's name before the version (`plugin-v1.4.0`). Each has its own Unreleased section and links (`task shared:changelog:links -- -Path plugin/CHANGELOG.md -TagPrefix plugin-v`), its release notes come from its own file, and the repo's `docs.yml` call lists both (`changelogs: CHANGELOG.md plugin/CHANGELOG.md`). [CI]
+- A repo with two parts versioned and tagged apart, such as an app and its Dalamud plugin, keeps one CHANGELOG.md per part: the app's at the root, tagged `vX.Y.Z`, and the other's in that part's folder (`plugin/CHANGELOG.md`), tagged with the folder's name before the version (`plugin-v1.4.0`). Each has its own Unreleased section and links (`task shared:changelog:links -- -Path plugin/CHANGELOG.md -TagPrefix plugin-v`), its release notes come from its own file, and the repo's `docs.yml` call lists both (`changelogs: CHANGELOG.md plugin/CHANGELOG.md`). [Two parts versioned apart](#two-parts-versioned-apart) works one through. [CI]
+- A version whose release was never tagged is tagged at its release commit, or its heading is dropped: its link would go to a tag page that doesn't exist. `task shared:changelog:links` names each one, and meanwhile links the oldest tagged version to its own tag page rather than a compare with it. [review]
 - An app that shows its changelog reads CHANGELOG.md at build time: there is no changelog table, hand-written page or API. [review]
-- **PLAN.md** holds the product decisions, the data model and the phase order, and is read before anything structural changes. [review]
+- **PLAN.md** holds the product decisions, the data model and the phase order, and is read before anything structural changes. An app with product decisions keeps one; a plugin, a static site or a small tool with none to record needs none. [review]
 - A feature that doesn't fit the plan changes PLAN.md first, in the same change. [review]
 - A repo's own plan covers only what is specific to it, and links to shared-tooling's `standards/` rather than repeating them. [review]
-- **docs/decisions.md** gets a dated one-line entry (`- YYYY-MM-DD — ...`) for each decision worth remembering; the reasoning behind a larger one goes in PLAN.md. [review]
+- **docs/decisions.md** gets a dated one-line entry (`- YYYY-MM-DD — ...`) for each decision worth remembering; the reasoning behind a larger one goes in PLAN.md. A repo needs one only once it has such a line to write, as when a standard asks for one (an accessibility exception, say); a plugin or a static site may have neither file. [review]
+- A rollout plan, the list of what a project must change to move onto shared-tooling or onto a release, ends with a status line under its heading once its last item is done, `Rollout complete, YYYY-MM-DD.`, so a finished plan never reads as open work. Its tables stay as the record; anything left open moves to AGENTS.md's "Not yet meeting the standards" first. [review]
 - **API.md** holds only the conventions; the endpoint list is the OpenAPI spec generated from code, served with an interactive reference (see [api-and-realtime.md](api-and-realtime.md)). [test]
 - Each OpenAPI operation's description states its guard: public, auth, admin or `permission:<key>`. [test]
 - Where a project has a rules document (domain rules, a grammar), it is authoritative, and code comments and tests cite its numbered rules. [review]
@@ -41,6 +44,52 @@ What each repo doc holds, how docs and copy are written, how a change goes from 
 - It names what the user knows (a page, a setting, a command, a flag, an endpoint, a message), not file paths, packages, functions or tables, unless that is what the user touches. For shared-tooling, whose users are projects, a workflow input, a task or a module function is exactly that. [review]
 - A fix says what was wrong as the user saw it, not its cause in the code. [review]
 - Released entries follow the same rules: one that doesn't is cut to fit, keeping its version and date. [review]
+
+## Two parts versioned apart
+
+An app at 2.4.0 and its plugin at 1.4.0, in one repo, each released when it changes:
+
+```text
+CHANGELOG.md          the app's: ## [Unreleased], ## [2.4.0] ... tagged v2.4.0
+plugin/CHANGELOG.md   the plugin's: ## [Unreleased], ## [1.4.0] ... tagged plugin-v1.4.0
+```
+
+A change to the plugin alone is noted under `plugin/CHANGELOG.md`'s Unreleased; one that changes both is noted in both. Each file's links compare its own tags:
+
+```markdown
+[Unreleased]: https://github.com/owner/app/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/owner/app/compare/v2.3.0...v2.4.0
+[1.0.0]: https://github.com/owner/app/releases/tag/v1.0.0
+```
+
+```markdown
+[Unreleased]: https://github.com/owner/app/compare/plugin-v1.4.0...HEAD
+[1.4.0]: https://github.com/owner/app/compare/plugin-v1.3.0...plugin-v1.4.0
+[1.0.0]: https://github.com/owner/app/releases/tag/plugin-v1.0.0
+```
+
+The change that adds a version's section writes its file's links:
+
+```bash
+task shared:changelog:links
+task shared:changelog:links -- -Path plugin/CHANGELOG.md -TagPrefix plugin-v
+```
+
+The repo's `docs.yml` call, and the `shared:docs:check` line of its `task check`, name both files:
+
+```yaml
+  docs:
+    uses: jwill89/shared-tooling/.github/workflows/docs.yml@v1.0.0
+    with:
+      changelogs: CHANGELOG.md plugin/CHANGELOG.md
+```
+
+```yaml
+      - task: shared:docs:check
+        vars: { CHANGELOGS: CHANGELOG.md plugin/CHANGELOG.md }
+```
+
+CI's release job tags `v2.5.0` when the app's version moves and `plugin-v1.5.0` when the plugin's does, each release's notes taken from its own file's section.
 
 ## Keeping docs true
 
@@ -66,7 +115,7 @@ What each repo doc holds, how docs and copy are written, how a change goes from 
 ## Working in a repo
 
 - Before a change is done, `task check` passes locally: it runs what CI runs, in CI's order. [CI]
-- That includes every coverage floor CI holds (Vitest's thresholds, `task shared:go:coverage` for a Go module, PHPUnit's report read by `coverage-check.php`), every generated-file check (the committed OpenAPI spec and API types match what the code generates) and the specs' type-check (`task shared:web:specs`), so a floor, a stale file or a spec's type error fails locally before it fails in CI. [review]
+- That includes every coverage floor CI holds (Vitest's thresholds, `task shared:go:coverage` for a Go module, PHPUnit's report read by `coverage-check.php`), every generated-file check (the committed OpenAPI spec and API types match what the code generates), the specs' type-check (`task shared:web:specs`) and everything `docs.yml` checks (`task shared:docs:check`), so a floor, a stale file or a spec's type error fails locally before it fails in CI. shared-tooling's README has the `check` task to start from. [review]
 - `task lint` runs every lint and static check, the shared-file checks included, and `task check` adds the audits and every test. [review]
 - Every repo has a root Taskfile with `task lint`, `task test`, `task check`, `task deploy` where it deploys, and shared-tooling's `shared:*` tasks; `task` alone lists the rest. [review]
 - A check every project should run goes into shared-tooling and arrives by a release. [review]

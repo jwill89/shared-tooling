@@ -41,7 +41,7 @@ Everything a deploy needs goes into ONE archive: the binary, systemd units, env 
 3. `Invoke-Upload` streams it to the host.
 4. One remote run unpacks it to a staging folder, checks the SHA-256 and file count, and only then runs the steps: `Install-ServiceBinary`, `Switch-RemoteDirectory`, `Switch-RemoteItemSet` or `Publish-PluginRepository` on their own, or several of them as `-AsStep` blocks of one `Invoke-DeployBundle`.
 5. `Invoke-SmokeCheck` fetches the site and, if it fails, runs the rollback.
-6. For a project with a database: `Install-BackupTimer` keeps its daily backup installed and checked, and `Copy-LiveDatabase` pulls a copy to the dev machine, the one copy that leaves the host. A folder only the host holds, such as the site's uploads, gets the same: `Install-BackupTimer -Folder` and `Copy-LiveFolder`.
+6. For a project with a database: `Install-BackupTimer` keeps its daily backup installed and checked, and `Copy-LiveDatabase` pulls a copy to the dev machine, the one copy that leaves the host. A folder only the host holds, such as the site's uploads, gets the same, `Install-BackupTimer -Folder` and `Copy-LiveFolder`, or, when it is too large to archive on the host, a copy on the dev machine that `Sync-LiveFolder` keeps current ([Folders only the host holds](#folders-only-the-host-holds)).
 7. `Close-DeployConnection` in a `finally` block.
 
 A host that runs `ufw limit ssh` refuses an address after six connections in 30 seconds. This shape opens one: every command, upload and download rides the held connection, so a deploy with several targets (a backend, its frontend and a plugin) is one connection and one remote run, with no pauses between targets.
@@ -53,7 +53,7 @@ Single-file uploads (`Send-File`, `Send-FileVerified`) stay for the rare case th
 - PowerShell 7.4 or later (`CompatiblePSEditions = 'Core'`), on Windows.
 - PuTTY's `plink` 0.85 or later (connection sharing), on PATH or in `C:\Program Files\PuTTY`, with the key loaded in Pageant if it has a passphrase. pscp is not used.
 - Windows' own `tar.exe` for `Compress-DeployArchive`.
-- On the host: bash as the SSH user's shell, systemd, GNU coreutils (`sha256sum`, `cat`, `tac`, `sort -V`, `stat`) and `awk`, `sqlite3` and `gzip` for database snapshots and backups, GNU `tar` for a folder's, `runuser` (util-linux) for an `-Owner` on `Backup-RemoteDatabase`, `Copy-LiveDatabase` or `Copy-LiveFolder`, `curl` for `-HealthUrl`, cron reading `/etc/cron.d` for a site's cron file, uv at `<app dir>/bin/uv` for `Install-PythonEnvironment` (with outbound HTTPS, to fetch a Python and the packages), and for a vhost, Apache in Debian's layout (`/etc/apache2` with `sites-available` and `sites-enabled`, and an `apachectl` that reads `APACHE_CONFDIR`).
+- On the host: bash as the SSH user's shell, systemd (247 or later for `Get-ServiceMemory`), GNU coreutils (`sha256sum`, `cat`, `tac`, `sort -V`, `stat`) and `awk`, `sqlite3` and `gzip` for database snapshots and backups, GNU `tar` for a folder's, GNU `find` and `xargs` for `Sync-LiveFolder`, `runuser` (util-linux) for an `-Owner` on `Backup-RemoteDatabase`, `Copy-LiveDatabase`, `Copy-LiveFolder` or `Sync-LiveFolder`, `curl` for `-HealthUrl`, cron reading `/etc/cron.d` for a site's cron file, uv at `<app dir>/bin/uv` for `Install-PythonEnvironment` (with outbound HTTPS, to fetch a Python and the packages), and for a vhost, Apache in Debian's layout (`/etc/apache2` with `sites-available` and `sites-enabled`, and an `apachectl` that reads `APACHE_CONFDIR`).
 
 ## The one connection
 
@@ -107,6 +107,7 @@ Remote commands:
 - `Invoke-Remote`: runs a command and returns its output lines; throws on failure.
 - `Invoke-RemoteStep`: runs several self-contained blocks (the `Restore-` functions' `-AsScript`) in one call; throws on failure.
 - `Format-RemoteScript`: fills `__NAME__` and `{{NAME}}` placeholders literally.
+- `Expand-DeployTemplate`: fills a template file the deploy ships (a cron file, a unit, a vhost) the same way, drops its CRs, refuses it while a placeholder is left unfilled, and returns the filled copy's path for `Compress-DeployArchive`.
 
 Transfers:
 
@@ -164,12 +165,17 @@ Plugins:
 
 Scheduled backup:
 
-- `Install-BackupTimer`: a daily systemd timer and its oneshot service, with the standard hardening. It renders the units and the shared job, installs them only where they differ from the live copies (`cmp`), runs the service once to check them, and puts the previous copies back if that run fails. The shared job writes a `VACUUM INTO` copy of the live database, checks it with `PRAGMA integrity_check`, compresses it with gzip and checks that (`gzip -t`), names it `<prefix>YYYY-MM-DD<suffix>.gz` (UTC) and keeps 28 days, leaving every other file in its folder alone. `-Folder` backs up a folder instead, as a `.tar.gz` checked with `gzip -t` and a full `tar` listing, into a `-Directory` outside it, with the same names and retention, the service reading the folder and writing only there. `-Command` runs a project's own job instead (`myapp backup`, say). A project with a database and a folder installs two timers under two names. Call it after the smoke check.
+- `Install-BackupTimer`: a daily systemd timer and its oneshot service, with the standard hardening. It renders the units and the shared job, installs them only where they differ from the live copies (`cmp`), runs the service once to check them, and puts the previous copies back if that run fails. The shared job writes a `VACUUM INTO` copy of the live database, checks it with `PRAGMA integrity_check`, compresses it with gzip and checks that (`gzip -t`), names it `<prefix>YYYY-MM-DD<suffix>.gz` (UTC) and keeps 28 days, leaving every other file in its folder alone. `-Folder` backs up a folder instead, as a `.tar.gz` checked with `gzip -t` and a full `tar` listing, into a `-Directory` outside it, with the same names and retention, the service reading the folder and writing only there; `-Exclude` leaves out what needn't be kept, such as a cache. `-Command` runs a project's own job instead (`myapp backup`, say). A project with a database and a folder installs two timers under two names. Call it after the smoke check.
 
 Development copies:
 
 - `Copy-LiveDatabase`: an online `sqlite3 .backup` on the host, a checked download, three timestamped local copies kept, the host's copy removed; warns and skips if the local database is in use. The host's copy lives only for the pull, so it is not compressed. `-Owner` makes it as the database's user (`runuser`), so it can sit beside a database whose folder holds only that user's files.
 - `Copy-LiveFolder`: the same for a folder: a fresh `.tar.gz` made on the host (as `-Owner`, through `runuser`) into the SSH user's `~/.shared-deploy` and checked with `gzip -t`, a checked download kept as `<folder>-<time>.tar.gz` in a local folder, the newest three kept, the host's copy removed. The archive is kept, not unpacked.
+- `Sync-LiveFolder`: for a folder too large to archive on the host, a copy of it in a local folder, brought up to date: only the files that are new or changed (by size and modification time) are fetched, in batches streamed as tar straight from the host, with nothing written there but each batch's list of names, and each file checked against the host's SHA-256 before it takes its place. A local file the host no longer has stays unless `-Delete` is passed; `-Exclude` reads as `Install-BackupTimer`'s does.
+
+Service memory:
+
+- `Get-ServiceMemory`: reads each service's memory on the host, now and at its peak since it last started (systemd's `MemoryPeak`), with its `MemoryMax=` and twice the peak rounded up to a multiple of 16M, to set the cap from. It changes nothing.
 
 Smoke check:
 
@@ -207,6 +213,32 @@ tar -xzf /var/backups/example/media/example-media-2026-01-31.tar.gz -C /var/www/
 ```
 
 `Install-ServiceBinary` prints these commands, with its snapshot's paths, after a rollback in a project that has not opted into `-RestoreDatabaseOnRollback`, `Backup-RemoteDatabase` sets them as `$snapshot_restore` (with `systemctl stop` and `start` of its `-Service`) for the step's own message, and the shared job's script on the host carries them, with its paths, in its header (a folder job's header carries its two lines). A project's own backup command (`-Command`) keeps its own copies, so compressing them is up to that command.
+
+## Folders only the host holds
+
+A folder is host-only when its files are in no git repo, no deploy rebuilds them and no database holds them ([deploy-and-ops.md](../../standards/deploy-and-ops.md#backups)): a site's uploads, say. Files a database holds go with the database's backup, so they need nothing more. The project names in its `docs/ops.md` the size up to which it archives such a folder on the host, and each folder is then one of two kinds:
+
+| Size | On the host | Off the host, at each deploy (skipped with `-NoDbPull`) |
+| --- | --- | --- |
+| Under the project's size | `Install-BackupTimer -Folder`: a daily `.tar.gz`, 28 kept unless `-Keep` says fewer | `Copy-LiveFolder`: a fresh archive, three kept on the dev machine |
+| Over it | Nothing, since the droplet's disk couldn't hold its archives | `Sync-LiveFolder`: a copy on the dev machine, with only new and changed files fetched |
+
+Both take `-Exclude` for what needn't be kept, such as a cache the site rebuilds. A name (`cache`, `*.tmp`) leaves out every file or folder of that name inside the folder, at any depth; a path (`cache/thumbs`) leaves out that one from the folder's top, with everything in it. `*` and `?` match within one name, never across a `/`. The backup job's header on the host lists them.
+
+`Sync-LiveFolder` lists the folder on the host and compares each regular file with the copy by size and modification time, to the second. What differs is fetched in batches of up to `-BatchSize` (256 MB): the batch's names go to the host as a list, the host's tar streams those files straight into `.shared-deploy-sync` inside the local folder, as pax so names keep their UTF-8, and each file takes its place only when it matches the host's SHA-256, keeping the host's time. A file that changed or went while it was read waits for the next pull, a pull cut short keeps every batch it finished, and the host keeps nothing but the list, removed at the end. A name Windows can't hold, or one that differs from another only in case, is skipped and listed; links and empty folders aren't copied. A local file the host no longer has is counted and kept unless the call passes `-Delete`. The copy is the folder's only backup off the host, so it stays out of git, and `docs/ops.md` says where it is.
+
+It goes back the way an archive does: packed on the dev machine as pax, sent on the deploy's connection, and unpacked beside the live folder as root, then given to the folder's owner:
+
+```powershell
+& (Resolve-TarTool) --format=pax --exclude=.shared-deploy-sync -czf media-restore.tar.gz -C (Join-Path $repoRoot 'devdata') media
+$null = Invoke-Upload -Path media-restore.tar.gz -Destination 'media-restore.tar.gz'
+```
+
+```sh
+mv /var/www/example.com/media /var/www/example.com/media.before-restore
+tar -xzf ~/media-restore.tar.gz -C /var/www/example.com
+chown -R www-data:www-data /var/www/example.com/media
+```
 
 ## The vhost
 
@@ -386,9 +418,7 @@ Swapping the whole folder replaces everything in it, so check before the first r
 A static site whose vhost ships with it, rendered from the template in the release's checkout, and its rollback. The vhost becomes `example.com.conf`:
 
 ```powershell
-$template = Get-Content -Raw -LiteralPath (Join-Path $tree 'deploy\apache-vhost.conf')
-$vhost = Join-Path $tree 'deploy\apache-vhost.rendered.conf'
-Set-Content -LiteralPath $vhost -NoNewline -Value (Format-RemoteScript $template @{ SERVER_NAME = $settings.ServerName; CERT = $settings.CertName })
+$vhost = Expand-DeployTemplate -Path (Join-Path $tree 'deploy\apache-vhost.conf') -Value @{ SERVER_NAME = $settings.ServerName; CERT = $settings.CertName }
 $archive = Compress-DeployArchive -Content ([ordered]@{ 'site' = Join-Path $tree 'dist'; 'apache-vhost.conf' = $vhost })
 # ...Invoke-Upload to 'example-deploy.tgz'...
 Switch-RemoteDirectory -Archive 'example-deploy.tgz' -Sha256 $archive.Sha256 -ExpectedFileCount $archive.FileCount `
@@ -460,14 +490,46 @@ Install-BackupTimer -Name 'example' -Command '/opt/example/example backup' -Owne
 if (-not $NoDbPull) { $null = Copy-LiveDatabase -Database '/var/www/example.com/db/example.db' -Destination (Join-Path $repoRoot 'devdata/example.db') }
 ```
 
-A folder only the host holds, here a site's uploads, backed up daily under a second timer and pulled with the database:
+A folder only the host holds, here a site's uploads, backed up daily under a second timer, its thumbnail cache left out, and pulled with the database:
 
 ```powershell
-Install-BackupTimer -Name 'example-media' -Folder '/var/www/example.com/media' -Directory '/var/backups/example/media' -Owner 'www-data' -Keep 14
+Install-BackupTimer -Name 'example-media' -Folder '/var/www/example.com/media' -Directory '/var/backups/example/media' -Owner 'www-data' -Keep 14 -Exclude 'cache'
 if (-not $NoDbPull) { $null = Copy-LiveFolder -Folder '/var/www/example.com/media' -Destination (Join-Path $repoRoot 'devdata\media') -Owner 'www-data' }
 ```
 
-A PHP site whose code ships with its cron file and a queue worker's unit. The worker restarts on the new code once it is in; if it doesn't stay up, the files and the code go back together, and `-OnRestore` restarts it on the old code, clearing systemd's start limit first, since the failed restarts may have used it up. After a failed smoke check the code goes back first, then the files:
+A host-only folder too large to archive on the host, here a site's full-size photos, kept as a copy on the dev machine instead, with only what changed fetched at each deploy:
+
+```powershell
+if (-not $NoDbPull) { $null = Sync-LiveFolder -Folder '/var/www/example.com/originals' -Destination (Join-Path $repoRoot 'devdata\originals') -Owner 'www-data' }
+```
+
+A PHP site whose code ships with its cron file and a queue worker's unit, both templates in the repo with placeholders where the host's values go, filled as the deploy packs them. A placeholder left unfilled stops the deploy before anything is packed:
+
+```text
+# deploy/example.cron
+*/5 * * * * www-data cd {{WEB_ROOT}} && php artisan schedule:run >/dev/null 2>&1
+```
+
+```ini
+# deploy/example-queue.service
+[Service]
+User=www-data
+WorkingDirectory={{WEB_ROOT}}
+ExecStart=/usr/bin/php {{WEB_ROOT}}/artisan queue:work --sleep=3
+```
+
+```powershell
+$values = @{ WEB_ROOT = $settings.WebRoot }
+$archive = Compress-DeployArchive -Content ([ordered]@{
+        'app'                          = Join-Path $tree 'app'
+        'public'                       = Join-Path $tree 'public'
+        'vendor'                       = Join-Path $tree 'vendor'
+        'deploy/example.cron'          = Expand-DeployTemplate -Path (Join-Path $tree 'deploy\example.cron') -Value $values
+        'deploy/example-queue.service' = Expand-DeployTemplate -Path (Join-Path $tree 'deploy\example-queue.service') -Value $values
+    })
+```
+
+The worker restarts on the new code once it is in; if it doesn't stay up, the files and the code go back together, and `-OnRestore` restarts it on the old code, clearing systemd's start limit first, since the failed restarts may have used it up. After a failed smoke check the code goes back first, then the files:
 
 ```powershell
 $config = Install-HostConfig -AsStep -Name 'example' -CronFile 'deploy/example.cron' `
@@ -511,6 +573,17 @@ A service's smoke check: `/healthz` must report the release just deployed, and `
 $entry = [regex]::Match((Get-Content -Raw (Join-Path $tree 'web\dist\index.html')), '<script[^>]+src="([^"]+)"').Groups[1].Value
 Invoke-SmokeCheck -SiteUrl $settings.SiteUrl -Version $release.Tag -EntryScript $entry -Attempts 5 -Rollback {
     Restore-ServiceBinary -ServiceName $settings.ServiceName -Binary "$($settings.RemoteOptDir)/example"
+}
+```
+
+A service's memory, read for its `MemoryMax=` after a stretch of normal use, before the next deploy restarts it, from a short script of its own or a switch of the deploy script. The peak, the cap and the date go in `docs/ops.md`:
+
+```powershell
+$null = $settings | Open-DeployConnection
+try {
+    Get-ServiceMemory -ServiceName $settings.ServiceName, 'example-worker' | Format-Table Service, Days, Peak, Max, Suggested
+} finally {
+    Close-DeployConnection
 }
 ```
 

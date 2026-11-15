@@ -6,7 +6,7 @@
 const checks = [
   ['lint/web/eslint.js', (m) => Array.isArray(m.default) && m.vueConventions && m.tsStylistic],
   ['lint/web/eslint-react.js', (m) => Array.isArray(m.default)],
-  ['lint/web/eslint-js.js', (m) => Array.isArray(m.default)],
+  ['lint/web/eslint-js.js', (m) => Array.isArray(m.default) && Array.isArray(m.tseslint?.configs?.recommendedTypeChecked)],
   ['lint/web/prettier.js', (m) => m.default?.singleQuote === true],
   ['lint/web/stylelint.js', (m) => m.default && typeof m.paletteRules === 'function'],
   ['lint/web/stylelint-tailwind.js', (m) => Boolean(m.default)],

@@ -16,7 +16,8 @@
     The project. Defaults to the current folder.
 
 .PARAMETER Shared
-    Where the submodule sits in the project.
+    Where the submodule sits: a path from the project, or a full path. shared-tooling's
+    own checks pass `.`, since the repo is its own shared folder.
 
 .EXAMPLE
     pwsh shared/repo/Test-SharedVersion.ps1
@@ -29,6 +30,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# A full path, as the shared task passes it, is named from the project in the messages.
+if ([IO.Path]::IsPathRooted($Shared)) {
+    $Shared = [IO.Path]::GetRelativePath((Resolve-Path -LiteralPath $Path).ProviderPath, [IO.Path]::GetFullPath($Shared)) -replace '\\', '/'
+}
 $versionFile = Join-Path -Path $Path -ChildPath $Shared -AdditionalChildPath 'VERSION'
 if (-not (Test-Path -LiteralPath $versionFile)) {
     throw "No shared-tooling VERSION at $versionFile."

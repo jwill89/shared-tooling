@@ -4,7 +4,7 @@ name: Docs and repo files
 #   - its Markdown, with the shared markdownlint config (through the repo's
 #     .markdownlint-cli2.jsonc);
 #   - its .editorconfig and .gitattributes, still matching shared-tooling/repo above
-#     their project marker;
+#     their project marker, and its CLAUDE.md in the standard form, with AGENTS.md beside it;
 #   - its shared workflow refs, naming the release its submodule holds;
 #   - its changelogs: every version heading, and Unreleased, has its compare link.
 # Go-only repos need no Node locally for the Markdown: the VS Code extension lints in
@@ -21,7 +21,7 @@ on:
         type: string
         default: 0.24.0
       repo-files:
-        description: Check .editorconfig and .gitattributes against shared-tooling/repo.
+        description: Check .editorconfig and .gitattributes against shared-tooling/repo, and CLAUDE.md's form.
         type: boolean
         default: true
       shared-path:

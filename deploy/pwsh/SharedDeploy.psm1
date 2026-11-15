@@ -307,6 +307,30 @@ function Test-FileInUse {
     }
 }
 
+function Test-WindowsName {
+    <#
+    .SYNOPSIS
+    True when a path from the host, its parts split by /, can name a file on Windows: no part holds < > : " \ | ? * or a control character, ends in a dot or a space, or is a device name such as CON or COM1.
+    #>
+    param([string]$Path)
+    foreach ($part in $Path.Split('/')) {
+        if (-not $part -or $part -match '[<>:"\\|?*\x00-\x1f]' -or $part -match '[. ]$' -or $part -match '^(?i:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\..*)?$') { return $false }
+    }
+    $true
+}
+
+function Format-ByteSize {
+    <#
+    .SYNOPSIS
+    A size for a message: bytes, KB, MB or GB.
+    #>
+    param([long]$Bytes)
+    if ($Bytes -ge 1GB) { return '{0:N1} GB' -f ($Bytes / 1GB) }
+    if ($Bytes -ge 1MB) { return '{0:N1} MB' -f ($Bytes / 1MB) }
+    if ($Bytes -ge 1KB) { return '{0:N0} KB' -f ($Bytes / 1KB) }
+    "$Bytes bytes"
+}
+
 function Join-ProcessArgument {
     <#
     .SYNOPSIS
@@ -1743,6 +1767,70 @@ function Format-RemoteScript {
         $text = $text.Replace("__${key}__", $replacement).Replace("{{$key}}", $replacement)
     }
     $text
+}
+
+function Expand-DeployTemplate {
+    <#
+    .SYNOPSIS
+    Fills a template the deploy ships, such as a cron file, a unit or a vhost, with the deploy's values, and writes the copy Compress-DeployArchive packs; refuses one with a placeholder left unfilled.
+
+    .DESCRIPTION
+    A file the deploy installs on the host is a template in the repo, with a placeholder
+    wherever a host-specific value goes: the web root, the service user, the port, the
+    certificate. This fills them with Format-RemoteScript ({{NAME}} and __NAME__, values
+    inserted literally), drops every carriage return, and ends the text with one newline.
+    Any {{NAME}}, or __NAME__ in capital letters, digits and _, still in the text then
+    fails the deploy before anything is packed, naming each one, so a file never reaches
+    the host with a placeholder in it.
+
+    The copy is written to -Destination, by default in a folder of its own under the temp
+    folder, named for this PowerShell process, and its path is returned, so it goes into
+    Compress-DeployArchive's -Content under the name the step reads (Install-HostConfig's
+    -CronFile and -Unit, or a -Vhost).
+
+    .PARAMETER Path
+    The template, such as deploy\example.cron in the release's checkout.
+
+    .PARAMETER Value
+    Each placeholder's name and its value, usually from Resolve-DeploySetting.
+
+    .PARAMETER Destination
+    Where the filled copy goes; by default a file of the template's name in a folder of its
+    own under the temp folder.
+
+    .EXAMPLE
+    $values = @{ WEB_ROOT = $settings.WebRoot; SERVICE_USER = $settings.ServiceUser }
+    $archive = Compress-DeployArchive -Content ([ordered]@{
+            'public'                       = Join-Path $tree 'public'
+            'deploy/example.cron'          = Expand-DeployTemplate -Path (Join-Path $tree 'deploy\example.cron') -Value $values
+            'deploy/example-queue.service' = Expand-DeployTemplate -Path (Join-Path $tree 'deploy\example-queue.service') -Value $values
+        })
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory, Position = 0)]
+        [string]$Path,
+
+        [Parameter(Mandatory, Position = 1)]
+        [hashtable]$Value,
+
+        [string]$Destination
+    )
+    $source = (Resolve-Path -LiteralPath $Path).ProviderPath
+    $text = (Format-RemoteScript -Template (Get-Content -Raw -LiteralPath $source) -Value $Value).TrimEnd("`n") + "`n"
+    $left = @([regex]::Matches($text, '\{\{[A-Za-z0-9_]+\}\}|__[A-Z][A-Z0-9_]*__') | ForEach-Object { $_.Value } | Select-Object -Unique)
+    if ($left) {
+        throw "$Path still has placeholders after filling: $($left -join ', '). Give each one a value, so the file never reaches the host with one in it."
+    }
+    if (-not $Destination) {
+        $folder = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ('shared-deploy-{0}' -f $PID) -AdditionalChildPath (Get-PathKey -Value $source)
+        $Destination = Join-Path -Path $folder -ChildPath (Split-Path -Path $source -Leaf)
+    }
+    $parent = Split-Path -Path $Destination -Parent
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) { $null = New-Item -ItemType Directory -Path $parent -Force }
+    [System.IO.File]::WriteAllText($Destination, $text, [System.Text.UTF8Encoding]::new($false))
+    $Destination
 }
 
 #endregion
@@ -5136,6 +5224,66 @@ function Assert-UnitPath {
     }
 }
 
+function Assert-ExcludePattern {
+    <#
+    .SYNOPSIS
+    Throws unless each -Exclude pattern is one that tar and Sync-LiveFolder read alike: a name, or a path inside the folder, on one line, with no empty, . or .. part, and a valid wildcard.
+    #>
+    param([string[]]$Pattern)
+    foreach ($item in $Pattern) {
+        $parts = "$item" -split '/'
+        if (-not $item -or $item -match '[\r\n\0]' -or @($parts | Where-Object { $_ -in '', '.', '..' }).Count) {
+            throw "Exclude pattern '$item' must be a name, such as cache or *.tmp, or a path inside the folder, such as cache/thumbs: on one line, with no empty, . or .. part."
+        }
+        try {
+            $null = 'x' -clike $item
+        } catch {
+            throw "Exclude pattern '$item' is not a valid wildcard: $($_.Exception.Message)"
+        }
+    }
+}
+
+function Test-ExcludedPath {
+    <#
+    .SYNOPSIS
+    True when a path inside a folder (with / between its parts) matches an -Exclude pattern: a name matches any part of the path, and a path matches its first parts, so a folder's contents go with it. * and ? never cross a /.
+    #>
+    param([string]$Path, [string[]]$Pattern)
+    $have = $Path.Split('/')
+    foreach ($item in $Pattern) {
+        $want = $item.Split('/')
+        if ($want.Count -eq 1) {
+            foreach ($part in $have) { if ($part -clike $item) { return $true } }
+        } elseif ($have.Count -ge $want.Count) {
+            $all = $true
+            for ($i = 0; $i -lt $want.Count; $i++) {
+                if ($have[$i] -cnotlike $want[$i]) { $all = $false; break }
+            }
+            if ($all) { return $true }
+        }
+    }
+    $false
+}
+
+function Get-TarExcludeArgument {
+    <#
+    .SYNOPSIS
+    GNU tar's options for -Exclude patterns, read as Test-ExcludedPath reads them, for an archive whose entries start with the folder's own name (-Base). They come before the folder on tar's command line, since tar applies them only to what follows.
+    #>
+    param([string]$Base, [string[]]$Pattern)
+    if (-not $Pattern) { return }
+    '--no-wildcards-match-slash'
+    foreach ($item in $Pattern) {
+        if ($item.Contains('/')) {
+            '--anchored'
+            "--exclude=$Base/$item"
+        } else {
+            '--no-anchored'
+            "--exclude=$item"
+        }
+    }
+}
+
 function Install-BackupTimer {
     <#
     .SYNOPSIS
@@ -5184,10 +5332,14 @@ function Install-BackupTimer {
     else in -Directory is touched. Every archive is a whole copy of the folder, so a large
     folder may want a smaller -Keep. -Directory must sit outside -Folder and outside the
     web root, and the service writes only there: it reads -Folder under ProtectSystem=strict.
+    -Exclude leaves out what needn't be kept, such as a cache the site rebuilds: a name
+    leaves out every file or folder of that name inside the folder, and a path leaves out
+    that file or folder from the folder's top. The job's header lists them.
     To put the folder back, stop what writes to it, move it aside, and unpack the archive
     beside it as root, which keeps every file's owner:
       mv <Folder> <Folder>.before-restore && tar -xzf <archive> -C <Folder's parent>
-    The job's header on the host gives the line with its paths.
+    The job's header on the host gives the line with its paths. A folder too large to
+    archive on the host every day is pulled to the dev machine instead (Sync-LiveFolder).
 
     Call it after the smoke check, so a deploy that rolls back changes no backup. The
     service carries the standard hardening (ProtectSystem=strict, UMask=0077 and the rest)
@@ -5220,6 +5372,11 @@ function Install-BackupTimer {
 
     .PARAMETER Keep
     Days of copies kept: 28 unless set.
+
+    .PARAMETER Exclude
+    What a folder's archive leaves out: names, such as cache or *.tmp, matched against
+    every file and folder inside it, or paths from its top, such as cache/thumbs. * and ?
+    match within one name.
 
     .PARAMETER Command
     The project's own backup command, run instead of the shared job (such as
@@ -5269,6 +5426,9 @@ function Install-BackupTimer {
 
     .EXAMPLE
     Install-BackupTimer -Name 'example-media' -Folder '/var/www/example.com/media' -Directory '/var/backups/example/media' -Owner 'www-data' -Keep 14
+
+    .EXAMPLE
+    Install-BackupTimer -Name 'example-media' -Folder '/var/www/example.com/media' -Directory '/var/backups/example/media' -Owner 'www-data' -Exclude 'cache', '*.tmp'
     #>
     [CmdletBinding(DefaultParameterSetName = 'Shared')]
     [OutputType([string])]
@@ -5301,6 +5461,9 @@ function Install-BackupTimer {
         [Parameter(ParameterSetName = 'Folder')]
         [ValidateRange(1, 3650)]
         [int]$Keep = 28,
+
+        [Parameter(ParameterSetName = 'Folder')]
+        [string[]]$Exclude = @(),
 
         [Parameter(Mandatory, ParameterSetName = 'Command')]
         [ValidatePattern('^/[^\r\n%]+$')]
@@ -5440,6 +5603,11 @@ echo "Backup: $dest ($(du -h "$dest" | cut -f1) compressed, $size uncompressed);
         Assert-UnitPath -Value $Directory -What 'Directory'
         $Directory = $Directory.TrimEnd('/')
         if ($Directory -eq $Folder -or $Directory.StartsWith("$Folder/")) { throw "Directory '$Directory' must sit outside the folder it backs up, '$Folder'." }
+        Assert-ExcludePattern -Pattern $Exclude
+        $base = ($Folder -split '/')[-1]
+        foreach ($item in $Exclude) {
+            if (-not $item.Contains('/') -and $base -clike $item) { throw "Exclude pattern '$item' matches the folder's own name, '$base', so the archive would hold nothing." }
+        }
         if (-not $PSBoundParameters.ContainsKey('Prefix')) { $Prefix = "$Name-" }
         if (-not $PSBoundParameters.ContainsKey('Suffix')) { $Suffix = '.tar' }
         if (-not $ReadWritePath) { $ReadWritePath = @($Directory) }
@@ -5491,8 +5659,14 @@ echo "Backup: $dest ($(du -h "$dest" | cut -f1) compressed, $size uncompressed, 
         $jobLines.Add("# Each day's archive of $Folder is $Directory/$Prefix<YYYY-MM-DD>$Suffix.gz (UTC), $Keep days kept.")
         $jobLines.Add('# To put one back, stop what writes to the folder, run this line as root, then start it again:')
         $jobLines.Add("#   mv $Folder $Folder.before-restore && tar -xzf $Directory/$Prefix<YYYY-MM-DD>$Suffix.gz -C $parent")
+        if ($Exclude) { $jobLines.Add("# The archive leaves out: $($Exclude -join ', ').") }
         $jobLines.Add('set -euo pipefail')
         foreach ($key in $jobVariable.Keys) { $jobLines.Add("$key=$(ConvertTo-ShellLiteral -Value $jobVariable[$key])") }
+        if ($Exclude) {
+            # The patterns go before the folder on tar's line; a job without them stays as it was.
+            $jobLines.Add('excludes=(' + ((Get-TarExcludeArgument -Base $base -Pattern $Exclude | ForEach-Object { ConvertTo-ShellLiteral -Value $_ }) -join ' ') + ')')
+            $jobBody = $jobBody.Replace('-czf "$part" "$(basename "$src")"', '-czf "$part" "${excludes[@]}" "$(basename "$src")"')
+        }
         $jobLines.Add($jobBody)
         $jobText = ($jobLines -join "`n") -replace "`r", ''
         $execStart = $job
@@ -5856,6 +6030,421 @@ echo "archive-ok $(du -h "$HOME/$archive" | cut -f1)"
     }
 }
 
+function Sync-LiveFolder {
+    <#
+    .SYNOPSIS
+    Keeps a local copy of a large live folder, such as a site's media, fetching only the files that are new or changed on the host; nothing is archived there, and nothing here is deleted unless -Delete says so.
+
+    .DESCRIPTION
+    For a folder only the host holds that is too large to archive on the host every day
+    (Install-BackupTimer -Folder): its copy off the host is this mirror on the dev machine,
+    brought up to date at each deploy. On the held connection:
+      - the host lists the folder's regular files, each with its size and modification
+        time, as -Owner through runuser when given;
+      - each is compared with its copy under -Destination: one missing here, or of another
+        size or time, is fetched. -Exclude leaves files out, as Install-BackupTimer's does;
+      - the files go in batches of up to -BatchSize. For each, the list of names is sent,
+        the host streams those files as one tar straight to this machine, with nothing
+        written on the host, and the host's SHA-256 of each file is checked against the
+        copy that arrived. Only a copy that matches takes its place, with the host's
+        modification time; a file that changed or went while it was read is left for the
+        next pull. A batch has 30 minutes;
+      - a file here that the host no longer has stays, and is counted, unless -Delete
+        removes it (and any folder that leaves empty).
+    Each batch is in place before the next starts, so a pull cut short keeps what it
+    fetched and the next carries on from there. The tar is pax, so a name keeps its UTF-8.
+    A name Windows can't hold (a : or ?, a trailing dot, CON) or one that differs from
+    another only in case is skipped and listed. Links and empty folders are not copied.
+    The copy holds live files: keep -Destination git-ignored and on this machine.
+
+    Returns Destination, Files (on the host, after -Exclude), Fetched, Bytes (fetched),
+    Failed (changed or gone while read), Skipped, Extra (here but not on the host) and
+    Deleted.
+
+    .PARAMETER Folder
+    The live folder on the host.
+
+    .PARAMETER Destination
+    The local folder the copy is kept in, such as devdata\media.
+
+    .PARAMETER Owner
+    user or user:group to read the folder as, through runuser, such as www-data. The group
+    is passed to runuser only when given.
+
+    .PARAMETER Exclude
+    What the copy leaves out: names, such as cache or *.tmp, matched against every file
+    and folder inside it, or paths from its top, such as cache/thumbs. * and ? match within
+    one name. A local file that matches is never counted or deleted.
+
+    .PARAMETER BatchSize
+    The most a batch fetches, in bytes: 256MB unless given. A larger file goes alone.
+
+    .PARAMETER Delete
+    Delete each local file the host no longer has, once the fetch has finished.
+
+    .PARAMETER Connection
+    The connection to use; by default the one Open-DeployConnection stored.
+
+    .PARAMETER NoRetry
+    Never retry, even after a dropped connection.
+
+    .EXAMPLE
+    if (-not $NoDbPull) { $null = Sync-LiveFolder -Folder '/var/www/example.com/media' -Destination (Join-Path $repoRoot 'devdata\media') -Owner 'www-data' -Exclude 'cache' }
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Folder,
+
+        [Parameter(Mandatory)]
+        [string]$Destination,
+
+        [string]$Owner,
+
+        [string[]]$Exclude = @(),
+
+        [ValidateRange(1MB, 64GB)]
+        [long]$BatchSize = 256MB,
+
+        [switch]$Delete,
+
+        [object]$Connection,
+
+        [switch]$NoRetry
+    )
+    $Folder = $Folder.TrimEnd('/')
+    Assert-RemotePath -Value $Folder -What 'Folder'
+    Assert-ExcludePattern -Pattern $Exclude
+    $user, $group = Split-Owner -Owner $Owner
+    if ($Owner -notmatch ':') { $group = '' }
+    $active = Get-ActiveConnection -Connection $Connection
+    $list = ".shared-deploy/$(Get-PathKey -Value $Folder).sync.list"
+    $owners = [ordered]@{ src = $Folder; snapshot_user = $user; snapshot_group = $group }
+
+    Write-Step "Listing $Folder on the host..."
+    $listing = @'
+if [ ! -d "$src" ]; then echo no-folder; exit 0; fi
+for t in find tar sha256sum xargs; do
+  if ! command -v "$t" >/dev/null; then echo "$t is not installed on the host." >&2; exit 3; fi
+done
+nl=$(printf '\nx')
+nl=${nl%x}
+tab=$(printf '\t')
+echo folder-ok
+# A line for each regular file: its size, its modification time and its path inside the
+# folder. A name holding a newline or a tab can't go on a line, so it is only counted. find
+# starts from / since -Owner may not be able to enter the SSH user's home, where this runs.
+cd /
+if ! snapshot_as find "$src" -type f \( -name "*$nl*" -o -name "*$tab*" \) -printf 'odd\n' -o -type f -printf 'f\t%s\t%T@\t%P\n'; then
+  echo "find could not read all of $src as ${snapshot_user:-$(id -un)}." >&2
+  exit 4
+fi
+'@
+    $result = Invoke-RemoteCore -Connection $active -Script (Join-ShellScript -Variable $owners -Body @((Get-SnapshotShell), $listing)) -NoRetry:$NoRetry
+    if ($result.ExitCode -ne 0) {
+        if (-not $result.Started) { throw (Get-NotStartedMessage -Result $result) }
+        Write-RemoteLine -Line @($result.Lines | Where-Object { -not $_.StartsWith("f`t") } | Select-Object -Last 20)
+        throw "Listing $Folder on the host failed (exit $($result.ExitCode)); nothing here was changed."
+    }
+    if ($result.Lines -notcontains 'folder-ok') {
+        Write-Host "    No folder at $Folder on the host; skipping the pull."
+        return
+    }
+
+    $culture = [System.Globalization.CultureInfo]::InvariantCulture
+    $remote = [System.Collections.Generic.List[object]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $skipped = [System.Collections.Generic.List[string]]::new()
+    $odd = 0
+    foreach ($line in $result.Lines) {
+        if ($line -ceq 'odd') { $odd++; continue }
+        if (-not $line.StartsWith("f`t")) { continue }
+        $parts = $line.Split("`t", 4)
+        if ($parts.Count -ne 4) { continue }
+        $rel = $parts[3]
+        if ($Exclude -and (Test-ExcludedPath -Path $rel -Pattern $Exclude)) { continue }
+        if (-not (Test-WindowsName -Path $rel) -or -not $seen.Add($rel)) {
+            $skipped.Add($rel)
+            continue
+        }
+        $remote.Add([pscustomobject]@{
+                Path = $rel
+                Size = [long]$parts[1]
+                Time = [long][math]::Floor([double]::Parse($parts[2], $culture))
+            })
+    }
+
+    if (-not (Test-Path -LiteralPath $Destination)) { $null = New-Item -ItemType Directory -Path $Destination -Force }
+    $root = (Resolve-Path -LiteralPath $Destination).ProviderPath
+    $staging = Join-Path -Path $root -ChildPath '.shared-deploy-sync'
+    if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
+    # The local copies by their path inside the folder, as the host names them; Windows
+    # matches names whatever their case, and so does this.
+    $local = @{}
+    foreach ($file in [System.IO.Directory]::EnumerateFiles($root, '*', [System.IO.SearchOption]::AllDirectories)) {
+        $rel = [System.IO.Path]::GetRelativePath($root, $file).Replace('\', '/')
+        if (-not $rel.StartsWith('.shared-deploy-sync/')) { $local[$rel] = $file }
+    }
+    $fetch = [System.Collections.Generic.List[object]]::new()
+    $total = [long]0
+    foreach ($entry in $remote) {
+        $have = $local[$entry.Path]
+        if ($have) {
+            $info = [System.IO.FileInfo]::new($have)
+            if ($info.Length -eq $entry.Size -and ([DateTimeOffset]$info.LastWriteTimeUtc).ToUnixTimeSeconds() -eq $entry.Time) { continue }
+        }
+        $fetch.Add($entry)
+        $total += $entry.Size
+    }
+    Write-Ok "$($remote.Count) files on the host; $($fetch.Count) to fetch ($(Format-ByteSize -Bytes $total))."
+
+    $batches = [System.Collections.Generic.List[object]]::new()
+    $batch = [System.Collections.Generic.List[object]]::new()
+    $size = [long]0
+    foreach ($entry in $fetch) {
+        if ($batch.Count -and $size + $entry.Size -gt $BatchSize) {
+            $batches.Add($batch)
+            $batch = [System.Collections.Generic.List[object]]::new()
+            $size = 0
+        }
+        $batch.Add($entry)
+        $size += $entry.Size
+    }
+    if ($batch.Count) { $batches.Add($batch) }
+
+    # The host's side of a batch, as plink's command: tar reads the names from the list sent
+    # just before, as -Owner, and writes the files to standard output. tar's exit 1 (a file
+    # changed as it was read) still leaves a whole archive; the checksums catch that file.
+    $stream = @(
+        "src=$(ConvertTo-ShellLiteral -Value $Folder)"
+        "u=$(ConvertTo-ShellLiteral -Value $user)"
+        "g=$(ConvertTo-ShellLiteral -Value $group)"
+        "list=`"`$HOME`"/$(ConvertTo-ShellLiteral -Value $list)"
+        'cd /'
+        'set -- tar --format=pax -C "$src" -cf - --ignore-failed-read --null --verbatim-files-from -T -'
+        'if [ -n "$u" ] && [ "$(id -un)" != "$u" ]; then set -- runuser -u "$u" ${g:+-g "$g"} -- "$@"; fi'
+        '"$@" < "$list"'
+        'rc=$?'
+        'if [ "$rc" -gt 1 ]; then echo "tar could not read $src (exit $rc)." >&2; exit "$rc"; fi'
+    ) -join '; '
+    $hashScript = Join-ShellScript -Variable ([ordered]@{ src = $Folder; list = $list; snapshot_user = $user; snapshot_group = $group }) -Body @((Get-SnapshotShell), @'
+cd "$src"
+snapshot_as xargs -0 -r sha256sum -- < "$HOME/$list" || true
+rm -f "$HOME/$list"
+'@)
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    $tar = Resolve-TarTool
+    $fetched = 0
+    $fetchedBytes = [long]0
+    $failed = [System.Collections.Generic.List[string]]::new()
+    $sent = $false
+    try {
+        for ($b = 0; $b -lt $batches.Count; $b++) {
+            $batch = $batches[$b]
+            $label = "batch $($b + 1) of $($batches.Count)"
+            $batchBytes = [long]0
+            foreach ($entry in $batch) { $batchBytes += $entry.Size }
+            Write-Step "Fetching $label`: $($batch.Count) $(if ($batch.Count -eq 1) { 'file' } else { 'files' }), $(Format-ByteSize -Bytes $batchBytes)..."
+            $files = Join-Path -Path $staging -ChildPath 'files'
+            $null = New-Item -ItemType Directory -Path $files -Force
+            $listFile = Join-Path -Path $staging -ChildPath 'list'
+            [System.IO.File]::WriteAllText($listFile, (($batch | ForEach-Object { $_.Path }) -join "`0") + "`0", $utf8)
+            $upload = Invoke-Upload -Path $listFile -Destination $list -Activity 'Sending the file list' -Connection $active -NoRetry:$NoRetry
+            $sent = $true
+            if (-not $upload.Ok) { throw "The list of files for $label could not be sent: $($upload.Err)" }
+            $archive = Join-Path -Path $staging -ChildPath 'batch.tar'
+            $download = Invoke-StreamWithRetry -NoRetry:$NoRetry -Stream @{
+                Connection     = $active
+                Command        = $stream
+                OutputFile     = $archive
+                Activity       = "Fetching $Folder"
+                Status         = $label
+                TimeoutSeconds = 1800
+            }
+            if (-not $download.Ok) { throw "The files of $label could not be fetched: $($download.Err)" }
+            $sums = Invoke-RemoteCore -Connection $active -Script $hashScript -NoRetry:$NoRetry
+            if ($sums.ExitCode -ne 0) {
+                if (-not $sums.Started) { throw (Get-NotStartedMessage -Result $sums) }
+                throw "The host's checksums for $label could not be read (exit $($sums.ExitCode))."
+            }
+            $hashes = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::Ordinal)
+            foreach ($line in $sums.Lines) {
+                if ($line -match '^([0-9a-f]{64})  (.+)$') { $hashes[$Matches[2]] = $Matches[1] }
+            }
+            $out = @(& $tar -x -f $archive -C $files 2>&1)
+            if ($LASTEXITCODE -ne 0) { $out | Select-Object -Last 5 | ForEach-Object { Write-Host "    $_" } }
+            foreach ($entry in $batch) {
+                $relative = $entry.Path.Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+                $staged = Join-Path -Path $files -ChildPath $relative
+                $want = $null
+                if (-not $hashes.TryGetValue($entry.Path, [ref]$want) -or -not (Test-Path -LiteralPath $staged -PathType Leaf) -or
+                    (Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash -ne $want) {
+                    $failed.Add($entry.Path)
+                    continue
+                }
+                $target = Join-Path -Path $root -ChildPath $relative
+                try {
+                    $parent = Split-Path -Path $target -Parent
+                    if (-not (Test-Path -LiteralPath $parent)) { $null = New-Item -ItemType Directory -Path $parent -Force }
+                    [System.IO.File]::Move($staged, $target, $true)
+                    $fetched++
+                    $fetchedBytes += $entry.Size
+                } catch {
+                    Write-Warning "$target could not be written: $($_.Exception.Message)"
+                    $failed.Add($entry.Path)
+                }
+            }
+            Remove-Item -LiteralPath $files, $archive, $listFile -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    } finally {
+        if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue }
+        if ($sent) {
+            $cleanup = Invoke-RemoteCore -Connection $active -Script "rm -f `"`$HOME`"/$(ConvertTo-ShellLiteral -Value $list)" -NoRetry:$NoRetry
+            if ($cleanup.ExitCode -ne 0) { Write-Warning "The list of files on the host could not be removed: ~/$list" }
+        }
+    }
+
+    $extra = @($local.Keys | Where-Object { -not $seen.Contains($_) -and -not ($Exclude -and (Test-ExcludedPath -Path $_ -Pattern $Exclude)) } | Sort-Object)
+    $deleted = 0
+    if ($extra -and $Delete) {
+        $emptied = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($rel in $extra) {
+            Remove-Item -LiteralPath $local[$rel] -Force
+            $deleted++
+            for ($dir = Split-Path -Path $local[$rel] -Parent; $dir.Length -gt $root.Length; $dir = Split-Path -Path $dir -Parent) { $null = $emptied.Add($dir) }
+        }
+        # Folders left empty go too, deepest first; the destination itself stays.
+        foreach ($dir in $emptied | Sort-Object -Property Length -Descending) {
+            if ((Test-Path -LiteralPath $dir) -and -not [System.IO.Directory]::EnumerateFileSystemEntries($dir).GetEnumerator().MoveNext()) { Remove-Item -LiteralPath $dir -Force }
+        }
+        Write-Ok "Deleted $deleted files the host no longer has."
+    } elseif ($extra) {
+        Write-Warning "$($extra.Count) files in $root are no longer on the host and were kept (-Delete removes them): $(($extra | Select-Object -First 5) -join ', ')$(if ($extra.Count -gt 5) { ', ...' })"
+    }
+    if ($skipped.Count -or $odd) {
+        $names = if ($skipped.Count) { ': ' + (($skipped | Select-Object -First 5) -join ', ') + $(if ($skipped.Count -gt 5) { ', ...' }) } else { '' }
+        $oddNote = if ($odd) { " $odd more have a newline or a tab in their name." } else { '' }
+        Write-Warning "$($skipped.Count) files on the host have names Windows can't hold, or that differ from another only in case, and were skipped$names.$oddNote"
+    }
+    if ($failed.Count) {
+        Write-Warning "$($failed.Count) files changed or went while they were read, and are left for the next pull: $(($failed | Select-Object -First 5) -join ', ')$(if ($failed.Count -gt 5) { ', ...' })"
+    }
+    Write-Ok "Copy of $Folder in $root`: $fetched fetched ($(Format-ByteSize -Bytes $fetchedBytes)), $($remote.Count - $fetch.Count) already current (it holds live files; keep it local)."
+    [pscustomobject]@{
+        Destination = $root
+        Files       = $remote.Count
+        Fetched     = $fetched
+        Bytes       = $fetchedBytes
+        Failed      = $failed.Count
+        Skipped     = $skipped.Count + $odd
+        Extra       = $extra.Count
+        Deleted     = $deleted
+    }
+}
+
+#endregion
+
+#region Service memory
+
+function Get-ServiceMemory {
+    <#
+    .SYNOPSIS
+    Reads what systemd services use on the host: their memory now, the most they have held since they started, and their cap. Changes nothing.
+
+    .DESCRIPTION
+    For setting a service's MemoryMax= from its own use rather than a guess. systemd's
+    MemoryPeak (the control group's memory.peak where systemd doesn't show it) is the most
+    the service's processes have held at once since it last started, so read it after a
+    stretch of normal use, before the next deploy restarts the service and starts it
+    again. One remote call on the held connection.
+
+    Prints a line for each service and returns, for each: Service, Since (when it last
+    started), Days (since then), Current, Peak and Max in bytes (Max empty when there is no
+    cap, Current and Peak empty when systemd keeps no memory figures for it), and Suggested,
+    twice the peak rounded up to a multiple of 16M, as MemoryMax= takes it.
+
+    .PARAMETER ServiceName
+    The services, such as example or example-worker.service.
+
+    .PARAMETER Connection
+    The connection to use; by default the one Open-DeployConnection stored.
+
+    .PARAMETER NoRetry
+    Never retry, even after a dropped connection.
+
+    .EXAMPLE
+    $settings = Resolve-DeploySetting -ConfigPath .\scripts\deploy.config.ps1 -Value @{} -Required VpsHost, VpsUser, KeyPath, ServiceName
+    $null = $settings | Open-DeployConnection
+    try { Get-ServiceMemory -ServiceName $settings.ServiceName | Format-Table } finally { Close-DeployConnection }
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory, Position = 0)]
+        [ValidatePattern('^[A-Za-z0-9_.@-]+$')]
+        [string[]]$ServiceName,
+
+        [object]$Connection,
+
+        [switch]$NoRetry
+    )
+    $units = @($ServiceName | ForEach-Object { if ($_ -match '\.service$') { $_ } else { "$_.service" } })
+    $body = @'
+for s in $units; do
+  echo "unit=$s"
+  systemctl show --timestamp=unix "$s" -p LoadState -p ActiveState -p ActiveEnterTimestamp -p MemoryCurrent -p MemoryPeak -p MemoryMax
+  cg=$(systemctl show "$s" -p ControlGroup --value)
+  if [ -n "$cg" ] && [ -r "/sys/fs/cgroup$cg/memory.peak" ]; then echo "CgroupPeak=$(cat "/sys/fs/cgroup$cg/memory.peak")"; fi
+done
+'@
+    $lines = Invoke-Remote -Script (Join-ShellScript -Variable ([ordered]@{ units = $units -join ' ' }) -Body @($body)) -Connection $Connection -NoRetry:$NoRetry
+    $now = [DateTimeOffset]::UtcNow
+    $read = $null
+    $found = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($line in $lines) {
+        if ($line -notmatch '^([A-Za-z]+)=(.*)$') { continue }
+        if ($Matches[1] -eq 'unit') {
+            $read = @{ unit = $Matches[2] }
+            $found.Add($read)
+        } elseif ($read) {
+            $read[$Matches[1]] = $Matches[2]
+        }
+    }
+    # A figure systemd reports as a number of bytes; "[not set]", "infinity" and the rest are empty.
+    $bytes = { param($Text) if ("$Text" -match '^\d+$') { [long]$Text } else { $null } }
+    foreach ($item in $found) {
+        $name = $item.unit -replace '\.service$', ''
+        if ($item.LoadState -ne 'loaded') {
+            Write-Warning "$name is not a service on the host ($($item.LoadState))."
+            continue
+        }
+        $peak = & $bytes $item.MemoryPeak
+        if ($null -eq $peak) { $peak = & $bytes $item.CgroupPeak }
+        $since = if ($item.ActiveEnterTimestamp -match '^@(\d+)$') { [DateTimeOffset]::FromUnixTimeSeconds([long]$Matches[1]) } else { $null }
+        $days = if ($since -and $item.ActiveState -eq 'active') { [math]::Round(($now - $since).TotalDays, 1) } else { $null }
+        $result = [pscustomobject]@{
+            Service   = $name
+            Since     = $since
+            Days      = $days
+            Current   = & $bytes $item.MemoryCurrent
+            Peak      = $peak
+            Max       = & $bytes $item.MemoryMax
+            Suggested = if ($peak) { '{0}M' -f ([math]::Ceiling(2 * $peak / 16MB) * 16) } else { $null }
+        }
+        if ($item.ActiveState -ne 'active') {
+            Write-Warning "$name is $($item.ActiveState), so its figures say nothing about normal use."
+        } elseif ($null -eq $peak) {
+            Write-Warning "$name has no memory figures (systemd's memory accounting is off for it)."
+        } else {
+            $cap = if ($null -eq $result.Max) { 'no cap' } else { "cap $(Format-ByteSize -Bytes $result.Max)" }
+            $over = if ($null -eq $days) { 'since it started' } elseif ($days -ge 1) { "over $days days" } else { "over $([math]::Round(($now - $since).TotalHours, 1)) hours" }
+            Write-Ok "$name`: peak $(Format-ByteSize -Bytes $peak) $over, $(Format-ByteSize -Bytes ([long]$result.Current)) now, $cap; twice the peak is MemoryMax=$($result.Suggested)."
+        }
+        $result
+    }
+}
+
 #endregion
 
 #region Smoke check
@@ -6113,6 +6702,7 @@ Export-ModuleMember -Alias 'Fail' -Function @(
     'Invoke-Remote'
     'Invoke-RemoteStep'
     'Format-RemoteScript'
+    'Expand-DeployTemplate'
     'Compress-DeployArchive'
     'Invoke-Upload'
     'Send-File'
@@ -6145,5 +6735,7 @@ Export-ModuleMember -Alias 'Fail' -Function @(
     'Install-BackupTimer'
     'Copy-LiveDatabase'
     'Copy-LiveFolder'
+    'Sync-LiveFolder'
+    'Get-ServiceMemory'
     'Invoke-SmokeCheck'
 )

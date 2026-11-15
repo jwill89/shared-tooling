@@ -8,6 +8,40 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Added
+
+- `Sync-LiveFolder` keeps a copy on the dev machine of a host-only folder too large to archive on the host: only new and changed files are fetched, each checked against the host's SHA-256, nothing is written on the host, and no local file is deleted without `-Delete`.
+- `Install-BackupTimer -Exclude` leaves files and folders out of a folder's daily archive, by name or by path from the folder's top.
+- `Expand-DeployTemplate` fills a cron file, unit or vhost template with the deploy's values for `Compress-DeployArchive`, and stops the deploy while a placeholder is left unfilled.
+- `Get-ServiceMemory` reports a service's memory on the host, now and at its peak since it started, with its cap and twice the peak; it changes nothing.
+- `task shared:docs:check` runs everything `docs.yml` checks, with `CHANGELOGS=` for a second CHANGELOG, for a project's `task check`.
+- `task shared:web:specs -- --fix` writes a front end's `tsconfig.vitest.json`, or adds the shared base to its `extends`.
+- `@jwill89/lint-web/js` exports `tseslint`, for a plain-JavaScript site under `checkJs` that adds typescript-eslint's type-checked rules.
+- The shared `.editorconfig` indents Python by four spaces.
+- `README.md`: a `check` task to start from, covering the coverage floors, the specs' type-check, the generated files and `shared:docs:check`.
+- `standards/README.md`: one line each of a departure, a gap and a gap waiting on the owner, and how an older "Where this project departs" section splits into the two lists, with Since dates.
+- `standards/docs-and-agents.md`: a worked example of an app and a plugin with a CHANGELOG and tag prefix each, and a `Rollout complete, YYYY-MM-DD.` line that closes a finished rollout plan.
+- `standards/deploy-and-ops.md`: what makes a folder host-only, the size `docs/ops.md` names above which a folder is copied to the dev machine instead of archived on the host, and `MemoryMax=` set at about twice the service's measured peak, recorded with the date.
+- `standards/deploy-and-ops.md`: a static, PHP or Grav site with nothing on the host to back up may write one "Backups and restore" section in `docs/ops.md` in place of three, from a template.
+
+### Changed
+
+- `task shared:repo:check` and `docs.yml` fail unless `CLAUDE.md` is exactly the standard form and `AGENTS.md` exists; `task shared:repo:sync` writes a missing `CLAUDE.md`.
+- `task shared:update` writes each front end's missing `tsconfig.vitest.json`, adds the shared base to one that lacks it, and names what it leaves to fix by hand.
+- `task shared:changelog:links` names each version that was never tagged, to be tagged or have its heading dropped.
+- `task shared:version:check` reads the release from the shared-tooling copy its tasks run from, wherever the submodule sits.
+- `standards/README.md` and `standards/docs-and-agents.md`: a departure waiting on the owner's decision has no reason yet and is listed as not yet meeting the standards; departures go under "Departures from the standards".
+- `standards/docs-and-agents.md`: `PLAN.md` is kept only by an app with product decisions, and `docs/decisions.md` only once there is a dated line to write; a plugin or a static site may have neither.
+- `standards/deploy-and-ops.md`: in a public repo the app's port lives only in the deploy config, and `docs/ops.md` names the `AppPort` setting; `www-data` and the distro's other accounts may be written out, and so may local development ports.
+- `standards/code-style.md` and `standards/api-and-realtime.md`: a 4xx response is logged at info, never as an error, and without a stack trace.
+- `standards/packages.md` and `standards/testing.md`: Python scripts in a project that isn't a Python project get Dependabot and OSV-Scanner over their requirements, and no ruff, mypy or pytest.
+- `standards/testing.md` and `@jwill89/lint-web/tsconfig.vitest.json`: how an app with one `tsconfig.json` and its specs beside the code takes the specs' config.
+- `lint/web/README.md`: a static site's install, and the type-checked rules a `checkJs` site may add.
+
+### Fixed
+
+- `task shared:changelog:links` linked the version above one that was never tagged to a compare that found nothing; it now links that version to its own tag page.
+
 ## [2.10.2] - 2026-11-14
 
 ### Added

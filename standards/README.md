@@ -15,7 +15,7 @@ Where a current, accepted RFC covers what you are building, follow it, since it 
 ## How a repo uses this guide
 
 - Each repo holds shared-tooling as a submodule at `shared/`, so this folder is `shared/standards/` there.
-- A repo's `CLAUDE.md` imports two files, so Claude Code reads them at the start of every session, under a heading so markdownlint's first-line rule passes:
+- A repo's `CLAUDE.md` imports two files, so Claude Code reads them at the start of every session, under a heading so markdownlint's first-line rule passes. It is exactly this, which `task shared:repo:check` and `docs.yml` check, and `task shared:repo:sync` writes where it is missing (shared-tooling's own imports `@standards/README.md`, since that repo is the shared folder):
 
   ```markdown
   # CLAUDE.md
@@ -32,10 +32,35 @@ Where a current, accepted RFC covers what you are building, follow it, since it 
 ## Where a project may differ
 
 - Some rules leave the choice to each project and name the options, such as layout with Tailwind or with a stylesheet of object classes, or a cache header beyond the baseline. The project's `AGENTS.md` says which it takes.
-- A project that must break a rule says so in its `AGENTS.md`, with the reason: that is a departure. A departure counts only when it states its reason; without one, the rule here wins over anything older in the project's own docs.
-- Anything a project hasn't brought up to a rule yet goes in its `AGENTS.md` under a separate heading, "Not yet meeting the standards": one item per gap, saying what falls short of which rule and since when (`- Since 2026-11-13: no tsconfig.vitest.json for the specs (testing.md, Vitest).`). An item leaves the list in the change that closes it.
+- A project that must break a rule says so in its `AGENTS.md`, under "Departures from the standards", with the reason: that is a departure. A departure counts only when it states its reason; without one, the rule here wins over anything older in the project's own docs.
+- A reason says why the project differs as things stand. A departure that waits on a decision the owner hasn't made yet ("until the owner decides", "the owner's call") has no reason yet: it goes on the "Not yet meeting the standards" list until the owner decides, then becomes a departure with that decision as its reason, or is closed.
+- Anything a project hasn't brought up to a rule yet goes in its `AGENTS.md` under a separate heading, "Not yet meeting the standards": one item per gap, saying what falls short of which rule and since when. An item leaves the list in the change that closes it.
 - A project meets the standards when nothing it falls short in is missing from that list, and the list is empty. A departure that states its reason doesn't stop it meeting them.
 - A project that hasn't been rolled out onto shared-tooling yet still has old patterns. Its rollout brings it to these rules; until then, new code follows them.
+
+One line of each, as `AGENTS.md` writes them:
+
+```markdown
+## Departures from the standards
+
+- No end-to-end suite: the app has no UI of its own, and its one page is a redirect the smoke check already fetches (testing.md, End-to-end).
+
+## Not yet meeting the standards
+
+- Since 2026-11-13: no tsconfig.vitest.json for the specs (testing.md, Vitest).
+- Since 2026-11-14: the archive's muted text is below AA contrast; waiting on the owner's choice of colour (accessibility.md, Contrast).
+```
+
+The first is a departure: its reason holds today. The second is a gap the project can close. The third waits on the owner, so it is a gap too, and names what it waits for.
+
+### Moving an older AGENTS.md to the two lists
+
+An `AGENTS.md` written before these two lists keeps one "Where this project departs" section. The change that takes this rule splits it:
+
+1. Each item whose reason holds today moves, as it is, under "Departures from the standards".
+2. Each item with no reason, a reason that is really a plan ("moves in a follow-up", "not done yet"), or one that waits on the owner moves under "Not yet meeting the standards", rewritten as `- Since YYYY-MM-DD: <what falls short> (<file>, <section>).`
+3. The Since date is the day the item was first written down, which `git log -S'<a phrase from it>' --format=%as -- AGENTS.md | tail -n 1` gives; where git can't find it, the day of the split.
+4. The old heading goes, and nothing else in `AGENTS.md` keeps a departure without its reason.
 
 ## How each rule is checked
 

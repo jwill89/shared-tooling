@@ -21,6 +21,7 @@
         'Invoke-Remote'
         'Invoke-RemoteStep'
         'Format-RemoteScript'
+        'Expand-DeployTemplate'
         'Compress-DeployArchive'
         'Invoke-Upload'
         'Send-File'
@@ -53,6 +54,8 @@
         'Install-BackupTimer'
         'Copy-LiveDatabase'
         'Copy-LiveFolder'
+        'Sync-LiveFolder'
+        'Get-ServiceMemory'
         'Invoke-SmokeCheck'
     )
     CmdletsToExport      = @()

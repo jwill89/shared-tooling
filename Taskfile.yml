@@ -18,15 +18,15 @@ tasks:
       - cd test/a11y && npm ci
 
   lint:
-    desc: Scripts, Markdown, the CHANGELOG's links, the Go sync tool, the Python config, the workflows and the repo files
+    desc: Scripts, what docs.yml checks (Markdown, repo files and CLAUDE.md, workflow refs, the CHANGELOG's links), the Go sync tool, the Python config and the workflows
     cmds:
       - task: shared:lint:scripts
-      - task: shared:lint:md
-      - task: shared:changelog:check
+      # As ci.yml's docs job, which calls docs.yml with shared-path `.`: this repo is its
+      # own shared folder, so the workflow refs are checked with -Shared .
+      - task: shared:docs:check
       - task: lint:go
       - task: lint:python
       - task: lint:workflows
-      - task: shared:repo:check
 
   lint:python:
     desc: The shared ruff config loads, linting and formatting test/python's script, which mypy --strict checks too, at the versions CI runs

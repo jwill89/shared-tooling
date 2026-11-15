@@ -9,10 +9,24 @@
   //     "include": ["src/**/*.ts", "src/**/*.vue"]
   //   }
   //
+  // An app with one tsconfig.json and its specs beside the code (*.test.ts) extends that
+  // file instead, and its tsconfig.json leaves the specs out, so the app's own check never
+  // sees Node's types:
+  //
+  //   // tsconfig.json
+  //   { "compilerOptions": { ... }, "include": ["src"], "exclude": ["src/**/*.test.ts"] }
+  //
+  //   // tsconfig.vitest.json
+  //   {
+  //     "extends": ["./tsconfig.json", "@jwill89/lint-web/tsconfig.vitest.json"],
+  //     "include": ["src/**/*.ts"]
+  //   }
+  //
   // Specs import describe, it, expect and vi from vitest (globals: false), so no global
   // test types are added. vite/client stays, since the code under test reads
   // import.meta.env. The empty exclude replaces the app config's, which usually leaves
-  // the specs out.
+  // the specs out. `types` replaces the app config's list, so a project whose app config
+  // names more types adds them to its own file's compilerOptions.
   "compilerOptions": {
     "noEmit": true,
     "types": ["node", "vite/client"]

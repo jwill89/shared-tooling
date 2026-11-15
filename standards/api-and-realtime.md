@@ -71,7 +71,7 @@ Each project sets its own cache headers, starting from this baseline. A project 
 - An operation a browser navigates to rather than calls, such as an OAuth provider's start and callback (`GET /api/v1/auth/<provider>/callback`), answers 302 with `Location` whatever happens: a failure, a rate limit included, redirects to the sign-in page with `?error=` and a reason the page knows, since a navigation can't show a problem body. The spec declares the 302 and its `Location`, and the operation's inputs carry no constraint the framework would refuse first. [test]
 - The SPA fallback route never matches `/api/…`. [test]
 - In production an unexpected exception answers only a generic message. Its own message and chain go out only in development. [test]
-- A real exception is logged in full. A 404 or 405 is logged without a stack trace, so scanner traffic doesn't bury the real errors. [review]
+- A 4xx response is logged at info, never as an error, and without a stack trace, so scanners and clients' mistakes never read as an outage; a 5xx or an uncaught error is logged as an error, in full ([code-style.md](code-style.md#settings-errors-and-background-work)). [review]
 - The API never answers 502 or 504, because Cloudflare swaps such a body for its own page. An upstream failure answers 429 (rate limited upstream), 500 (credentials or config) or 503 (unreachable). [review]
 
 ## OpenAPI
