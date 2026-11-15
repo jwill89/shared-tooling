@@ -8,6 +8,14 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Added
+
+- `runner/`: self-hosted Actions runners for a Windows machine. `Install-CiRunner` (in `CiRunner.psm1`) sets up a WSL distro of their own with Docker, which can't reach the Windows drives, and a sign-in task; `Start-CiRunner` keeps a ready runner for each private repo listed in `%USERPROFILE%\.ci-runner\runners.psd1`, each job in a fresh container from the `Dockerfile`'s image; `Stop-CiRunner` and `Get-CiRunnerStatus` stop and show them. `task runner:install`, `runner:start`, `runner:stop` and `runner:status` run them from this repo.
+
+### Changed
+
+- Every shared workflow but `osv.yml` runs its job on `runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}`: on the runner the calling repo's `CI_RUNNER` variable names, and on GitHub's `ubuntu-24.04` as before while the variable is unset.
+
 ## [2.11.0] - 2026-11-14
 
 ### Added

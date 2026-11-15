@@ -72,3 +72,24 @@ tasks:
       - task: lint
       - task: presets
       - task: shared:vuln
+
+  # This machine's self-hosted runners (runner/README.md).
+  runner:install:
+    desc: Set up the self-hosted runners on this machine - the WSL distro with Docker, the config and the sign-in task
+    cmds:
+      - pwsh -NoProfile -Command "Import-Module ./runner/CiRunner.psm1; Install-CiRunner"
+
+  runner:start:
+    desc: Start the self-hosted runners now, through their sign-in task
+    cmds:
+      - pwsh -NoProfile -Command "Start-ScheduledTask -TaskName 'CI runners'"
+
+  runner:stop:
+    desc: Stop the self-hosted runners and deregister them, until runner:start or the next sign-in
+    cmds:
+      - pwsh -NoProfile -Command "Import-Module ./runner/CiRunner.psm1; Stop-CiRunner"
+
+  runner:status:
+    desc: Show the self-hosted runners - the loop, their containers, and each repo's runners on GitHub
+    cmds:
+      - pwsh -NoProfile -Command "Import-Module ./runner/CiRunner.psm1; Get-CiRunnerStatus | Format-Table Repo, Name, Status, Busy"
