@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.14.0] - 2026-11-15
+
 ### Added
 
 - `runner/` can give a repo's job containers the distro's Docker: list it in `runners.psd1`'s `DockerRepos`, and its jobs get the socket and a work folder under `/var/lib/ci-work` at the same path in the distro, so `docker run -v` on the job's own files works. The job image has Docker's command line and buildx.
@@ -411,7 +413,8 @@ A major: a project's own Stylelint moves to 18.
 - `repo/`: the shared `.editorconfig` and `.gitattributes`, the Taskfile include, the Dependabot example, and `task shared:update` with its version check.
 - `.github/workflows`: reusable workflows for each stack (`web`, `go`, `php`, `dotnet`, `pwsh`, `docs`, `osv`).
 
-[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.13.0...HEAD
+[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.14.0...HEAD
+[2.14.0]: https://github.com/jwill89/shared-tooling/compare/v2.13.0...v2.14.0
 [2.13.0]: https://github.com/jwill89/shared-tooling/compare/v2.12.0...v2.13.0
 [2.12.0]: https://github.com/jwill89/shared-tooling/compare/v2.11.0...v2.12.0
 [2.11.0]: https://github.com/jwill89/shared-tooling/compare/v2.10.2...v2.11.0
