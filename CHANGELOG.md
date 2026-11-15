@@ -8,6 +8,10 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Fixed
+
+- `python.yml`, `e2e.yml`: uv's setup action is pinned to `astral-sh/setup-uv@v10.3.3`. That action publishes no major-version tag, so `@v10` resolved to nothing and every Python run stopped before its first step.
+
 ## [2.10.0] - 2026-11-14
 
 ### Added

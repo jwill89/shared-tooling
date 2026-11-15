@@ -193,7 +193,7 @@ jobs:
         working-directory: ${{ inputs.composer-dir }}
         run: composer install --prefer-dist --no-interaction --no-progress
 
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
         if: inputs.python-version-file != ''
         with:
           version: ${{ inputs.uv-version }}
