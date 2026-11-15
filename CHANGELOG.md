@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.15.0] - 2026-11-15
+
 ### Added
 
 - `runner/`'s image has yq (mikefarah's, as on GitHub's image), which a project's release script may read YAML with.
@@ -426,7 +428,8 @@ A major: a project's own Stylelint moves to 18.
 - `repo/`: the shared `.editorconfig` and `.gitattributes`, the Taskfile include, the Dependabot example, and `task shared:update` with its version check.
 - `.github/workflows`: reusable workflows for each stack (`web`, `go`, `php`, `dotnet`, `pwsh`, `docs`, `osv`).
 
-[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.14.0...HEAD
+[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.15.0...HEAD
+[2.15.0]: https://github.com/jwill89/shared-tooling/compare/v2.14.0...v2.15.0
 [2.14.0]: https://github.com/jwill89/shared-tooling/compare/v2.13.0...v2.14.0
 [2.13.0]: https://github.com/jwill89/shared-tooling/compare/v2.12.0...v2.13.0
 [2.12.0]: https://github.com/jwill89/shared-tooling/compare/v2.11.0...v2.12.0
