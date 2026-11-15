@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.15.1] - 2026-11-15
+
 ### Fixed
 
 - `runner/`: building the job image, at a start, at the six-hourly check or by hand, no longer removes the image a running scaler names, which left every job it was given queued. The scaler names `ci-runner:current`, which each build moves to the newest image, so new jobs take a rebuilt image at once; only a change to `scaler/` restarts the scaler.
@@ -432,7 +434,8 @@ A major: a project's own Stylelint moves to 18.
 - `repo/`: the shared `.editorconfig` and `.gitattributes`, the Taskfile include, the Dependabot example, and `task shared:update` with its version check.
 - `.github/workflows`: reusable workflows for each stack (`web`, `go`, `php`, `dotnet`, `pwsh`, `docs`, `osv`).
 
-[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.15.0...HEAD
+[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.15.1...HEAD
+[2.15.1]: https://github.com/jwill89/shared-tooling/compare/v2.15.0...v2.15.1
 [2.15.0]: https://github.com/jwill89/shared-tooling/compare/v2.14.0...v2.15.0
 [2.14.0]: https://github.com/jwill89/shared-tooling/compare/v2.13.0...v2.14.0
 [2.13.0]: https://github.com/jwill89/shared-tooling/compare/v2.12.0...v2.13.0
