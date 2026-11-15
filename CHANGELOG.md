@@ -8,6 +8,14 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Added
+
+- `codeql.yml` analyses Python, and Go, which CodeQL builds: `go-version-file` sets up the module's Go, and `download-artifact` with `download-path` brings in the front end's build for a binary that embeds it.
+
+### Changed
+
+- `standards/security.md`: a public repo's CodeQL run covers its Python and Go too; a private repo runs none, since it would need GitHub's paid Code Security.
+
 ## [2.10.1] - 2026-11-14
 
 ### Fixed

@@ -1,17 +1,24 @@
 name: CodeQL
 
-# CodeQL over a public repo's own code, one job per language, every one in build mode
-# none: JavaScript and TypeScript (Vue files included), C# (a Dalamud plugin, read
-# without a build) and the GitHub Actions workflows. CodeQL has no PHP or PowerShell.
-# The shared-tooling submodule is left out: its CI scans it.
+# CodeQL over a public repo's own code, one job per language: JavaScript and TypeScript
+# (Vue files included), Python, C# (a Dalamud plugin) and the GitHub Actions workflows are
+# read without a build (build mode none); Go has no such mode, so CodeQL builds it
+# (autobuild). CodeQL has no PHP or PowerShell. The shared-tooling submodule is left out:
+# its CI scans it.
+#
+# A Go binary that embeds the front end's build needs that build to compile: pass the
+# artifact web.yml uploads (download-artifact), and call this with `needs: web`.
 #
 # The repo's CodeQL default setup stays off (Settings > Code security), since code
 # scanning refuses an advanced setup's results beside it.
 #
 #   codeql:
+#     needs: web   # when the Go binary embeds the front end's build
 #     uses: jwill89/shared-tooling/.github/workflows/codeql.yml@v1.0.0
 #     with:
-#       languages: '["javascript-typescript", "csharp", "actions"]'
+#       languages: '["javascript-typescript", "go", "csharp", "actions"]'
+#       go-version-file: go.mod
+#       download-artifact: web-dist
 #     permissions:
 #       contents: read
 #       actions: read
@@ -21,13 +28,25 @@ on:
   workflow_call:
     inputs:
       languages:
-        description: The languages to analyse, as a JSON list of CodeQL's names (javascript-typescript, csharp, actions).
+        description: The languages to analyse, as a JSON list of CodeQL's names (javascript-typescript, python, go, csharp, actions).
         type: string
         default: '["javascript-typescript", "actions"]'
       queries:
         description: The query suite, such as security-extended; empty runs CodeQL's default suite.
         type: string
         default: ''
+      go-version-file:
+        description: A go.mod whose Go version to set up before CodeQL builds the Go code. Empty leaves the runner's own Go, which fetches the version go.mod asks for.
+        type: string
+        default: ''
+      download-artifact:
+        description: An artifact to download before CodeQL builds the Go code (the front end's build, for a binary that embeds it).
+        type: string
+        default: ''
+      download-path:
+        description: Where the artifact goes, relative to the repo.
+        type: string
+        default: web/dist
 
 permissions:
   contents: read
@@ -49,10 +68,23 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: actions/setup-go@v7
+        if: matrix.language == 'go' && inputs.go-version-file != ''
+        with:
+          go-version-file: ${{ inputs.go-version-file }}
+          cache: false
+
+      - name: Download ${{ inputs.download-artifact }}
+        if: matrix.language == 'go' && inputs.download-artifact != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.download-artifact }}
+          path: ${{ inputs.download-path }}
+
       - uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
-          build-mode: none
+          build-mode: ${{ matrix.language == 'go' && 'autobuild' || 'none' }}
           queries: ${{ inputs.queries }}
 
       - uses: github/codeql-action/analyze@v4

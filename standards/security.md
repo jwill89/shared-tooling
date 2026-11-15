@@ -155,5 +155,5 @@ The audit jobs each stack runs, and how packages are added and updated, are in [
 - In CI, `composer audit` includes dev packages, since they run there and on developer machines. [CI]
 - A security fix comes from the package itself. A framework's security release is applied even before the advisory database lists it. [review]
 - A finding in code the app never runs waits for its package's own fix, never a forced version. [review]
-- A public repo runs CodeQL over its JavaScript or TypeScript, its C# (build mode none) and its workflows, by calling the shared `codeql.yml` with the languages it has, with CodeQL's default setup off in the repo's settings. CodeQL has no PHP support. [review]
+- A public repo runs CodeQL over its JavaScript or TypeScript, its Python, its Go, its C# and its workflows, by calling the shared `codeql.yml` with the languages it has, with CodeQL's default setup off in the repo's settings. CodeQL has no PHP support. A private repo needs GitHub's paid Code Security for it, so it runs none unless the owner buys that. [review]
 - A security problem is reported privately to the maintainer, never in a public issue. [review]

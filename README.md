@@ -109,13 +109,16 @@ And per stack (each folder's README has the detail):
         security-events: write
   ```
 
-- **CodeQL, in a public repo:** call `codeql.yml` with the languages the repo has, and turn CodeQL's default setup off in the repo's settings (Code security), since code scanning refuses an advanced setup's results beside it:
+- **CodeQL, in a public repo:** call `codeql.yml` with the languages the repo has, and turn CodeQL's default setup off in the repo's settings (Code security), since code scanning refuses an advanced setup's results beside it. CodeQL is free on a public repo; a private one would need GitHub's paid Code Security. Every language but Go is read without a build; Go is built, so a binary that embeds the front end's build waits for `web` and downloads its artifact, as `go.yml` does:
 
   ```yaml
     codeql:
+      needs: web
       uses: jwill89/shared-tooling/.github/workflows/codeql.yml@v1.0.0
       with:
-        languages: '["javascript-typescript", "csharp", "actions"]'
+        languages: '["javascript-typescript", "python", "go", "csharp", "actions"]'
+        go-version-file: go.mod
+        download-artifact: web-dist
       permissions:
         contents: read
         actions: read
@@ -171,7 +174,7 @@ A release for one stack moves the submodule for every project that takes it, but
 
 ## This repo's own checks
 
-`.github/workflows/ci.yml` runs the same tools on this repo, and `task check` runs them all locally: PSScriptAnalyzer on its scripts, markdownlint on its docs and the CHANGELOG's compare links, the sync tool linted by its own template and checked by govulncheck, the shared ruff config loading on `test/python`'s script (ruff and mypy at pinned versions through `uvx`, so uv must be installed), actionlint on the workflows, every `lint/web` config and `test/*` preset loading from its own install (`task presets`), and OSV-Scanner over its lockfiles. `task setup` installs what those loads need, and `task push` takes the in-range dependency updates, scans, checks and pushes, as it does in a project.
+`.github/workflows/ci.yml` runs the same tools on this repo, and `task check` runs them all locally: PSScriptAnalyzer on its scripts, markdownlint on its docs and the CHANGELOG's compare links, the sync tool linted by its own template and checked by govulncheck, the shared ruff config loading on `test/python`'s script (ruff and mypy at pinned versions through `uvx`, so uv must be installed), actionlint on the workflows, every `lint/web` config and `test/*` preset loading from its own install (`task presets`), and OSV-Scanner over its lockfiles. CI also runs CodeQL over its JavaScript, Python, Go and workflows through `codeql.yml`, which has no local counterpart, since it reports to GitHub's code scanning. `task setup` installs what those loads need, and `task push` takes the in-range dependency updates, scans, checks and pushes, as it does in a project.
 
 ## License
 

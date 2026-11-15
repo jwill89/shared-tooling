@@ -5,7 +5,8 @@ name: CI
 # golangci sync tool linted by the template it ships, the shared ruff config loading on
 # the Python script it ships, every workflow with actionlint,
 # every lint/web config and test preset loading from its own install, and OSV-Scanner
-# over the lockfiles.
+# over the lockfiles. Then CodeQL over its JavaScript, Python, Go and workflows, which
+# runs here only: it needs GitHub's code scanning.
 
 on:
   push:
@@ -99,6 +100,16 @@ jobs:
 
   osv:
     uses: ./.github/workflows/osv.yml
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+
+  codeql:
+    uses: ./.github/workflows/codeql.yml
+    with:
+      languages: '["javascript-typescript", "python", "go", "actions"]'
+      go-version-file: lint/go/go.mod
     permissions:
       contents: read
       actions: read
