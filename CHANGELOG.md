@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.10.1] - 2026-11-14
+
 ### Fixed
 
 - `python.yml`, `e2e.yml`: uv's setup action is pinned to `astral-sh/setup-uv@v10.3.3`. That action publishes no major-version tag, so `@v10` resolved to nothing and every Python run stopped before its first step.
@@ -334,7 +336,8 @@ A major: a project's own Stylelint moves to 18.
 - `repo/`: the shared `.editorconfig` and `.gitattributes`, the Taskfile include, the Dependabot example, and `task shared:update` with its version check.
 - `.github/workflows`: reusable workflows for each stack (`web`, `go`, `php`, `dotnet`, `pwsh`, `docs`, `osv`).
 
-[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.10.0...HEAD
+[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.10.1...HEAD
+[2.10.1]: https://github.com/jwill89/shared-tooling/compare/v2.10.0...v2.10.1
 [2.10.0]: https://github.com/jwill89/shared-tooling/compare/v2.9.0...v2.10.0
 [2.9.0]: https://github.com/jwill89/shared-tooling/compare/v2.8.0...v2.9.0
 [2.8.0]: https://github.com/jwill89/shared-tooling/compare/v2.7.1...v2.8.0
