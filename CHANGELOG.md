@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.13.0] - 2026-11-15
+
 ### Added
 
 - `task shared:runner:start`, `shared:runner:stop` and `shared:runner:status`, in every repo, start, stop and show this machine's self-hosted runners through `runner/Invoke-CiRunner.ps1`, which works through the module the runners were installed from. Start waits until the scaler takes jobs; stop also shuts the runners' WSL distro down, so WSL can give its memory back. They replace shared-tooling's own `task runner:start`, `runner:stop` and `runner:status`.
@@ -404,7 +406,8 @@ A major: a project's own Stylelint moves to 18.
 - `repo/`: the shared `.editorconfig` and `.gitattributes`, the Taskfile include, the Dependabot example, and `task shared:update` with its version check.
 - `.github/workflows`: reusable workflows for each stack (`web`, `go`, `php`, `dotnet`, `pwsh`, `docs`, `osv`).
 
-[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.12.0...HEAD
+[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.13.0...HEAD
+[2.13.0]: https://github.com/jwill89/shared-tooling/compare/v2.12.0...v2.13.0
 [2.12.0]: https://github.com/jwill89/shared-tooling/compare/v2.11.0...v2.12.0
 [2.11.0]: https://github.com/jwill89/shared-tooling/compare/v2.10.2...v2.11.0
 [2.10.2]: https://github.com/jwill89/shared-tooling/compare/v2.10.1...v2.10.2
