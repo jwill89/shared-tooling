@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.12.0] - 2026-11-15
+
 ### Added
 
 - `runner/`: self-hosted Actions runners for a Windows machine. `Install-CiRunner` (in `CiRunner.psm1`) sets up a WSL distro of their own with Docker, which can't reach the Windows drives, and a sign-in task; `Start-CiRunner` keeps a ready runner for each private repo listed in `%USERPROFILE%\.ci-runner\runners.psd1`, each job in a fresh container from the `Dockerfile`'s image; `Stop-CiRunner` and `Get-CiRunnerStatus` stop and show them. `task runner:install`, `runner:start`, `runner:stop` and `runner:status` run them from this repo.
@@ -390,7 +392,8 @@ A major: a project's own Stylelint moves to 18.
 - `repo/`: the shared `.editorconfig` and `.gitattributes`, the Taskfile include, the Dependabot example, and `task shared:update` with its version check.
 - `.github/workflows`: reusable workflows for each stack (`web`, `go`, `php`, `dotnet`, `pwsh`, `docs`, `osv`).
 
-[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.11.0...HEAD
+[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.12.0...HEAD
+[2.12.0]: https://github.com/jwill89/shared-tooling/compare/v2.11.0...v2.12.0
 [2.11.0]: https://github.com/jwill89/shared-tooling/compare/v2.10.2...v2.11.0
 [2.10.2]: https://github.com/jwill89/shared-tooling/compare/v2.10.1...v2.10.2
 [2.10.1]: https://github.com/jwill89/shared-tooling/compare/v2.10.0...v2.10.1
