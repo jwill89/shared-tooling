@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-11-14
+
 ### Added
 
 - `Sync-LiveFolder` keeps a copy on the dev machine of a host-only folder too large to archive on the host: only new and changed files are fetched, each checked against the host's SHA-256, nothing is written on the host, and no local file is deleted without `-Delete`.
@@ -380,7 +382,8 @@ A major: a project's own Stylelint moves to 18.
 - `repo/`: the shared `.editorconfig` and `.gitattributes`, the Taskfile include, the Dependabot example, and `task shared:update` with its version check.
 - `.github/workflows`: reusable workflows for each stack (`web`, `go`, `php`, `dotnet`, `pwsh`, `docs`, `osv`).
 
-[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.10.2...HEAD
+[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.11.0...HEAD
+[2.11.0]: https://github.com/jwill89/shared-tooling/compare/v2.10.2...v2.11.0
 [2.10.2]: https://github.com/jwill89/shared-tooling/compare/v2.10.1...v2.10.2
 [2.10.1]: https://github.com/jwill89/shared-tooling/compare/v2.10.0...v2.10.1
 [2.10.0]: https://github.com/jwill89/shared-tooling/compare/v2.9.0...v2.10.0
