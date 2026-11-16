@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.15.2] - 2026-11-16
+
 ### Added
 
 - `task shared:deps:alerts` (`repo/Sync-DependabotAlerts.ps1`) holds Dependabot's alerts to the repo's `osv-scanner.toml` files: an open alert whose advisory one passes over, for the lockfile beside it, is dismissed as a tolerable risk with the entry's reason, and one it dismissed is opened again once the entry goes or its `ignoreUntil` passes. Dependabot's security update job then stops failing on an advisory with no fix in range. `-WhatIf` shows what it would do. `standards/packages.md` has the rule.
@@ -448,7 +450,8 @@ A major: a project's own Stylelint moves to 18.
 - `repo/`: the shared `.editorconfig` and `.gitattributes`, the Taskfile include, the Dependabot example, and `task shared:update` with its version check.
 - `.github/workflows`: reusable workflows for each stack (`web`, `go`, `php`, `dotnet`, `pwsh`, `docs`, `osv`).
 
-[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.15.1...HEAD
+[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.15.2...HEAD
+[2.15.2]: https://github.com/jwill89/shared-tooling/compare/v2.15.1...v2.15.2
 [2.15.1]: https://github.com/jwill89/shared-tooling/compare/v2.15.0...v2.15.1
 [2.15.0]: https://github.com/jwill89/shared-tooling/compare/v2.14.0...v2.15.0
 [2.14.0]: https://github.com/jwill89/shared-tooling/compare/v2.13.0...v2.14.0
