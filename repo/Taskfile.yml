@@ -142,6 +142,11 @@ tasks:
     cmds:
       - pwsh -NoProfile -File "{{.SHARED}}/repo/Invoke-DependencyCheck.ps1" -Path . -Update
 
+  deps:alerts:
+    desc: Hold Dependabot's alerts to the osv-scanner.toml files - dismiss the ones they pass over, with their reasons, and open again the ones whose entry has gone or run out (-- -WhatIf to see first)
+    cmds:
+      - pwsh -NoProfile -File "{{.SHARED}}/repo/Sync-DependabotAlerts.ps1" -Path . {{.CLI_ARGS}}
+
   vuln:
     desc: Scan every lockfile with OSV-Scanner, as CI's osv job does, honouring each osv-scanner.toml
     cmds:
@@ -165,7 +170,7 @@ tasks:
       - pwsh -NoProfile -File "{{.SHARED}}/runner/Invoke-CiRunner.ps1" -Action Status
 
   push:
-    desc: Take the in-range updates Dependabot would open, start the self-hosted runners if the repo uses them, git push, and follow CI to its verdict (-- -Yes, -SkipUpdates, -NoWait)
+    desc: Take the in-range updates Dependabot would open, dismiss the Dependabot alerts osv-scanner.toml passes over, start the self-hosted runners if the repo uses them, git push, and follow CI to its verdict (-- -Yes, -SkipUpdates, -NoWait)
     interactive: true
     cmds:
       - pwsh -NoProfile -File "{{.SHARED}}/repo/Invoke-Push.ps1" -Path . {{.CLI_ARGS}}

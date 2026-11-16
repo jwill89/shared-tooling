@@ -7,7 +7,8 @@
     and one for Unreleased, or checks that every heading has one.
 
 .DESCRIPTION
-    Keep a Changelog gives each `## [x.y.z]` heading, and `## [Unreleased]`, a link
+    Keep a Changelog gives each `## [x.y.z]` heading (or `## [w.x.y.z]`, for a part
+    versioned in four numbers), and `## [Unreleased]`, a link
     reference at the foot of the file, which turns the heading into a link to the diff:
 
         [Unreleased]: https://github.com/owner/repo/compare/v1.2.0...HEAD
@@ -73,8 +74,11 @@ $PSNativeCommandUseErrorActionPreference = $false
 
 # A value that names a file is taken whole, spaces and all; any other is a list.
 $Path = @($Path | ForEach-Object { if (Test-Path -LiteralPath $_ -PathType Leaf) { $_ } else { $_ -split '[,\s]+' } } | Where-Object { $_ })
-$headingPattern = '(?m)^## \[(?<name>Unreleased|\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\]'
-$referencePattern = '(?m)^\[(?<name>Unreleased|\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\]:[ \t]*\S.*$'
+# A version is three numbers, or four for a part whose own manifest carries four (a
+# Dalamud plugin's 4.0.0.0), with an optional pre-release suffix.
+$versionPattern = '\d+\.\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?'
+$headingPattern = "(?m)^## \[(?<name>Unreleased|$versionPattern)\]"
+$referencePattern = "(?m)^\[(?<name>Unreleased|$versionPattern)\]:[ \t]*\S.*$"
 
 # https://github.com/owner/repo from the forms git keeps a GitHub remote in.
 function ConvertTo-RepoUrl {

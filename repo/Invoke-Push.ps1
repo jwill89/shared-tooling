@@ -18,11 +18,15 @@
          commit that names them; CI checks them with the rest. One that something else
          holds back is named as not taken. A change to any file but the manifests and
          lockfiles stops the push and leaves everything uncommitted to look at.
-      3. When the repo's CI_RUNNER variable sends its jobs to self-hosted runners and this
+      3. Holds Dependabot's alerts to the osv-scanner.toml files
+         (Sync-DependabotAlerts.ps1): an alert one passes over is dismissed with its
+         reason, so Dependabot's security update job stops failing on it. A failure here
+         is a warning; the push goes on.
+      4. When the repo's CI_RUNNER variable sends its jobs to self-hosted runners and this
          machine has them (runner/README.md), starts them if they are stopped, so the jobs
          don't wait in the queue.
-      4. git push.
-      5. Follows each workflow run the pushed commit started, printing each job as it
+      5. git push.
+      6. Follows each workflow run the pushed commit started, printing each job as it
          ends, and fails if a run fails, with the failed steps' log. A run still going
          after -WaitMinutes is left to finish on its own.
 
@@ -210,10 +214,18 @@ try {
         Write-Output 'Nothing in range for Dependabot to open.'
     }
 
-    # 3. Runners for CI to run on.
+    # 3. The alerts the osv-scanner.toml files pass over.
+    Write-Step "Holding Dependabot's alerts to the osv-scanner.toml files..."
+    try {
+        & (Join-Path $PSScriptRoot 'Sync-DependabotAlerts.ps1') -Path .
+    } catch {
+        Write-Warning "Dependabot's alerts weren't brought in line: $_"
+    }
+
+    # 4. Runners for CI to run on.
     Start-CiRunnerIfUsed
 
-    # 4. Push.
+    # 5. Push.
     Write-Step "Pushing to $upstream..."
     $sha = git rev-parse HEAD
     git push
@@ -225,7 +237,7 @@ try {
         $majors | ForEach-Object { Write-Output ("  {0} ({1}) {2} {3} -> {4}" -f $_.Ecosystem, $_.Directory, $_.Name, $_.Current, $_.Target) }
     }
 
-    # 5. CI's verdict.
+    # 6. CI's verdict.
     if (-not $NoWait) {
         Write-Step 'Following CI...'
         $passed = Wait-CiRun -Sha $sha -Minutes $WaitMinutes

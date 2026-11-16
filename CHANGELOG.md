@@ -8,6 +8,20 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Added
+
+- `task shared:deps:alerts` (`repo/Sync-DependabotAlerts.ps1`) holds Dependabot's alerts to the repo's `osv-scanner.toml` files: an open alert whose advisory one passes over, for the lockfile beside it, is dismissed as a tolerable risk with the entry's reason, and one it dismissed is opened again once the entry goes or its `ignoreUntil` passes. Dependabot's security update job then stops failing on an advisory with no fix in range. `-WhatIf` shows what it would do. `standards/packages.md` has the rule.
+
+### Changed
+
+- `task shared:push` runs `shared:deps:alerts` before it pushes; a failure there is a warning, and the push goes on.
+- `task shared:web:specs -- --fix`, which `task shared:update` runs, writes a new `tsconfig.vitest.json` with the app config's `include` and `exclude` (the specs added where it misses them, and any pattern that would leave one out dropped) in place of `src/**` alone, so the specs' check sees the app's declaration files outside `src/` and leaves out what the app does, such as a service worker typed with a worker's globals.
+- `typecheck-specs.mjs` (`web.yml`'s specs' check and `task shared:web:specs`) fails, naming the files, when `tsconfig.vitest.json` leaves out a declaration file the app's config takes in, in place of the type errors that followed.
+
+### Fixed
+
+- `task shared:changelog:links` and `shared:changelog:check` (and so `docs.yml`) take a version of four numbers, such as a Dalamud plugin's `## [4.0.0.0]`, which they passed over before, so its heading got no link and the check never saw it.
+
 ## [2.15.1] - 2026-11-15
 
 ### Fixed

@@ -73,7 +73,7 @@ tasks:
       - pwsh -NoProfile -File scripts/New-Release.ps1 {{.CLI_ARGS}}
 
   push:
-    desc: Take the in-range updates Dependabot would open, start the self-hosted runners if the repo uses them, git push, and follow CI to its verdict (-- -Yes, -SkipUpdates, -NoWait)
+    desc: Take the in-range updates Dependabot would open, dismiss the Dependabot alerts osv-scanner.toml passes over, start the self-hosted runners if the repo uses them, git push, and follow CI to its verdict (-- -Yes, -SkipUpdates, -NoWait)
     interactive: true
     cmds:
       - task: shared:push

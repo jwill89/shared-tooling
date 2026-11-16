@@ -11,9 +11,13 @@
  * passes with a note.
  *
  * --fix writes the file where it is missing, extending the app's own config
- * (tsconfig.app.json, or tsconfig.json where that is the only one) and then the base, or
- * adds the base to the extends of one that lacks it, then checks that every spec is taken
- * in. It runs no type-check, and names whatever it can't put right itself.
+ * (tsconfig.app.json, or tsconfig.json where that is the only one) and then the base,
+ * with that config's include and exclude (the specs added, and nothing that excludes
+ * one), or adds the base to the extends of one that lacks it, then checks that every spec
+ * is taken in. It runs no type-check, and names whatever it can't put right itself.
+ *
+ * Either way, the file must take in every spec, and every declaration file the app's
+ * config takes in, or the specs' check can't see what the app's code declares.
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -80,6 +84,37 @@ const inline = (value) => JSON.stringify(value).replaceAll('","', '", "')
 const extendsLine = `"extends": ${inline(wantedExtends)}`
 const include = ['src/**/*.ts', ...(kinds.has('tsx') ? ['src/**/*.tsx'] : []), ...(kinds.has('vue') ? ['src/**/*.vue'] : [])]
 
+// The app's own TypeScript reads the configs, comments and all, as tsc would.
+const require = createRequire(manifestPath)
+let ts
+try {
+  ts = require('typescript')
+} catch {
+  fail('TypeScript is not installed in the app; run npm ci first.')
+}
+const readJson = (file) => {
+  const read = ts.readConfigFile(file, ts.sys.readFile)
+  if (read.error) {
+    fail(ts.flattenDiagnosticMessageText(read.error.messageText, '\n'))
+  }
+  return read.config
+}
+// The files an include and exclude, read from the app's folder, take in.
+const takenIn = (includes, excludes) =>
+  new Set(ts.parseJsonConfigFileContent({ include: includes, exclude: excludes }, ts.sys, root).fileNames.map((file) => path.resolve(file)))
+const takesEverySpec = (files) => specs.every((spec) => files.has(path.resolve(spec)))
+
+// The new file as the app's own Prettier writes it, so its format check passes; as
+// written where the app has none.
+const formatted = async (text, file) => {
+  try {
+    const prettier = require('prettier')
+    return await prettier.format(text, { ...(await prettier.resolveConfig(file)), filepath: file })
+  } catch {
+    return text
+  }
+}
+
 const configPath = path.join(root, configName)
 if (!existsSync(configPath)) {
   if (!fix) {
@@ -88,25 +123,26 @@ if (!existsSync(configPath)) {
   if (!appConfig) {
     fail(`the app has no tsconfig.app.json or tsconfig.json for ${configName} to extend; add the app's config first.`)
   }
-  writeFileSync(configPath, `{\n  ${extendsLine},\n  "include": ${inline(include)}\n}\n`)
-  console.log(`typecheck-specs: wrote ${configName}, extending ./${appConfig} and then the shared base.`)
+  // The app config's own include and exclude, so the specs' check sees what the app's does
+  // (a declaration file beside src/, say) and not what it leaves out (a service worker
+  // typed with a worker's globals). The specs are added where its include misses them, and
+  // a pattern that would exclude one is dropped: the shared base's empty exclude is there
+  // because an app config usually leaves its specs out.
+  const app = readJson(path.join(root, appConfig))
+  let wanted = Array.isArray(app.include) && app.include.length > 0 ? [...app.include] : [...include]
+  if (!takesEverySpec(takenIn(wanted, []))) {
+    wanted = [...new Set([...wanted, ...include])]
+  }
+  const excluded = (Array.isArray(app.exclude) ? app.exclude : []).filter((pattern) => takesEverySpec(takenIn(wanted, [pattern])))
+  const lines = [`"extends": ${inline(wantedExtends)}`, `"include": ${inline(wanted)}`]
+  if (excluded.length > 0) {
+    lines.push(`"exclude": ${inline(excluded)}`)
+  }
+  writeFileSync(configPath, await formatted(`{\n  ${lines.join(',\n  ')}\n}\n`, configPath))
+  console.log(`typecheck-specs: wrote ${configName}, extending ./${appConfig} and then the shared base, with ${appConfig}'s include and exclude.`)
 }
 
-// The app's own TypeScript reads the config, comments and all, as tsc would.
-const require = createRequire(manifestPath)
-let ts
-try {
-  ts = require('typescript')
-} catch {
-  fail('TypeScript is not installed in the app; run npm ci first.')
-}
-const readConfig = () => {
-  const read = ts.readConfigFile(configPath, ts.sys.readFile)
-  if (read.error) {
-    fail(ts.flattenDiagnosticMessageText(read.error.messageText, '\n'))
-  }
-  return read.config
-}
+const readConfig = () => readJson(configPath)
 let config = readConfig()
 let extended = [config.extends ?? []].flat()
 if (!extended.includes(base)) {
@@ -140,6 +176,18 @@ const missing = specs.filter((spec) => !included.has(path.resolve(spec)))
 if (missing.length > 0) {
   const list = missing.map((spec) => `  ${path.relative(root, spec)}`).join('\n')
   fail(`${configName} leaves out these specs, so nothing type-checks them:\n${list}\nIts include should take them in, such as "include": ${inline(include)}.`)
+}
+// A declaration file the app's config takes in declares what the app's code uses (a
+// global, a virtual module), so the specs' config takes it in too, or every file that
+// uses it fails the check.
+if (appConfig) {
+  const appPath = path.join(root, appConfig)
+  const app = ts.parseJsonConfigFileContent(readJson(appPath), ts.sys, root, undefined, appPath)
+  const declarations = app.fileNames.filter((file) => file.endsWith('.d.ts') && !/[\\/]node_modules[\\/]/.test(file) && !included.has(path.resolve(file)))
+  if (declarations.length > 0) {
+    const list = declarations.map((file) => `  ${path.relative(root, file)}`).join('\n')
+    fail(`${configName} leaves out these declaration files, which ${appConfig} takes in:\n${list}\nAdd them to its include, beside the specs.`)
+  }
 }
 if (fix) {
   console.log(`typecheck-specs: ${configName} extends the shared base and takes in all ${specs.length} specs.`)
