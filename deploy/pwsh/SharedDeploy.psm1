@@ -6,10 +6,12 @@ deploy.config.ps1.
 
 The shape of every deploy: everything it needs packed into ONE archive, one upload, then
 one remote run that unpacks it to a staging folder, checks its SHA-256 and file count, and
-only then runs the steps. All of it rides ONE SSH connection, held open by a background
-plink with PuTTY's connection sharing (-share), and reopened if it drops, so a host that
-runs `ufw limit ssh` (six connections in 30 seconds) sees one connection a deploy. pscp is
-not used: uploads and downloads stream through plink.
+only then runs the steps. The remote steps ride ONE SSH connection, held open by a
+background plink with PuTTY's connection sharing (-share), and reopened if it drops. A
+transfer of 1 MB or more runs on a connection of its own, since a channel of a shared
+connection moves one small window a round trip. The module opens at most four connections
+in any 30 seconds, so a host that runs `ufw limit ssh` (six in 30 seconds) never refuses
+one. pscp is not used: uploads and downloads stream through plink.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -30,6 +32,17 @@ $script:MaxCommandBytes = 8KB
 # The host runs a script as `$SHELL -c <script>`, and Linux takes at most 128 KB, less its
 # closing NUL, in one argument.
 $script:MaxScriptBytes = 128KB - 1
+# A transfer this large or larger runs on an SSH connection of its own. A channel of a
+# shared connection keeps PuTTY's small fixed window, so it moves one window a round trip,
+# well under 1 MB/s to a distant host; plink alone on its connection (-noshare, with no
+# forwarding) runs in PuTTY's simple mode, whose window has no limit.
+$script:OwnConnectionBytes = 1MB
+# The most new SSH connections this module opens in any 30 seconds: under the six `ufw
+# limit ssh` allows, with room left for a connection from elsewhere.
+$script:ConnectionBudget = 4
+$script:ConnectionWindowSeconds = 30
+# When this module opened each of its recent connections, oldest first.
+$script:ConnectionTimes = [System.Collections.Generic.List[datetime]]::new()
 # The line the host prints once a script has arrived whole, just before it runs.
 $script:StartedLine = 'shared-deploy: script started'
 # The command plink runs for each remote script. It reads the script from standard input
@@ -360,12 +373,34 @@ function Write-RemoteLine {
     }
 }
 
+function Wait-ConnectionSlot {
+    <#
+    .SYNOPSIS
+    Before this module opens a new SSH connection: waits while it has opened its budget of them in the last 30 seconds, then counts the new one.
+    #>
+    param()
+    while ($true) {
+        $cutoff = [datetime]::UtcNow.AddSeconds(-$script:ConnectionWindowSeconds)
+        while ($script:ConnectionTimes.Count -and $script:ConnectionTimes[0] -le $cutoff) { $script:ConnectionTimes.RemoveAt(0) }
+        if ($script:ConnectionTimes.Count -lt $script:ConnectionBudget) { break }
+        $wait = [math]::Max(1, [math]::Ceiling(($script:ConnectionTimes[0] - $cutoff).TotalSeconds))
+        Write-Host "    Waiting ${wait}s before the next SSH connection, to stay under the host's rate limit (ufw limit ssh)..."
+        Start-Sleep -Seconds $wait
+    }
+    $script:ConnectionTimes.Add([datetime]::UtcNow)
+}
+
 function Get-PlinkArgument {
     <#
     .SYNOPSIS
-    plink's arguments for one command on the held connection; throws, sending nothing, when the command is too long for the shared connection to carry.
+    plink's arguments for one command on the held connection, or with -Own on a connection of its own; throws, sending nothing, when a command is too long for the shared connection to carry.
     #>
-    param([object]$Connection, [string]$Command)
+    param([object]$Connection, [string]$Command, [switch]$Own)
+    if ($Own) {
+        # -a and -x turn forwarding off whatever PuTTY's default settings say, so plink runs
+        # in its simple mode.
+        return @('-batch', '-noshare', '-a', '-x') + $Connection.HostKeyArgs + @('-i', $Connection.KeyPath, $Connection.Target, $Command)
+    }
     $size = [System.Text.Encoding]::UTF8.GetByteCount($Command)
     if ($size -gt $script:MaxCommandBytes) {
         throw "The remote command is $size bytes, over the $($script:MaxCommandBytes) a shared connection carries safely (plink -share ends its pipe at about 16 KB, and the host runs none of it). Nothing was sent."
@@ -506,6 +541,7 @@ function Connect-UpstreamOnce {
     [System.IO.File]::WriteAllBytes($inFile, [byte[]]::new(0))
     $logs = @($errFile, $outFile, $inFile)
     $holderArgs = @('-batch', '-share', '-N') + $Connection.HostKeyArgs + @('-i', $Connection.KeyPath, $Connection.Target)
+    Wait-ConnectionSlot
     $hidden = if ($IsWindows) { [SharedDeploy.NativeMethods]::HideStandardHandles() } else { $null }
     try {
         $holder = Start-Process -FilePath $Connection.Plink -ArgumentList (Join-ProcessArgument -Argument $holderArgs) -WindowStyle Hidden -PassThru `
@@ -630,7 +666,7 @@ function Invoke-RemoteFlow {
 function Invoke-PlinkStream {
     <#
     .SYNOPSIS
-    One remote command through plink -share with a local file as its stdin (an upload) or its stdout (a download), byte for byte, with an elapsed-time indicator and a time limit.
+    One remote command through plink, on the held connection or with -Own on one of its own, with a local file as its stdin (an upload) or its stdout (a download), byte for byte, with an elapsed-time indicator and a time limit.
     #>
     param(
         [object]$Connection,
@@ -639,9 +675,10 @@ function Invoke-PlinkStream {
         [string]$OutputFile,
         [string]$Activity,
         [string]$Status,
-        [int]$TimeoutSeconds
+        [int]$TimeoutSeconds,
+        [switch]$Own
     )
-    $plinkArgs = Get-PlinkArgument -Connection $Connection -Command $Command
+    $plinkArgs = Get-PlinkArgument -Connection $Connection -Command $Command -Own:$Own
     $temp = [System.IO.Path]::GetTempPath()
     $errFile = Join-Path -Path $temp -ChildPath ('plink-err-{0}.log' -f [guid]::NewGuid())
     $scratch = [System.Collections.Generic.List[string]]::new()
@@ -656,6 +693,7 @@ function Invoke-PlinkStream {
         $OutputFile = Join-Path -Path $temp -ChildPath ('plink-out-{0}.log' -f [guid]::NewGuid())
         $scratch.Add($OutputFile)
     }
+    if ($Own) { Wait-ConnectionSlot }
     $process = Start-Process -FilePath $Connection.Plink -NoNewWindow -PassThru -ArgumentList (Join-ProcessArgument -Argument $plinkArgs) `
         -RedirectStandardInput $InputFile -RedirectStandardOutput $OutputFile -RedirectStandardError $errFile
     $watch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -688,10 +726,19 @@ function Invoke-PlinkStream {
 function Invoke-StreamWithRetry {
     <#
     .SYNOPSIS
-    Invoke-PlinkStream on the held connection; if the connection dropped, reconnects and runs it once more.
+    Invoke-PlinkStream, run once more if its connection failed: on the held connection after reconnecting, on a connection of its own (Own) after the rate limit's window.
     #>
     param([hashtable]$Stream, [switch]$NoRetry)
     $connection = $Stream.Connection
+    if ($Stream.Own) {
+        $result = Invoke-PlinkStream @Stream
+        if (-not $result.Ok -and -not $NoRetry -and $result.Err -match $script:ConnectionFailurePattern) {
+            Write-Host "    The transfer's connection failed, possibly at the SSH rate limit (ufw limit ssh). Waiting $($script:RetryDelaySeconds)s, then trying once more..." -ForegroundColor Yellow
+            Start-Sleep -Seconds $script:RetryDelaySeconds
+            $result = Invoke-PlinkStream @Stream
+        }
+        return $result
+    }
     Confirm-SharedUpstream -Connection $connection
     $result = Invoke-PlinkStream @Stream
     if (-not $result.Ok -and -not $NoRetry -and (Test-ConnectionDropped -Connection $connection -Output $result.Err)) {
@@ -1507,9 +1554,12 @@ function Open-DeployConnection {
     Every deploy keeps one SSH connection open for the whole run. This resolves the
     connection as Resolve-DeployConnection does, then starts a hidden
     background plink -batch -share -N, which logs in and holds the connection, and waits
-    until plink -share -shareexists reports it is up. Every remote command, upload and
-    download then runs as plink -share, multiplexed over that connection with no new
-    connection of its own, so `ufw limit ssh` sees one connection a deploy.
+    until plink -share -shareexists reports it is up. Every remote command then runs as
+    plink -share, multiplexed over that connection with no new connection of its own, and
+    so does an upload or download under 1 MB. One of 1 MB or more runs on a connection of
+    its own (plink -noshare), many times faster than a channel of the shared one; the
+    module opens at most four connections in any 30 seconds, waiting when it must, so
+    `ufw limit ssh` never refuses one.
 
     Before each remote step the holder is checked; if it has exited, a new one starts (one
     new connection) and a line says it reconnected. A step that failed because the
@@ -1563,7 +1613,7 @@ function Open-DeployConnection {
         $connection.OpenTimeoutSeconds = $TimeoutSeconds
         Write-Step "Opening the SSH connection to $($connection.Target)..."
         Connect-SharedUpstream -Connection $connection
-        Write-Ok 'Connected; every step of this deploy shares this one connection.'
+        Write-Ok 'Connected; every remote step of this deploy shares this connection.'
         $connection
     }
 }
@@ -1935,16 +1985,18 @@ function Compress-DeployArchive {
 function Invoke-Upload {
     <#
     .SYNOPSIS
-    Uploads the deploy archive over the held connection, byte for byte, with an elapsed-time indicator and a time limit.
+    Uploads the deploy archive, byte for byte, with an elapsed-time indicator and a time limit: on the held connection, or on one of its own from 1 MB.
 
     .DESCRIPTION
-    The one upload of every deploy. pscp cannot share a connection from its command line,
-    so the archive streams through plink instead: plink -share runs `cat > <Destination>`
-    on the host with the archive as its standard input, through Start-Process redirection,
-    which passes the bytes untouched. The SHA-256 check in Invoke-DeployBundle then confirms
-    what arrived. The console shows an elapsed-time bar, and the upload is stopped after 15
-    minutes. If the connection drops, it reconnects and uploads once more. Returns Ok, Err
-    and Elapsed.
+    The one upload of every deploy. The archive streams through plink, which runs
+    `cat > <Destination>` on the host with the archive as its standard input, through
+    Start-Process redirection, which passes the bytes untouched. An archive under 1 MB rides
+    the held connection; one of 1 MB or more goes on an SSH connection of its own (plink
+    -noshare), many times faster than a channel of the shared one. The SHA-256 check in
+    Invoke-DeployBundle then confirms what arrived. The console shows an elapsed-time bar,
+    and the upload is stopped after 15 minutes. If its connection fails, it uploads once
+    more: at once after reconnecting the held connection, or after 35 seconds on a
+    connection of its own. Returns Ok, Err and Elapsed.
 
     Upload into the SSH user's home (a relative -Destination), which always exists.
 
@@ -2005,8 +2057,9 @@ function Invoke-Upload {
     $active = Get-ActiveConnection -Connection $Connection
     Assert-RemotePath -Value $Destination -What 'Destination'
     $local = (Resolve-Path -LiteralPath $Path).ProviderPath
+    $bytes = (Get-Item -LiteralPath $local).Length
     if (-not $Status) {
-        $size = (Get-Item -LiteralPath $local).Length / 1KB
+        $size = $bytes / 1KB
         $Status = if ($FileCount -gt 0) { '{0} files, {1:N0} KB' -f $FileCount, $size } else { '{0}, {1:N0} KB' -f (Split-Path -Path $local -Leaf), $size }
     }
     $target = ConvertTo-ShellLiteral -Value $Destination
@@ -2017,6 +2070,7 @@ function Invoke-Upload {
         Activity       = $Activity
         Status         = $Status
         TimeoutSeconds = $TimeoutSeconds
+        Own            = $bytes -ge $script:OwnConnectionBytes
     }
     Invoke-StreamWithRetry -Stream $stream -NoRetry:$NoRetry
 }
@@ -2024,13 +2078,15 @@ function Invoke-Upload {
 function Send-File {
     <#
     .SYNOPSIS
-    Uploads single files over the held connection; returns whether it worked. For the rare case outside a deploy's one archive.
+    Uploads single files, each on the held connection or, from 1 MB, on one of its own; returns whether it worked. For the rare case outside a deploy's one archive.
 
     .DESCRIPTION
-    Streamed through plink -share (`cat > <path>` with the file as standard input). Deploys
-    ship one archive through Invoke-Upload and Invoke-DeployBundle instead; this is for the
-    rare case that truly cannot. Folders are not sent: put them in an archive. If the
-    connection drops, it reconnects and sends once more.
+    Streamed through plink (`cat > <path>` with the file as standard input): a file under
+    1 MB on the held connection, one of 1 MB or more on an SSH connection of its own, as
+    Invoke-Upload does. Deploys ship one archive through Invoke-Upload and
+    Invoke-DeployBundle instead; this is for the rare case that truly cannot. Folders are
+    not sent: put them in an archive. If a file's connection fails, it sends that file once
+    more.
 
     .PARAMETER Path
     The local file or files.
@@ -2076,6 +2132,7 @@ function Send-File {
             Activity       = 'Uploading'
             Status         = Split-Path -Path $local -Leaf
             TimeoutSeconds = 900
+            Own            = (Get-Item -LiteralPath $local).Length -ge $script:OwnConnectionBytes
         }
         $result = Invoke-StreamWithRetry -Stream $stream -NoRetry:$NoRetry
         if (-not $result.Ok) {
@@ -2089,15 +2146,17 @@ function Send-File {
 function Get-File {
     <#
     .SYNOPSIS
-    Downloads a file over the held connection and checks it against the host's SHA-256; returns whether it worked.
+    Downloads a file, on the held connection or, from 1 MB, on one of its own, and checks it against the host's SHA-256; returns whether it worked.
 
     .DESCRIPTION
-    The mirror of Send-File, streamed through plink -share: `cat` on the host with its
-    standard output going to a local file through Start-Process redirection, which passes
-    the bytes untouched. The download goes to <Destination>.part, the host's sha256sum of
-    the file is compared with the local one, and only a match is moved into place;
-    otherwise the partial file is removed. If the connection drops, it reconnects and
-    downloads once more. Copy-LiveDatabase uses it.
+    The mirror of Send-File, streamed through plink: `cat` on the host with its standard
+    output going to a local file through Start-Process redirection, which passes the bytes
+    untouched. The host first gives the file's size and SHA-256 on the held connection; a
+    file under 1 MB then downloads on that connection, one of 1 MB or more on an SSH
+    connection of its own, many times faster than a channel of the shared one. The download
+    goes to <Destination>.part, is compared with the host's SHA-256, and only a match is
+    moved into place; otherwise the partial file is removed. If its connection fails, it
+    downloads once more. Copy-LiveDatabase and Copy-LiveFolder use it.
 
     .PARAMETER Source
     The remote file. Relative paths are relative to the SSH user's home.
@@ -2129,18 +2188,31 @@ function Get-File {
     )
     $active = Get-ActiveConnection -Connection $Connection
     Assert-RemotePath -Value $Source -What 'Source'
+    $quoted = ConvertTo-ShellLiteral -Value $Source
+    $probe = Invoke-RemoteCore -Connection $active -Script "wc -c < $quoted && sha256sum < $quoted" -NoRetry:$NoRetry
+    $size = $null
+    $remoteHash = ''
+    foreach ($line in $probe.Lines) {
+        if ($line -match '^\s*(\d+)\s*$') { $size = [long]$Matches[1] }
+        elseif ($line -match '^([0-9a-f]{64})  -$') { $remoteHash = $Matches[1] }
+    }
+    if ($probe.ExitCode -ne 0 -or $null -eq $size -or -not $remoteHash) {
+        $why = if (-not $probe.Started) { Get-NotStartedMessage -Result $probe } else { "$Source could not be read on the host: $(@($probe.Lines | Where-Object { "$_".Trim() }) -join ' ')" }
+        Write-Host "    $why" -ForegroundColor Yellow
+        return $false
+    }
     $folder = Split-Path -Path $Destination -Parent
     if ($folder -and -not (Test-Path -LiteralPath $folder)) { $null = New-Item -ItemType Directory -Path $folder -Force }
     $part = "$Destination.part"
     Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
-    $quoted = ConvertTo-ShellLiteral -Value $Source
     $stream = @{
         Connection     = $active
         Command        = "cat $quoted"
         OutputFile     = $part
         Activity       = 'Downloading'
-        Status         = Split-Path -Path $Source -Leaf
+        Status         = '{0}, {1}' -f (Split-Path -Path $Source -Leaf), (Format-ByteSize -Bytes $size)
         TimeoutSeconds = 900
+        Own            = $size -ge $script:OwnConnectionBytes
     }
     $result = Invoke-StreamWithRetry -Stream $stream -NoRetry:$NoRetry
     if (-not $result.Ok) {
@@ -2148,8 +2220,6 @@ function Get-File {
         Write-Host "    Download of $Source failed: $($result.Err)" -ForegroundColor Yellow
         return $false
     }
-    $hashCheck = Invoke-RemoteCore -Connection $active -Script "sha256sum $quoted" -NoRetry:$NoRetry
-    $remoteHash = if ($hashCheck.ExitCode -eq 0) { ("$($hashCheck.Lines | Select-Object -First 1)" -split '\s+')[0].ToLowerInvariant() } else { '' }
     $localHash = (Get-FileHash -LiteralPath $part -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($remoteHash -ne $localHash) {
         Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
@@ -2884,7 +2954,10 @@ function Install-ServiceBinary {
     <snapshot>.partial, gzip -t must pass, and only then is it renamed into place and the
     uncompressed copy removed, all before anything is installed (Backup-RemoteDatabase
     takes the same snapshot for a site that is not a service); if any of it fails, the
-    services come back up on what is in place and nothing is installed. The newest three
+    services come back up on what is in place and nothing is installed. It is made as the
+    database file's own user (runuser), under umask 077, so the snapshot and whatever
+    sqlite3 makes beside the database keep that owner and each snapshot is 0600; before
+    anything stops, that user must be able to write the snapshot's folder. The newest three
     are kept across both forms, so uncompressed ones under the same names age out over the
     next three deploys. Nothing else matching the prefix
     is touched. A restore writes the database in place (gunzip -c, or cat for an
@@ -2909,7 +2982,8 @@ function Install-ServiceBinary {
 
     .PARAMETER Owner
     user or user:group for the binary (a bare user also names the group), such as the
-    service's own user. When empty the binary is owned by the SSH user.
+    service's own user. When empty the binary is owned by the SSH user. The database's
+    snapshot is made as the database file's owner, whatever this says.
 
     .PARAMETER Unit
     Systemd unit files inside the upload, each installed as /etc/systemd/system/<its name>
@@ -2951,11 +3025,12 @@ function Install-ServiceBinary {
     How long to wait before the is-active check; 2 by default.
 
     .PARAMETER Umask
-    The umask for the whole step, such as 077, so snapshots and copies are for root alone.
+    The umask for the whole step, such as 077, so what it writes is for root alone. The
+    database's snapshot is made under 077 whatever this says.
 
     .PARAMETER Database
     The live SQLite database on the host, snapshotted with sqlite3 .backup after the stop
-    and compressed with gzip.
+    and compressed with gzip, as the database file's own user.
 
     .PARAMETER SnapshotPrefix
     The snapshot's path up to its time stamp, such as /opt/example/backups/example-pre-.
@@ -3170,6 +3245,20 @@ if [ -n "$db" ] && [ -f "$db" ]; then
   for t in sqlite3 gzip; do
     if ! command -v "$t" >/dev/null; then echo "$t is not installed on the host, so the database cannot be snapshotted; nothing was changed." >&2; exit 3; fi
   done
+  # The snapshot is made as the database file's own user, so it, and whatever sqlite3 makes
+  # beside the database, stays theirs; that user must be able to write the snapshot's folder.
+  snapshot_user=$(stat -c %U "$db")
+  snapshot_group=$(stat -c %G "$db")
+  if [ "$snapshot_user" = UNKNOWN ]; then snapshot_user=; snapshot_group=; fi
+  if [ -n "$snapshot_user" ] && [ "$snapshot_user" != "$(id -un)" ] && ! command -v runuser >/dev/null; then
+    echo "runuser is not installed on the host, so the database cannot be snapshotted as $snapshot_user; nothing was changed." >&2
+    exit 3
+  fi
+  snap_dir=$(dirname "$snap")
+  if ! { snapshot_as mkdir -p "$snap_dir" && snapshot_as test -w "$snap_dir"; }; then
+    echo "${snapshot_user:-$(id -un)}, who owns $db, cannot write $snap_dir, where its snapshot goes; nothing was changed." >&2
+    exit 3
+  fi
 fi
 rev=
 service_units=
@@ -3192,8 +3281,12 @@ trap abort_restart EXIT
     $install = @'
 if [ -f "$bin" ]; then cp -p "$bin" "$old"; fi
 if [ -n "$db" ] && [ -f "$db" ]; then
-  # Whole and checked, then compressed and checked, before anything is installed.
+  # Whole and checked, then compressed and checked, before anything is installed, and for
+  # the database's user alone.
+  snapshot_umask_was=$(umask)
+  umask 077
   snapshot_take "$db" "$snap" "$snap_prefix" "$snap_suffix" "$snap_keep" 'nothing was installed' || exit
+  umask "$snapshot_umask_was"
 fi
 mkdir -p "$(dirname "$bin")" "$unit_dir"
 changed_units=
@@ -5809,8 +5902,9 @@ function Copy-LiveDatabase {
         moved to <Destination>.bak-<time> and the download takes its place, with any stale
         -wal and -shm removed; the newest three .bak copies are kept;
       - the host's snapshot is removed whether or not the download worked.
-    Returns $true when the local database was refreshed. Every call rides the connection
-    Open-DeployConnection holds, so the pull opens no connection of its own.
+    Returns $true when the local database was refreshed. Its commands ride the connection
+    Open-DeployConnection holds, and a snapshot of 1 MB or more downloads on a connection of
+    its own (Get-File).
 
     The snapshot is made as the SSH user unless -Owner names the database's own user, as
     for a site whose database folder must hold only that user's files (www-data): then
@@ -5939,7 +6033,8 @@ function Copy-LiveFolder {
       - the host's archive is removed whether or not the download worked.
     The archive is kept, not unpacked: it holds live uploads, so it stays on this machine,
     git-ignored. Returns the local archive's path, or nothing when there was no folder.
-    Every call rides the connection Open-DeployConnection holds.
+    Its commands ride the connection Open-DeployConnection holds, and an archive of 1 MB or
+    more downloads on a connection of its own (Get-File).
 
     .PARAMETER Folder
     The live folder on the host.
@@ -6038,17 +6133,18 @@ function Sync-LiveFolder {
     .DESCRIPTION
     For a folder only the host holds that is too large to archive on the host every day
     (Install-BackupTimer -Folder): its copy off the host is this mirror on the dev machine,
-    brought up to date at each deploy. On the held connection:
+    brought up to date at each deploy. Its commands ride the held connection, and:
       - the host lists the folder's regular files, each with its size and modification
         time, as -Owner through runuser when given;
       - each is compared with its copy under -Destination: one missing here, or of another
         size or time, is fetched. -Exclude leaves files out, as Install-BackupTimer's does;
       - the files go in batches of up to -BatchSize. For each, the list of names is sent,
         the host streams those files as one tar straight to this machine, with nothing
-        written on the host, and the host's SHA-256 of each file is checked against the
-        copy that arrived. Only a copy that matches takes its place, with the host's
-        modification time; a file that changed or went while it was read is left for the
-        next pull. A batch has 30 minutes;
+        written on the host, on an SSH connection of its own when the batch is 1 MB or
+        more, many times faster than a channel of the held one. The host's SHA-256 of
+        each file is then checked against the copy that arrived. Only a copy that matches
+        takes its place, with the host's modification time; a file that changed or went
+        while it was read is left for the next pull. A batch has 30 minutes;
       - a file here that the host no longer has stays, and is counted, unless -Delete
         removes it (and any folder that leaves empty).
     Each batch is in place before the next starts, so a pull cut short keeps what it
@@ -6261,6 +6357,7 @@ rm -f "$HOME/$list"
                 Activity       = "Fetching $Folder"
                 Status         = $label
                 TimeoutSeconds = 1800
+                Own            = $batchBytes -ge $script:OwnConnectionBytes
             }
             if (-not $download.Ok) { throw "The files of $label could not be fetched: $($download.Err)" }
             $sums = Invoke-RemoteCore -Connection $active -Script $hashScript -NoRetry:$NoRetry

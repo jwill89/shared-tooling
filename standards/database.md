@@ -8,7 +8,7 @@ Every project with a database uses SQLite. Snapshots, daily backups, restores an
 
 - A service's database lives beside its binary, in `/opt/<app>/data`, which its unit lists in `ReadWritePaths`. [review]
 - A PHP site's database sits outside its `public/` folder. [review]
-- Anything that writes in the live database's folder (migrations, `sqlite3`, scripts, artisan, workers, the backup) runs as the database's own user (`runuser -u <user>`, `User=`), so every file it makes (`-wal`, `-shm`, copies) keeps that owner. The module does this for its snapshots, backups and pulls (`-Owner`). [review]
+- Anything that writes in the live database's folder (migrations, `sqlite3`, scripts, artisan, workers, the backup) runs as the database's own user (`runuser -u <user>`, `User=`), so every file it makes (`-wal`, `-shm`, copies) keeps that owner. The module does this for its snapshots, backups and pulls (`-Owner`, and for `Install-ServiceBinary`'s snapshot the database file's own owner). [review]
 - The app and its migration tool open the database read-write but never create it, so a missing file (a mis-set data folder) is an error. [review]
 - A new local database is an empty file made by hand, then migrated. [review]
 

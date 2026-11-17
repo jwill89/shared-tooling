@@ -8,6 +8,11 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Fixed
+
+- The deploy module's large transfers no longer crawl over the held connection: an upload or download of 1 MB or more (`Invoke-Upload`, `Send-File`, `Get-File`, and so `Copy-LiveDatabase`, `Copy-LiveFolder` and each `Sync-LiveFolder` batch) runs on an SSH connection of its own, about 8 MB/s where a channel of the shared one moved about 0.5 MB/s. A smaller one, and every remote command, still rides the held connection, and the module opens no more than four connections in any 30 seconds, waiting when it must, so `ufw limit ssh` never refuses one. `Get-File` reads the file's size and SHA-256 before the download rather than after.
+- `Install-ServiceBinary -Database` takes its pre-deploy snapshot as the database file's own user, under umask 077, so the snapshot is that user's and 0600, as `Backup-RemoteDatabase` and the daily backups already were, where it was root's and 0644 without `-Umask 077`. Before anything stops it checks that user can write the snapshot's folder, and stops the deploy saying so when not: a project that keeps its snapshots in a folder only root can write gives that folder to the database's user first. The older root-owned snapshots age out over the next three deploys.
+
 ## [2.15.2] - 2026-11-16
 
 ### Added

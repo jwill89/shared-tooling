@@ -29,7 +29,7 @@ The shared deploy module (SharedDeploy, in `deploy/pwsh`) does most of a deploy.
 ## The shape of a deploy
 
 - A deploy builds and packs everything into one archive before anything on the host changes, so a broken build changes nothing. It may connect first, to read which release the host runs. [module]
-- It holds one SSH connection for the whole run, and one remote run checks the archive's SHA-256 and file count before anything live changes. [module]
+- It holds one SSH connection for the whole run, which every remote command rides, and one remote run checks the archive's SHA-256 and file count before anything live changes. An upload or download of 1 MB or more runs on a connection of its own, and no more than four connections open in any 30 seconds. [module]
 - A deploy ships code and config only, never `.env`, the data, the backups or user uploads. [review]
 - Live files never change in place: the new tree is built whole beside the live one, swapped in by renames, and the previous copy is kept for rollback (`Switch-RemoteDirectory`, `Switch-RemoteItemSet`). A release folder behind a `current` link follows the same rule. [module]
 - Upload folders sit beside the swapped folder (siblings of `dist/`), so a swap never wipes them. [review]

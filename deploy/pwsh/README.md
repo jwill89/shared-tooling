@@ -44,7 +44,7 @@ Everything a deploy needs goes into ONE archive: the binary, systemd units, env 
 6. For a project with a database: `Install-BackupTimer` keeps its daily backup installed and checked, and `Copy-LiveDatabase` pulls a copy to the dev machine, the one copy that leaves the host. A folder only the host holds, such as the site's uploads, gets the same, `Install-BackupTimer -Folder` and `Copy-LiveFolder`, or, when it is too large to archive on the host, a copy on the dev machine that `Sync-LiveFolder` keeps current ([Folders only the host holds](#folders-only-the-host-holds)).
 7. `Close-DeployConnection` in a `finally` block.
 
-A host that runs `ufw limit ssh` refuses an address after six connections in 30 seconds. This shape opens one: every command, upload and download rides the held connection, so a deploy with several targets (a backend, its frontend and a plugin) is one connection and one remote run, with no pauses between targets.
+A host that runs `ufw limit ssh` refuses an address after six connections in 30 seconds. This shape holds one: every remote command rides the held connection, so a deploy with several targets (a backend, its frontend and a plugin) is one connection and one remote run, with no pauses between targets. Only an upload or download of 1 MB or more opens a connection of its own, and the module opens at most four in any 30 seconds ([The one connection](#the-one-connection)).
 
 Single-file uploads (`Send-File`, `Send-FileVerified`) stay for the rare case that cannot ship one archive.
 
@@ -57,17 +57,19 @@ Single-file uploads (`Send-File`, `Send-FileVerified`) stay for the rare case th
 
 ## The one connection
 
-`Open-DeployConnection` starts a hidden `plink -batch -share -N` that logs in and holds the connection, and waits until `plink -share -shareexists` reports it is up. Every remote call then runs as `plink -batch -share`, which rides that connection and opens none of its own.
+`Open-DeployConnection` starts a hidden `plink -batch -share -N` that logs in and holds the connection, and waits until `plink -share -shareexists` reports it is up. Every remote command then runs as `plink -batch -share`, which rides that connection and opens none of its own; only a large transfer opens one (below).
 
 A remote script goes to the host on plink's standard input, never as plink's command: the shared connection ends a command over about 16 KB (`FATAL ERROR: Error 109: The pipe has been ended`) before the host runs any of it, while the connection itself stays up. plink's command is a short, fixed one that reads the script, checks its SHA-256, prints a line saying it started, and runs it as sshd would have (`$SHELL -c`), with an empty standard input and its errors merged into its output in order. So a script runs whole or not at all, up to the 128 KB Linux takes in one argument; a longer one is refused before anything is sent. A step that never started (plink could not connect, or the script arrived incomplete) fails saying none of it ran, rather than as a failure on the host, and is not retried unless the connection dropped.
 
 Uploads and downloads stream through plink too: the archive is the standard input of `cat > <file>` on the host, and a download is the standard output of `cat <file>`, checked against the host's `sha256sum`.
 
+A channel of a shared connection keeps PuTTY's small fixed window, so it moves one window a round trip: about 0.5 MB/s to a host 30 ms away, where a 9 GB folder takes six hours. So a transfer of 1 MB or more (an `Invoke-Upload` or `Send-File` upload, a `Get-File` download, a `Sync-LiveFolder` batch) runs on a plink of its own, `plink -batch -noshare -a -x`, which PuTTY runs in its simple mode with no window limit: about 8 MB/s over the same link. `Get-File` reads the file's size and SHA-256 on the held connection first, to choose. The module counts the connections it opens, the holder's among them, and waits before a fifth in any 30 seconds, so `ufw limit ssh` never refuses one and a connection from elsewhere still gets through. A large transfer whose connection fails is tried once more after 35 seconds, and the held connection is left as it is.
+
 Before each remote step the holder is checked; if it has exited, a new one starts (one new connection) and a line says it reconnected. A step that failed because the connection dropped is retried once after reconnecting. A reconnect is tried at once, and only if it is refused (the ufw window) does it wait 35 seconds and try once more. Marker files in the SSH user's `~/.shared-deploy` let a retried remote run resume: steps that already finished are skipped, and a run that already completed says so and succeeds.
 
 Nothing leaves a plink holding the connection: `Close-DeployConnection` stops it, `Fail` closes it before it exits, PowerShell's exit stops it, and the holder runs in a Windows job object that ends it with the PowerShell process, even one that was killed.
 
-Connection sharing has run real deploys on one held connection, from the upload through the smoke check and the dev-database pull. The remote-script path above and the reconnect after the holder has exited are tested against a local OpenSSH server; a connection that drops in the middle of a step is still tested only against a stand-in plink.
+Connection sharing has run real deploys on one held connection, from the upload through the smoke check and the dev-database pull. The remote-script path above, the reconnect after the holder has exited, and large transfers on their own connections (their files, their count in 30 seconds and their speed with 30 ms added) are tested against a local OpenSSH server; a connection that drops in the middle of a step is still tested only against a stand-in plink.
 
 ## Importing it
 
@@ -112,9 +114,9 @@ Remote commands:
 Transfers:
 
 - `Compress-DeployArchive`: packs everything a deploy needs into one ustar `.tar.gz`, from wherever each piece lives, and returns its path, file count and SHA-256.
-- `Invoke-Upload`: streams the archive to the host with an elapsed-time bar and a 15-minute limit; returns `Ok`, `Err` and `Elapsed`.
-- `Send-File`: single files, for the rare case outside the archive.
-- `Get-File`: downloads a file and checks it against the host's SHA-256.
+- `Invoke-Upload`: streams the archive to the host with an elapsed-time bar and a 15-minute limit, on a connection of its own from 1 MB; returns `Ok`, `Err` and `Elapsed`.
+- `Send-File`: single files, for the rare case outside the archive; one of 1 MB or more on a connection of its own.
+- `Get-File`: downloads a file and checks it against the host's SHA-256; one of 1 MB or more on a connection of its own.
 - `Send-FileVerified`: one file beside its place, checked on the host, then renamed in.
 
 Builds and checks before a deploy:
@@ -135,7 +137,7 @@ The remote run:
 
 Service binaries:
 
-- `Install-ServiceBinary`: for one service or a set: checks first (the binary and units are in the upload, the health URL can be built, the vhost goes in as [The vhost](#the-vhost) says), then stops them, keeps `<binary>.old`, snapshots the database with `sqlite3 .backup`, checked and compressed with gzip before anything is installed (newest three kept), installs the units that differ (compared with `cmp`) and the binary, restarts, checks (every service active, or `-HealthUrl` answers, with parts read from the env file), and rolls everything back together on failure.
+- `Install-ServiceBinary`: for one service or a set: checks first (the binary and units are in the upload, the health URL can be built, the vhost goes in as [The vhost](#the-vhost) says), then stops them, keeps `<binary>.old`, snapshots the database with `sqlite3 .backup` as the database file's own user, 0600, checked and compressed with gzip before anything is installed (newest three kept), installs the units that differ (compared with `cmp`) and the binary, restarts, checks (every service active, or `-HealthUrl` answers, with parts read from the env file), and rolls everything back together on failure.
 - `Restore-ServiceBinary`: puts the previous binary, units, vhost (with the sites it replaced) and optionally the newest database snapshot back after a failed smoke check.
 
 Folder swaps:
