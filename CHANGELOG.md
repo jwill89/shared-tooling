@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.18.0] - 2026-11-17
+
 ### Added
 
 - `task shared:web:audit` (`repo/Invoke-NpmAudit.ps1`) runs the npm audit `web.yml` runs, on a front end's folder (`DIR=web` by default), so a project's `task check` and CI pass over the same advisories. A project task that runs `npm audit --audit-level=high --omit=dev` itself swaps to it.
@@ -490,7 +492,8 @@ A major: a project's own Stylelint moves to 18.
 - `repo/`: the shared `.editorconfig` and `.gitattributes`, the Taskfile include, the Dependabot example, and `task shared:update` with its version check.
 - `.github/workflows`: reusable workflows for each stack (`web`, `go`, `php`, `dotnet`, `pwsh`, `docs`, `osv`).
 
-[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.17.0...HEAD
+[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.18.0...HEAD
+[2.18.0]: https://github.com/jwill89/shared-tooling/compare/v2.17.0...v2.18.0
 [2.17.0]: https://github.com/jwill89/shared-tooling/compare/v2.16.1...v2.17.0
 [2.16.1]: https://github.com/jwill89/shared-tooling/compare/v2.16.0...v2.16.1
 [2.16.0]: https://github.com/jwill89/shared-tooling/compare/v2.15.2...v2.16.0
