@@ -17,7 +17,8 @@
          listed and, once you agree (or with -Yes), taken and committed as one chore(deps)
          commit that names them; CI checks them with the rest. One that something else
          holds back is named as not taken. A change to any file but the manifests and
-         lockfiles stops the push and leaves everything uncommitted to look at.
+         lockfiles (for Python, each .in file and the .txt compiled beside it) stops the
+         push and leaves everything uncommitted to look at.
       3. Holds Dependabot's alerts to the osv-scanner.toml files
          (Sync-DependabotAlerts.ps1): an alert one passes over is dismissed with its
          reason, so Dependabot's security update job stops failing on it. A failure here
@@ -190,11 +191,16 @@ try {
             if ($left) {
                 Write-Warning ('Not taken, since something they depend on or that depends on them holds them back: ' + (($left | ForEach-Object { '{0} {1}' -f $_.Name, $_.Target }) -join ', '))
             }
-            # Only the manifests and lockfiles the updates change are committed; anything else
-            # changed stops here to be looked at.
+            # Only the manifests and lockfiles the updates change are committed, Python's .in
+            # files and the .txt compiled beside each among them; anything else changed stops
+            # here to be looked at.
             $changed = @(git status --porcelain | ForEach-Object { $_.Substring(3).Trim('"') })
             $dependencyFile = '(^|/)(package(-lock)?\.json|npm-shrinkwrap\.json|go\.(mod|sum)|composer\.(json|lock)|packages\.lock\.json|[^/]+\.csproj)$'
-            $other = @($changed | Where-Object { $_ -notmatch $dependencyFile })
+            $other = @($changed | Where-Object {
+                    $_ -notmatch $dependencyFile -and
+                    -not ($_ -match '\.in$' -and (Test-Path -LiteralPath ($_ -replace '\.in$', '.txt'))) -and
+                    -not ($_ -match '\.txt$' -and (Test-Path -LiteralPath ($_ -replace '\.txt$', '.in')))
+                })
             if ($other) {
                 Exit-Push ("Besides the dependency files, these changed while updating; look at them before pushing: $($other -join ', '). Nothing was committed.")
             }

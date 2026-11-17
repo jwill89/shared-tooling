@@ -8,6 +8,10 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Fixed
+
+- `task shared:push` commits a Python update's `.in` file and the `.txt` compiled beside it as dependency files, where it stopped the push saying they changed while updating.
+
 ## [2.16.0] - 2026-11-16
 
 ### Fixed
