@@ -100,6 +100,9 @@ jobs:
   e2e:
     # A pull request from a fork runs on GitHub's runners, never on a self-hosted one.
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}
+    env:
+      # Each check runs through ci/Invoke-CiCheck.ps1, which records it for the run's report.
+      CI_TOOLS: ${{ github.workspace }}/shared/ci
     steps:
       - uses: actions/checkout@v7
         with:
@@ -146,7 +149,9 @@ jobs:
       - name: Install
         if: steps.deps.outputs.cache-hit != 'true'
         working-directory: ${{ inputs.dir }}
-        run: npm ci --prefer-offline
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'npm ci' -Command 'npm ci --prefer-offline'
 
       # Saved at once, so a failing suite doesn't throw the download away.
       - name: Save dependencies
@@ -197,7 +202,9 @@ jobs:
       - name: Composer install
         if: inputs.php-version != '' && inputs.composer-dir != ''
         working-directory: ${{ inputs.composer-dir }}
-        run: composer install --prefer-dist --no-interaction --no-progress
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'composer install' -Command 'composer install --prefer-dist --no-interaction --no-progress'
 
       - uses: astral-sh/setup-uv@v10.3.3
         if: inputs.python-version-file != ''
@@ -212,12 +219,15 @@ jobs:
         env:
           VERSION_FILE: ${{ inputs.python-version-file }}
           REQUIREMENTS: ${{ inputs.python-requirements }}
+        shell: pwsh
         run: |
-          venv="$PWD/$(dirname "$VERSION_FILE")/.venv"
-          uv venv --managed-python --python "$(tr -d '[:space:]' < "$VERSION_FILE")" "$venv"
-          uv pip install --python "$venv/bin/python" --require-hashes -r "$REQUIREMENTS"
-          echo "$venv/bin" >> "$GITHUB_PATH"
-          echo "VIRTUAL_ENV=$venv" >> "$GITHUB_ENV"
+          $folder = Split-Path -Parent $env:VERSION_FILE
+          $venv = if ($folder) { Join-Path $PWD $folder '.venv' } else { Join-Path $PWD '.venv' }
+          $env:VENV = $venv
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'Python' -Command 'uv venv --managed-python --python "$(tr -d "[:space:]" < "$VERSION_FILE")" "$VENV" && uv pip install --python "$VENV/bin/python" --require-hashes -r "$REQUIREMENTS"'
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value "$venv/bin"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "VIRTUAL_ENV=$venv"
 
       - name: Download ${{ inputs.download-artifact }}
         if: inputs.download-artifact != ''
@@ -228,15 +238,19 @@ jobs:
 
       - name: Setup
         if: inputs.setup != ''
+        shell: pwsh
         env:
           SETUP: ${{ inputs.setup }}
-        run: bash -euo pipefail -c "$SETUP"
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'Setup' -Command 'bash -euo pipefail -c "$SETUP"'
 
       - name: Suite
         working-directory: ${{ inputs.dir }}
+        shell: pwsh
         env:
           SCRIPT: ${{ inputs.script }}
-        run: npm run "$SCRIPT"
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name "npm run $env:SCRIPT" -Command 'npm run "$SCRIPT"'
 
       # The traces Playwright keeps for a failed test (test/e2e: retain-on-failure).
       - name: Upload the failures' traces
@@ -245,5 +259,22 @@ jobs:
         with:
           name: e2e-traces
           path: ${{ inputs.dir }}/test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # On a failure, the job's checks go up for report.yml to merge into the run's report.
+      - name: CI report
+        id: ci-report
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        run: '& "$env:CI_TOOLS/Complete-CiReport.ps1"'
+
+      - name: Upload the CI report
+        if: failure() && steps.ci-report.outputs.name != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.ci-report.outputs.name }}
+          path: ${{ runner.temp }}/ci-report
           retention-days: 7
           if-no-files-found: ignore

@@ -31,6 +31,9 @@ jobs:
   osv:
     # A pull request from a fork runs on GitHub's runners, never on a self-hosted one.
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}
+    env:
+      # Each check runs through ci/Invoke-CiCheck.ps1, which records it for the run's report.
+      CI_TOOLS: ${{ github.workspace }}/${{ inputs.shared-path }}/ci
     steps:
       - uses: actions/checkout@v7
         with:
@@ -50,4 +53,22 @@ jobs:
         shell: pwsh
         env:
           SHARED: ${{ inputs.shared-path }}
-        run: '& (Join-Path $env:SHARED "repo/Invoke-VulnerabilityScan.ps1") -Path .'
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'OSV-Scanner' -Command 'pwsh -NoProfile -File "$SHARED/repo/Invoke-VulnerabilityScan.ps1" -Path .'
+
+      # On a failure, the job's checks go up for report.yml to merge into the run's report.
+      - name: CI report
+        id: ci-report
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        run: '& "$env:CI_TOOLS/Complete-CiReport.ps1"'
+
+      - name: Upload the CI report
+        if: failure() && steps.ci-report.outputs.name != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.ci-report.outputs.name }}
+          path: ${{ runner.temp }}/ci-report
+          retention-days: 7
+          if-no-files-found: ignore

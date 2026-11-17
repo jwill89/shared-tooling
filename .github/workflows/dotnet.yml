@@ -40,6 +40,9 @@ jobs:
   dotnet:
     # A pull request from a fork runs on GitHub's runners, never on a self-hosted one.
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}
+    env:
+      # Each check runs through ci/Invoke-CiCheck.ps1, which records it for the run's report.
+      CI_TOOLS: ${{ github.workspace }}/shared/ci
     steps:
       - uses: actions/checkout@v7
         with:
@@ -54,49 +57,74 @@ jobs:
       # the cue to raise the plugin's DalamudApiLevel.
       - name: Dalamud
         if: inputs.dalamud
+        shell: pwsh
         run: |
-          curl -fsSL -o "$RUNNER_TEMP/dalamud.zip" https://goatcorp.github.io/dalamud-distrib/latest.zip
-          unzip -q "$RUNNER_TEMP/dalamud.zip" -d "$RUNNER_TEMP/dalamud"
-          echo "DALAMUD_HOME=$RUNNER_TEMP/dalamud" >> "$GITHUB_ENV"
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'Dalamud' -Command 'curl -fsSL -o "$RUNNER_TEMP/dalamud.zip" https://goatcorp.github.io/dalamud-distrib/latest.zip && unzip -q "$RUNNER_TEMP/dalamud.zip" -d "$RUNNER_TEMP/dalamud"'
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "DALAMUD_HOME=$env:RUNNER_TEMP/dalamud"
 
       - name: Build
         env:
           PROJECTS: ${{ inputs.projects }}
           STRICT: ${{ inputs.warnings-as-errors && '-p:TreatWarningsAsErrors=true' || '' }}
+        shell: pwsh
         run: |
-          for project in $PROJECTS; do
-            # shellcheck disable=SC2086 # $STRICT is a property or nothing
-            dotnet build "$project" -c Release $STRICT
-          done
+          foreach ($project in -split $env:PROJECTS) {
+            & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name "dotnet build $project" -Command "dotnet build `"$project`" -c Release `$STRICT" -Group
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
 
       - name: Style
         env:
           PROJECTS: ${{ inputs.projects }}
+        shell: pwsh
         run: |
-          for project in $PROJECTS; do
-            dotnet format "$project" --verify-no-changes
-          done
+          foreach ($project in -split $env:PROJECTS) {
+            & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name "dotnet format $project" -Command "dotnet format `"$project`" --verify-no-changes" -Group
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
 
       - name: Tests
         if: inputs.test-project != ''
         env:
           TEST_PROJECT: ${{ inputs.test-project }}
-        # From the test project's own folder, so a global.json beside it is read: one that
-        # picks Microsoft.Testing.Platform makes
-        # `dotnet test` take --project; without one, the older runner takes a plain path.
+          # From the test project's own folder, so a global.json beside it is read: one
+          # that picks Microsoft.Testing.Platform makes `dotnet test` take --project;
+          # without one, the older runner takes a plain path.
+          TESTS: |
+            cd "$(dirname "$TEST_PROJECT")"
+            name=$(basename "$TEST_PROJECT")
+            dir=$PWD
+            mtp=
+            while :; do
+              if grep -qs '"Microsoft.Testing.Platform"' "$dir/global.json"; then mtp=1; break; fi
+              if [ -f "$dir/global.json" ] || [ "$dir" = / ] || [ "$dir" = "$GITHUB_WORKSPACE" ]; then break; fi
+              dir=$(dirname "$dir")
+            done
+            if [ -n "$mtp" ]; then
+              dotnet test --project "$name"
+            else
+              dotnet test "$name"
+            fi
+        shell: pwsh
         run: |
-          dotnet format "$TEST_PROJECT" --verify-no-changes
-          cd "$(dirname "$TEST_PROJECT")"
-          name=$(basename "$TEST_PROJECT")
-          dir=$PWD
-          mtp=
-          while :; do
-            if grep -qs '"Microsoft.Testing.Platform"' "$dir/global.json"; then mtp=1; break; fi
-            if [ -f "$dir/global.json" ] || [ "$dir" = / ] || [ "$dir" = "$GITHUB_WORKSPACE" ]; then break; fi
-            dir=$(dirname "$dir")
-          done
-          if [ -n "$mtp" ]; then
-            dotnet test --project "$name"
-          else
-            dotnet test "$name"
-          fi
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'dotnet format (tests)' -Command 'dotnet format "$TEST_PROJECT" --verify-no-changes'
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'dotnet test' -Command 'bash -c "$TESTS"'
+
+      # On a failure, the job's checks go up for report.yml to merge into the run's report.
+      - name: CI report
+        id: ci-report
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        run: '& "$env:CI_TOOLS/Complete-CiReport.ps1"'
+
+      - name: Upload the CI report
+        if: failure() && steps.ci-report.outputs.name != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.ci-report.outputs.name }}
+          path: ${{ runner.temp }}/ci-report
+          retention-days: 7
+          if-no-files-found: ignore

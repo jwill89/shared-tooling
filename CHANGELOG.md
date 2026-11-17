@@ -8,6 +8,22 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Added
+
+- `changes.yml` runs only the CI jobs a change needs. A project's `ci.yml` names its areas in a `changes` job, and each job's `if:` reads whether its area changed (`fromJSON(needs.changes.outputs.areas).<area>`).
+  - A push is compared with the newest commit of the branch whose CI passed, so a failed or cancelled run's changes are checked by the next one; a pull request is compared with its base.
+  - Every job runs when `.github/`, `shared`, the Taskfile, `.editorconfig` or `.gitattributes` change; when a changed file matches no area and isn't Markdown, the licence or editor settings; and on any event other than a push or pull request.
+  - `scripts` (PowerShell files) and `lockfiles` come with every repo.
+  - A job that needs one that may be skipped, such as the release job, starts its `if:` with `!failure() && !cancelled()`.
+  - `task shared:ci:changes` prints which jobs a push of the working tree would run.
+- `report.yml` gives a failed run one report: every job's result, the step each failed job stopped at, and each failed check with the files and lines it names, the values of the variables its command used and its last lines of output. It heads the run's page and goes up as the `ci-report` artifact with each failed check's whole log. `task shared:ci:report` prints the branch's latest report, and `standards/docs-and-agents.md` has agents read it before a raw log. A project calls it last, `needs:` every other job, `if: failure()`.
+- Every shared workflow runs its checks through `ci/Invoke-CiCheck.ps1`, so a failing check marks the lines it names on the commit and in a pull request's diff, and writes its failure to the job's summary. A project's own job can run its checks the same way (README, Adding it to a project).
+
+### Changed
+
+- `go.yml` and shared-tooling's own CI run golangci-lint with `go run` at the `golangci-lint-version` input, in place of `golangci/golangci-lint-action`: still built from source with the module's own Go, now through the report.
+- `task shared:lint:scripts` and `pwsh.yml` print each PSScriptAnalyzer finding as one line, `path:line:col: severity rule: message`, which an editor's terminal links to the line, in place of a table.
+
 ## [2.16.1] - 2026-11-16
 
 ### Fixed

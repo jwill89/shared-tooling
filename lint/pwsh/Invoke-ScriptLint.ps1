@@ -115,7 +115,13 @@ if ($crash) {
     exit $LASTEXITCODE
 }
 
-$findings | Format-Table -AutoSize | Out-String | Write-Output
+# One line a finding, path:line:col: severity rule: message, which an editor's terminal links
+# to the line and CI's report reads.
+foreach ($finding in $findings) {
+    $where = [IO.Path]::GetRelativePath((Get-Location).Path, $finding.ScriptPath) -replace '\\', '/'
+    $message = $finding.Message -replace '\r?\n', ' '
+    Write-Output "${where}:$($finding.Line):$($finding.Column): $($finding.Severity) $($finding.RuleName): $message"
+}
 Write-Output "$($files.Count) files, $(@($findings).Count) findings"
 if ($findings) {
     exit 1

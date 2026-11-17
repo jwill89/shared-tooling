@@ -121,6 +121,8 @@ CI's release job tags `v2.5.0` when the app's version moves and `plugin-v1.5.0` 
 - A check every project should run goes into shared-tooling and arrives by a release. [review]
 - A project-only check is wired into both `task check` and the repo's own CI job, so a green CI means the local checks passed. [review]
 - CI runs on every push to `main` and every pull request, calling shared-tooling's workflows by name at the tag `shared/` holds, then the repo's own jobs. [CI]
+- CI runs what a change needs: its first job, `changes` (`changes.yml`), names the repo's areas, and each job runs when its area changed since the last commit whose CI passed. `docs` always runs, and every job runs when CI's own files, `shared/` or the Taskfile change, or when a changed file falls in no area and isn't Markdown or an editor's settings. [review]
+- Every check CI runs goes through `ci/Invoke-CiCheck.ps1`, the repo's own jobs' too, and the run's last job is `report.yml`, so a failed run has one report of what failed and where (shared-tooling's README, Adding it to a project). [review]
 - A fresh clone runs `git submodule update --init`, or clones with `--recurse-submodules`, before anything builds. [review]
 - `shared/` moves to another release only with `task shared:update -- vX.Y.Z`, which moves the submodule and every workflow ref together, re-syncs `.editorconfig` and `.gitattributes`, and reinstalls the packages. [CI]
 - That update is reviewed and committed as one change, `package-lock.json` included. [review]
@@ -158,7 +160,7 @@ These apply alike to an app, a service and a plugin's own version.
 ### Tags and releases
 
 - CI makes the release tag and the GitHub Release on a green push to `main` that bumps the version; an app is never tagged by hand. [review]
-- The release job runs only after every gate job passes, skips a version already released, and publishes that version's CHANGELOG section as the release notes. [review]
+- The release job runs only once every gate job has passed or been skipped because its area didn't change (`if: ${{ !failure() && !cancelled() && ... }}`), skips a version already released, and publishes that version's CHANGELOG section as the release notes. [review]
 - The release job gets `contents: write` at job level, while the workflow default stays `contents: read`. [review]
 - Where a tag is made by hand (shared-tooling's `task release`, or a project with no CI release yet), a lightweight tag is fine. [review]
 - A hand-made tag is pushed by name (`git push origin vX.Y.Z`), since `--follow-tags` skips lightweight tags. [review]
@@ -169,6 +171,7 @@ These apply alike to an app, a service and a plugin's own version.
 - Pruning branches, worktrees and stashes is the owner's job. [review]
 - Work happens on `main`, with no branches. [review]
 - CI on GitHub is the gate, and no local pre-push or other git hook runs the checks. [review]
+- When CI fails, an agent reads the run's report first (`task shared:ci:report`): the failed checks, the files and lines they name and their last lines of output, with each check's whole log beside it. It reads a raw log only when the report doesn't say why. [review]
 - A small change rides along to the next real version rather than getting a release of its own. [review]
 - An agent never reads a project's deploy config, `.env` files, development databases or other secrets. [review]
 - An agent deploys or connects to production only when the owner asks; even then it asks before connecting, even to read logs, and changes nothing there unasked. [review]

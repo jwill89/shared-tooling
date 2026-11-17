@@ -79,6 +79,9 @@ jobs:
     defaults:
       run:
         working-directory: ${{ inputs.dir }}
+    env:
+      # Each check runs through ci/Invoke-CiCheck.ps1, which records it for the run's report.
+      CI_TOOLS: ${{ github.workspace }}/shared/ci
     steps:
       - uses: actions/checkout@v7
         with:
@@ -104,40 +107,47 @@ jobs:
         if: inputs.apt-packages != ''
         env:
           PACKAGES: ${{ inputs.apt-packages }}
+        shell: pwsh
         run: |
-          sudo apt-get update
-          # shellcheck disable=SC2086 # the list splits into packages on purpose
-          sudo apt-get install -y --no-install-recommends $PACKAGES
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'Ubuntu packages' -Command 'sudo apt-get update && sudo apt-get install -y --no-install-recommends $PACKAGES'
 
       - name: golangci config is current
         working-directory: shared/lint/go
+        shell: pwsh
         env:
           MODULE_DIR: ${{ inputs.dir }}
-        run: go run . -dir "$MODULE_DIR" -check
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'golangci config is current' -Command 'go run . -dir "$MODULE_DIR" -check'
 
-      - run: go vet ./...
+      - name: go vet
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'go vet' -Command 'go vet ./...'
 
       # Built from source with the module's toolchain: a prebuilt linter binary cannot
-      # read export data from a newer Go than it was compiled with.
-      - uses: golangci/golangci-lint-action@v9
-        with:
-          version: ${{ inputs.golangci-lint-version }}
-          install-mode: goinstall
-          working-directory: ${{ inputs.dir }}
-          skip-cache: ${{ runner.environment != 'github-hosted' }}
+      # read export data from a newer Go than it was compiled with. Go's build cache keeps
+      # the build between runs.
+      - name: golangci-lint
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.golangci-lint-version }}
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'golangci-lint' -Command 'go run "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$VERSION" run'
 
       - name: govulncheck
+        shell: pwsh
         env:
           VERSION: ${{ inputs.govulncheck-version }}
-        run: go run "golang.org/x/vuln/cmd/govulncheck@$VERSION" ./...
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'govulncheck' -Command 'go run "golang.org/x/vuln/cmd/govulncheck@$VERSION" ./...'
 
       - name: Tests
+        shell: pwsh
         env:
           RACE: ${{ inputs.race && '-race' || '' }}
           COVERPKG: ${{ inputs.coverpkg }}
         run: |
-          # shellcheck disable=SC2086 # $RACE is a flag or nothing
-          go test $RACE -shuffle=on -covermode=atomic ${COVERPKG:+"-coverpkg=$COVERPKG"} -coverprofile=coverage.out ./...
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'Tests' -Command 'go test $RACE -shuffle=on -covermode=atomic ${COVERPKG:+"-coverpkg=$COVERPKG"} -coverprofile=coverage.out ./...'
 
       - name: Coverage floor
         shell: pwsh
@@ -145,11 +155,29 @@ jobs:
           FLOOR: ${{ inputs.coverage-floor }}
           EXCLUDE: ${{ inputs.coverage-exclude }}
         run: |
-          $exclude = @($env:EXCLUDE -split "`n" | ForEach-Object Trim | Where-Object { $_ })
-          & "$env:GITHUB_WORKSPACE/shared/test/go/Test-CoverageFloor.ps1" -ProfilePath coverage.out -Floor ([double] $env:FLOOR) -Exclude $exclude
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'Coverage floor' -Command 'pwsh -NoProfile -Command ''& "$env:GITHUB_WORKSPACE/shared/test/go/Test-CoverageFloor.ps1" -ProfilePath coverage.out -Floor ([double] $env:FLOOR) -Exclude @($env:EXCLUDE -split "`n" | ForEach-Object Trim | Where-Object { $_ })'''
 
       - name: Build
         if: inputs.build != ''
+        shell: pwsh
         env:
           BUILD: ${{ inputs.build }}
-        run: bash -c "$BUILD"
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'Build' -Command 'bash -c "$BUILD"'
+
+      # On a failure, the job's checks go up for report.yml to merge into the run's report.
+      - name: CI report
+        id: ci-report
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        run: '& "$env:CI_TOOLS/Complete-CiReport.ps1"'
+
+      - name: Upload the CI report
+        if: failure() && steps.ci-report.outputs.name != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.ci-report.outputs.name }}
+          path: ${{ runner.temp }}/ci-report
+          retention-days: 7
+          if-no-files-found: ignore

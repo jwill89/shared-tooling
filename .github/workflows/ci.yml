@@ -4,9 +4,9 @@ name: CI
 # analyzer settings, its docs with its own Markdown config and the CHANGELOG's links, the
 # golangci sync tool linted by the template it ships, the runners' scaler as go.yml checks
 # a module, the shared ruff config loading on the Python script it ships, every workflow
-# with actionlint,
-# every lint/web config and test preset loading from its own install, and OSV-Scanner
-# over the lockfiles.
+# with actionlint, every lint/web config and test preset loading from its own install, and
+# OSV-Scanner over the lockfiles. Each job runs when its area changed (changes.yml), and a
+# run that fails ends with one report of what failed (report.yml).
 
 on:
   push:
@@ -17,7 +17,27 @@ permissions:
   contents: read
 
 jobs:
+  # CI's own scripts and workflows run in every job, so a change to them runs every job.
+  changes:
+    uses: ./.github/workflows/changes.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      shared-path: .
+      always: .github/** ci/** Taskfile.yml .editorconfig .gitattributes
+      ignore: '**/*.md LICENSE .gitignore .vscode/** .claude/** VERSION .markdownlint-cli2.jsonc lint/markdown/** repo/editorconfig repo/gitattributes repo/*.example.* runner/Dockerfile runner/setup-host.sh'
+      areas: |
+        go: lint/go/**
+        scaler: runner/scaler/** lint/go/**
+        python: test/python/** lint/python/**
+        workflows: .github/**
+        web: lint/web/** test/a11y/** test/web/** scripts/test-presets.mjs
+        osv: repo/Invoke-VulnerabilityScan.ps1
+
   scripts:
+    needs: changes
+    if: fromJSON(needs.changes.outputs.areas).scripts
     uses: ./.github/workflows/pwsh.yml
     with:
       shared-path: .
@@ -28,11 +48,15 @@ jobs:
       shared-path: .
 
   go:
+    needs: changes
+    if: fromJSON(needs.changes.outputs.areas).go
     # A pull request from a fork runs on GitHub's runners, never on a self-hosted one.
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}
     defaults:
       run:
         working-directory: lint/go
+    env:
+      CI_TOOLS: ${{ github.workspace }}/ci
     steps:
       - uses: actions/checkout@v7
         with:
@@ -41,24 +65,50 @@ jobs:
         with:
           go-version-file: lint/go/go.mod
           cache-dependency-path: lint/go/go.sum
-      - run: go run . -dir . -check
-      - run: go vet ./...
-      - uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.15.0
-          install-mode: goinstall
-          working-directory: lint/go
-      # The version go.yml defaults to, so a release that can't analyse current Go fails
+      - name: golangci config is current
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'golangci config is current' -Command 'go run . -dir . -check'
+      - name: go vet
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'go vet' -Command 'go vet ./...'
+      # The versions go.yml defaults to, so a release that can't analyse current Go fails
       # here before it reaches a project.
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - name: golangci-lint
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'golangci-lint' -Command 'go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run'
+      - name: govulncheck
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'govulncheck' -Command 'go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...'
+      - name: CI report
+        id: ci-report
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        run: '& "$env:CI_TOOLS/Complete-CiReport.ps1"'
+      - name: Upload the CI report
+        if: failure() && steps.ci-report.outputs.name != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.ci-report.outputs.name }}
+          path: ${{ runner.temp }}/ci-report
+          retention-days: 7
+          if-no-files-found: ignore
 
   # go.yml's steps, which can't be called here: it finds the sync tool under shared/.
   scaler:
+    needs: changes
+    if: fromJSON(needs.changes.outputs.areas).scaler
     # A pull request from a fork runs on GitHub's runners, never on a self-hosted one.
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}
     defaults:
       run:
         working-directory: runner/scaler
+    env:
+      CI_TOOLS: ${{ github.workspace }}/ci
     steps:
       - uses: actions/checkout@v7
         with:
@@ -67,22 +117,54 @@ jobs:
         with:
           go-version-file: runner/scaler/go.mod
           cache-dependency-path: runner/scaler/go.sum
-      - run: go run . -dir ../../runner/scaler -check
+      - name: golangci config is current
         working-directory: lint/go
-      - run: go vet ./...
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'golangci config is current' -Command 'go run . -dir ../../runner/scaler -check'
+      - name: go vet
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'go vet' -Command 'go vet ./...'
       # The build the Windows scaler runs, which the steps here otherwise never compile.
-      - run: GOOS=windows go vet ./...
-      - uses: golangci/golangci-lint-action@v9
+      - name: go vet (Windows)
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'go vet (Windows)' -Command 'GOOS=windows go vet ./...'
+      - name: golangci-lint
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'golangci-lint' -Command 'go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run'
+      - name: govulncheck
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'govulncheck' -Command 'go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...'
+      - name: Tests
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'Tests' -Command 'go test -race -shuffle=on ./...'
+      - name: CI report
+        id: ci-report
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        run: '& "$env:CI_TOOLS/Complete-CiReport.ps1"'
+      - name: Upload the CI report
+        if: failure() && steps.ci-report.outputs.name != ''
+        uses: actions/upload-artifact@v7
         with:
-          version: v2.15.0
-          install-mode: goinstall
-          working-directory: runner/scaler
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
-      - run: go test -race -shuffle=on ./...
+          name: ${{ steps.ci-report.outputs.name }}
+          path: ${{ runner.temp }}/ci-report
+          retention-days: 7
+          if-no-files-found: ignore
 
   python:
+    needs: changes
+    if: fromJSON(needs.changes.outputs.areas).python
     # A pull request from a fork runs on GitHub's runners, never on a self-hosted one.
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}
+    env:
+      CI_TOOLS: ${{ github.workspace }}/ci
     steps:
       - uses: actions/checkout@v7
         with:
@@ -93,13 +175,40 @@ jobs:
           enable-cache: false
       # The shared ruff config loads, linting and formatting test/python's script, at the
       # versions the Taskfile's lint:python runs.
-      - run: uvx ruff@0.17.5 check --config lint/python/ruff.toml --no-cache test/python
-      - run: uvx ruff@0.17.5 format --check --config lint/python/ruff.toml --no-cache test/python
-      - run: uvx mypy@2.4.0 --strict test/python
+      - name: ruff check
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'ruff check' -Command 'uvx ruff@0.17.5 check --config lint/python/ruff.toml --no-cache test/python'
+      - name: ruff format
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'ruff format' -Command 'uvx ruff@0.17.5 format --check --config lint/python/ruff.toml --no-cache test/python'
+      - name: mypy
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'mypy' -Command 'uvx mypy@2.4.0 --strict test/python'
+      - name: CI report
+        id: ci-report
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        run: '& "$env:CI_TOOLS/Complete-CiReport.ps1"'
+      - name: Upload the CI report
+        if: failure() && steps.ci-report.outputs.name != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.ci-report.outputs.name }}
+          path: ${{ runner.temp }}/ci-report
+          retention-days: 7
+          if-no-files-found: ignore
 
   workflows:
+    needs: changes
+    if: fromJSON(needs.changes.outputs.areas).workflows
     # A pull request from a fork runs on GitHub's runners, never on a self-hosted one.
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}
+    env:
+      CI_TOOLS: ${{ github.workspace }}/ci
     steps:
       - uses: actions/checkout@v7
         with:
@@ -107,11 +216,32 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: stable
-      - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: actionlint
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'actionlint' -Command 'go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12'
+      - name: CI report
+        id: ci-report
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        run: '& "$env:CI_TOOLS/Complete-CiReport.ps1"'
+      - name: Upload the CI report
+        if: failure() && steps.ci-report.outputs.name != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.ci-report.outputs.name }}
+          path: ${{ runner.temp }}/ci-report
+          retention-days: 7
+          if-no-files-found: ignore
 
   web:
+    needs: changes
+    if: fromJSON(needs.changes.outputs.areas).web
     # A pull request from a fork runs on GitHub's runners, never on a self-hosted one.
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}
+    env:
+      CI_TOOLS: ${{ github.workspace }}/ci
     steps:
       - uses: actions/checkout@v7
         with:
@@ -123,14 +253,49 @@ jobs:
           cache-dependency-path: |
             lint/web/package-lock.json
             test/a11y/package-lock.json
-      - run: npm ci
+      - name: npm ci (lint/web)
         working-directory: lint/web
-      - run: npm ci
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'npm ci (lint/web)' -Command 'npm ci'
+      - name: npm ci (test/a11y)
         working-directory: test/a11y
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'npm ci (test/a11y)' -Command 'npm ci'
       # Every config and preset loads, from its own package's install.
-      - run: node scripts/test-presets.mjs
+      - name: Presets load
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'Presets load' -Command 'node scripts/test-presets.mjs'
+      - name: CI report
+        id: ci-report
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        run: '& "$env:CI_TOOLS/Complete-CiReport.ps1"'
+      - name: Upload the CI report
+        if: failure() && steps.ci-report.outputs.name != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.ci-report.outputs.name }}
+          path: ${{ runner.temp }}/ci-report
+          retention-days: 7
+          if-no-files-found: ignore
 
   osv:
+    needs: changes
+    if: fromJSON(needs.changes.outputs.areas).lockfiles || fromJSON(needs.changes.outputs.areas).osv
     uses: ./.github/workflows/osv.yml
+    with:
+      shared-path: .
+
+  report:
+    needs: [changes, scripts, docs, go, scaler, python, workflows, web, osv]
+    if: failure()
+    uses: ./.github/workflows/report.yml
+    permissions:
+      contents: read
+      actions: read
     with:
       shared-path: .

@@ -66,6 +66,9 @@ jobs:
     defaults:
       run:
         working-directory: ${{ inputs.dir }}
+    env:
+      # Each check runs through ci/Invoke-CiCheck.ps1, which records it for the run's report.
+      CI_TOOLS: ${{ github.workspace }}/shared/ci
     steps:
       - uses: actions/checkout@v7
         with:
@@ -90,11 +93,12 @@ jobs:
         env:
           VERSION_FILE: ${{ inputs.python-version-file }}
           REQUIREMENTS: ${{ inputs.requirements }}
+        shell: pwsh
         run: |
-          uv venv --managed-python --python "$(tr -d '[:space:]' < "$VERSION_FILE")" .venv
-          uv pip install --require-hashes -r "$REQUIREMENTS"
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
-          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'Install' -Command 'uv venv --managed-python --python "$(tr -d "[:space:]" < "$VERSION_FILE")" .venv && uv pip install --require-hashes -r "$REQUIREMENTS"'
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value "$PWD/.venv/bin"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "VIRTUAL_ENV=$PWD/.venv"
 
       - name: Restore the build cache
         id: build-cache
@@ -106,9 +110,11 @@ jobs:
 
       - name: Before
         if: inputs.before != ''
+        shell: pwsh
         env:
           BEFORE: ${{ inputs.before }}
-        run: bash -euo pipefail -c "$BEFORE"
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'Before' -Command 'bash -euo pipefail -c "$BEFORE"'
 
       # Saved at once, so a failing check doesn't throw the build away.
       - name: Save the build cache
@@ -119,22 +125,32 @@ jobs:
           key: ${{ steps.build-cache.outputs.cache-primary-key }}
 
       - name: ruff check
-        run: python -m ruff check --output-format=github .
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'ruff check' -Command 'python -m ruff check --output-format=github .'
 
       - name: ruff format
-        run: python -m ruff format --check .
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'ruff format' -Command 'python -m ruff format --check .'
 
       # --strict on the command line, so a project's config chooses what is checked but
       # can't turn strictness off.
       - name: mypy
-        run: python -m mypy --strict
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'mypy' -Command 'python -m mypy --strict'
 
       - name: Coverage floor is set
-        run: python "$GITHUB_WORKSPACE/shared/test/python/coverage_floor.py"
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'Coverage floor is set' -Command 'python "$GITHUB_WORKSPACE/shared/test/python/coverage_floor.py"'
 
       # pytest-cov fails the run below the floor in pyproject.toml's [tool.coverage.report].
       - name: Tests
-        run: python -m pytest --cov --cov-report=term-missing:skip-covered
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'Tests' -Command 'python -m pytest --cov --cov-report=term-missing:skip-covered'
 
       - name: Upload ${{ inputs.artifact-name }}
         if: inputs.artifact-path != ''
@@ -143,3 +159,20 @@ jobs:
           name: ${{ inputs.artifact-name }}
           path: ${{ inputs.artifact-path }}
           if-no-files-found: error
+
+      # On a failure, the job's checks go up for report.yml to merge into the run's report.
+      - name: CI report
+        id: ci-report
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        run: '& "$env:CI_TOOLS/Complete-CiReport.ps1"'
+
+      - name: Upload the CI report
+        if: failure() && steps.ci-report.outputs.name != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.ci-report.outputs.name }}
+          path: ${{ runner.temp }}/ci-report
+          retention-days: 7
+          if-no-files-found: ignore

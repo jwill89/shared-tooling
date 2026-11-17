@@ -22,7 +22,8 @@ Folders are named `<purpose>/<target>`. A project uses only the folders for the 
 | `test/python` | `coverage_floor.py`, which fails a run whose `pyproject.toml` sets no coverage floor or package, for `python.yml` and `task shared:python:test` alike | Every Python project |
 | `repo` | `editorconfig` and `gitattributes`, copied in by `Sync-RepoFiles.ps1`, which also holds `CLAUDE.md` to its standard form; `Taskfile.yml`, the tasks every repo includes; `Update-SharedTooling.ps1` and `Test-SharedVersion.ps1`, which move a project to a release and check it stayed there; `Update-ChangelogLinks.ps1`, which writes and checks the CHANGELOG's compare links; `dependabot.example.yml` | Every repo |
 | [`runner`](runner/README.md) | Self-hosted Actions runners on a Windows machine: `CiRunner.psm1` runs the scaler (`scaler/`), which starts a fresh container (`Dockerfile`) for each job GitHub assigns a repo, side by side up to a limit, in a WSL distro of its own (`setup-host.sh`) | The repos whose `CI_RUNNER` variable is set |
-| `.github/workflows` | Reusable workflows: `web.yml`, `e2e.yml`, `go.yml`, `php.yml`, `python.yml`, `dotnet.yml`, `pwsh.yml`, `docs.yml`, `osv.yml` | Every repo's CI |
+| `ci` | What the workflows share: `Invoke-CiCheck.ps1`, which runs each check and records it for the run's report; `Complete-CiReport.ps1` and `Merge-CiReport.ps1`, which build that report; `Get-CiReport.ps1`, which prints a run's report (`task shared:ci:report`); and `Get-ChangedArea.ps1`, which says which of a repo's areas a change touches (`changes.yml`, `task shared:ci:changes`) | Every repo's CI |
+| `.github/workflows` | Reusable workflows: `changes.yml`, `web.yml`, `e2e.yml`, `go.yml`, `php.yml`, `python.yml`, `dotnet.yml`, `pwsh.yml`, `docs.yml`, `osv.yml`, `report.yml` | Every repo's CI |
 | [`standards`](standards/README.md) | The rules every project follows, by area, each marked with how it is checked; `README.md` is the index | Every repo's `CLAUDE.md` imports `@shared/standards/README.md` |
 
 ## Adding it to a project
@@ -89,11 +90,19 @@ And per stack (each folder's README has the detail):
 - **PowerShell:** `-Settings shared/lint/pwsh/PSScriptAnalyzerSettings.psd1`; deploy scripts `Import-Module` `shared/deploy/pwsh/SharedDeploy.psd1`.
 - **Markdown:** `.markdownlint-cli2.jsonc` with `"config": { "extends": "shared/lint/markdown/markdownlint.jsonc" }` and `shared/**` in its ignores, plus `<dir>/test-results/**` where an end-to-end suite runs, since a failed run leaves Playwright's notes there as Markdown.
 - **Repo files:** put the project marker at the end of `.editorconfig` and `.gitattributes`, move the project's own lines below it, then `pwsh shared/repo/Sync-RepoFiles.ps1`.
-- **CI:** call the workflows by name, pinned to the exact release the submodule holds, plus the project's own jobs:
+- **CI:** call the workflows by name, pinned to the exact release the submodule holds, plus the project's own jobs. `changes` comes first and names the repo's areas, each job runs when its area changed, and `report` comes last:
 
   ```yaml
   jobs:
+    changes:
+      uses: jwill89/shared-tooling/.github/workflows/changes.yml@v1.0.0
+      permissions: { contents: read, actions: read }
+      with:
+        areas: |
+          app: web/** !web/**/*.md **/*.go go.mod go.sum
     web:
+      needs: changes
+      if: fromJSON(needs.changes.outputs.areas).app
       uses: jwill89/shared-tooling/.github/workflows/web.yml@v1.0.0
       with:
         dir: web
@@ -102,17 +111,31 @@ And per stack (each folder's README has the detail):
       secrets:
         FONTAWESOME_TOKEN: ${{ secrets.FONTAWESOME_NPM_TOKEN }}
     go:
-      needs: web
+      needs: [changes, web]
+      if: fromJSON(needs.changes.outputs.areas).app
       uses: jwill89/shared-tooling/.github/workflows/go.yml@v1.0.0
       with:
         download-artifact: web-dist
     scripts:
+      needs: changes
+      if: fromJSON(needs.changes.outputs.areas).scripts
       uses: jwill89/shared-tooling/.github/workflows/pwsh.yml@v1.0.0
     docs:
       uses: jwill89/shared-tooling/.github/workflows/docs.yml@v1.0.0
     osv:
+      needs: changes
+      if: fromJSON(needs.changes.outputs.areas).lockfiles
       uses: jwill89/shared-tooling/.github/workflows/osv.yml@v1.0.0
+    report:
+      needs: [changes, web, go, scripts, docs, osv]
+      if: failure()
+      uses: jwill89/shared-tooling/.github/workflows/report.yml@v1.0.0
+      permissions: { contents: read, actions: read }
   ```
+
+  - **Areas:** an area is a name and the globs of its files (`**` any folders, `*` within one name, `!` to take files out). A push is compared with the newest commit of the branch whose CI passed, so what a failed or cancelled run changed is checked by the next; a pull request with its base. Every job runs when CI's own files, `shared` or the Taskfile change, when a changed file matches no area (Markdown and editor settings aside), and on any other event. `scripts` (PowerShell files) and `lockfiles` come with every repo; `docs` always runs. A binary that embeds the front end's build puts both in one area, as above. `task shared:ci:changes` prints which jobs a push of the working tree would run.
+  - **A job after a job that may be skipped**, such as a release job or an end-to-end suite after the apps it tests, says how it runs, since a skipped need skips it otherwise: `if: ${{ !failure() && !cancelled() && github.event_name == 'push' }}`, or `!failure() && !cancelled() && (fromJSON(needs.changes.outputs.areas).web || fromJSON(needs.changes.outputs.areas).api)`.
+  - **The report:** every shared workflow runs its checks through `ci/Invoke-CiCheck.ps1`, which marks the lines a failing check names and writes the failure to the job's summary. `report.yml` merges a run's failures into one report at the head of the run's page and in its `ci-report` artifact: each failed job, the step it stopped at, each failed check with the files and lines it names, the values of the variables its command used, and its last lines of output, with each failed check's whole log beside it. `task shared:ci:report` prints the branch's latest report, the first thing to read when CI fails. A project's own job runs its checks the same way: `env: { CI_TOOLS: ${{ github.workspace }}/shared/ci }`, each check as `& "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name '<name>' -Command '<command>'` in a `pwsh` step, and the two report steps the shared workflows end with.
 
 - **Self-hosted runners:** every shared workflow runs its jobs on the runners the repo's `CI_RUNNER` variable names, and on GitHub's `ubuntu-24.04` while it is unset or for a pull request from a fork. With a machine's runners set up ([runner/README.md](runner/README.md)) and started with `task shared:runner:start`, `gh variable set CI_RUNNER --body wsl` moves the repo's jobs there, and its own jobs take the same line, `runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}`; `gh variable delete CI_RUNNER` sends them back. A public repo first requires approval for outside contributors' workflow runs, since a fork's pull request runs its own copy of the workflows (runner/README.md, Setting it up).
 - **CHANGELOG:** `task shared:changelog:links` writes the compare link under each version heading, in the change that adds the version's section; `docs.yml` fails on a heading without one. A repo with a second part versioned apart passes `docs.yml` both files (`changelogs: CHANGELOG.md plugin/CHANGELOG.md`) and writes the second's links with `-- -Path plugin/CHANGELOG.md -TagPrefix plugin-v` (`standards/docs-and-agents.md`).

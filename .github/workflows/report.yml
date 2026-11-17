@@ -1,0 +1,67 @@
+name: CI report
+
+# One report of everything a run's failed jobs found (ci/Merge-CiReport.ps1): every job's
+# result, the step each failed one stopped at, and each failed check with the files and
+# lines it names and its last lines of output. It heads the run's page as the job's
+# summary, and goes up as the ci-report artifact (ci-report.md, ci-report.json and each
+# failed check's whole log), which `task shared:ci:report` downloads and prints. It reads
+# the reports the shared workflows' jobs upload when they fail.
+#
+#   report:
+#     needs: [changes, web, go, docs, osv]
+#     if: failure()
+#     uses: jwill89/shared-tooling/.github/workflows/report.yml@v1.0.0
+#     permissions:
+#       contents: read
+#       actions: read
+
+on:
+  workflow_call:
+    inputs:
+      shared-path:
+        description: Where shared-tooling is checked out, relative to the repo.
+        type: string
+        default: shared
+      retention-days:
+        description: How long the report is kept, in days.
+        type: number
+        default: 14
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  report:
+    # A pull request from a fork runs on GitHub's runners, never on a self-hosted one.
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          persist-credentials: false
+
+      # None at all when every failure came before a job could report.
+      - name: The jobs' reports
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: ci-report-*
+          path: ${{ runner.temp }}/job-reports
+
+      - name: Report
+        shell: pwsh
+        env:
+          SHARED: ${{ inputs.shared-path }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: '& (Join-Path $env:SHARED "ci/Merge-CiReport.ps1") -Path (Join-Path $env:RUNNER_TEMP "job-reports") -OutDirectory (Join-Path $env:RUNNER_TEMP "ci-report")'
+
+      # A run done again replaces its earlier attempt's report.
+      - name: Upload the report
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-report
+          path: ${{ runner.temp }}/ci-report
+          retention-days: ${{ inputs.retention-days }}
+          if-no-files-found: error
+          overwrite: true

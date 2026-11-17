@@ -70,6 +70,9 @@ jobs:
     defaults:
       run:
         working-directory: ${{ inputs.dir }}
+    env:
+      # Each check runs through ci/Invoke-CiCheck.ps1, which records it for the run's report.
+      CI_TOOLS: ${{ github.workspace }}/shared/ci
     steps:
       # The shared-tooling submodule is public, so the default token fetches it. No
       # credential is left in .git/config for an install script to read.
@@ -123,7 +126,9 @@ jobs:
 
       - name: Install
         if: steps.deps.outputs.cache-hit != 'true'
-        run: npm ci --prefer-offline
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'npm ci' -Command 'npm ci --prefer-offline'
 
       # Saved as soon as the install is done, not when the job ends, so a step that fails
       # later doesn't throw the download away and send the next run back to the registry.
@@ -149,7 +154,9 @@ jobs:
 
       - name: Advisories (packages that ship)
         if: inputs.audit
-        run: npm audit --audit-level=high --omit=dev
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'npm audit' -Command 'npm audit --audit-level=high --omit=dev'
 
       - uses: shivammathur/setup-php@v2
         if: inputs.php-version != ''
@@ -159,18 +166,20 @@ jobs:
           coverage: none
 
       - name: Scripts
+        shell: pwsh
         env:
           SCRIPTS: ${{ inputs.scripts }}
         run: |
-          for script in $SCRIPTS; do
-            echo "::group::npm run $script"
-            npm run "$script"
-            echo "::endgroup::"
-          done
+          foreach ($script in -split $env:SCRIPTS) {
+            & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name "npm run $script" -Command "npm run $script" -Group
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
 
       # After the scripts, so a spec that imports generated code finds it.
       - name: Specs type-check
-        run: node "$GITHUB_WORKSPACE/shared/test/web/typecheck-specs.mjs" .
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'Specs type-check' -Command 'node "$GITHUB_WORKSPACE/shared/test/web/typecheck-specs.mjs" .'
 
       - name: Upload ${{ inputs.artifact-name }}
         if: inputs.artifact-path != ''
@@ -179,3 +188,20 @@ jobs:
           name: ${{ inputs.artifact-name }}
           path: ${{ inputs.artifact-path }}
           retention-days: 1
+
+      # On a failure, the job's checks go up for report.yml to merge into the run's report.
+      - name: CI report
+        id: ci-report
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        run: '& "$env:CI_TOOLS/Complete-CiReport.ps1"'
+
+      - name: Upload the CI report
+        if: failure() && steps.ci-report.outputs.name != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.ci-report.outputs.name }}
+          path: ${{ runner.temp }}/ci-report
+          retention-days: 7
+          if-no-files-found: ignore

@@ -1,0 +1,88 @@
+name: Changes
+
+# Which of a repo's areas a push or pull request changed, so CI runs only the jobs those
+# areas need (ci/Get-ChangedArea.ps1, which `task shared:ci:changes` runs locally). An area
+# is a name and the globs of its files. A push is compared with the newest commit of the
+# branch whose CI passed, so the changes of a failed or cancelled run are checked by the
+# next. Every area runs when CI's own files, the shared submodule or the Taskfile change,
+# when a changed file matches no area (Markdown and editor settings aside), and when
+# there is nothing to compare with. scripts (PowerShell files) and lockfiles come with
+# every repo. The docs job needs no area: it always runs.
+#
+#   changes:
+#     uses: jwill89/shared-tooling/.github/workflows/changes.yml@v1.0.0
+#     permissions:
+#       contents: read
+#       actions: read
+#     with:
+#       areas: |
+#         web: web/** !web/**/*.md
+#         go: **/*.go go.mod go.sum
+#
+#   web:
+#     needs: changes
+#     if: fromJSON(needs.changes.outputs.areas).web
+#     uses: jwill89/shared-tooling/.github/workflows/web.yml@v1.0.0
+#
+# A job that needs a job that can be skipped says how it runs, since a skipped need skips
+# it otherwise: if: ${{ !failure() && !cancelled() && ... }}.
+
+on:
+  workflow_call:
+    inputs:
+      areas:
+        description: 'The repo''s areas, one a line, as `name: glob glob`; a glob starting with ! takes files out.'
+        type: string
+        default: ''
+      always:
+        description: Globs of the files that make every area run.
+        type: string
+        default: .github/** shared Taskfile.yml .editorconfig .gitattributes
+      ignore:
+        description: Globs of the files that need no area when none claims them.
+        type: string
+        default: '**/*.md LICENSE LICENSE.* .gitignore .vscode/** .claude/**'
+      shared-path:
+        description: Where shared-tooling is checked out, relative to the repo.
+        type: string
+        default: shared
+    outputs:
+      areas:
+        description: A JSON object of each area's name and whether it runs, for fromJSON().
+        value: ${{ jobs.changes.outputs.areas }}
+      all:
+        description: Whether every area runs.
+        value: ${{ jobs.changes.outputs.all }}
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  changes:
+    # A pull request from a fork runs on GitHub's runners, never on a self-hosted one.
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}
+    outputs:
+      areas: ${{ steps.areas.outputs.areas }}
+      all: ${{ steps.areas.outputs.all }}
+    steps:
+      # Every commit, for the comparison with the last passing one, but no file's contents
+      # beyond the checked-out tree's.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          submodules: true
+          persist-credentials: false
+
+      - name: Changed areas
+        id: areas
+        shell: pwsh
+        env:
+          AREAS: ${{ inputs.areas }}
+          ALWAYS: ${{ inputs.always }}
+          IGNORE: ${{ inputs.ignore }}
+          SHARED: ${{ inputs.shared-path }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: '& (Join-Path $env:SHARED "ci/Get-ChangedArea.ps1") -Areas $env:AREAS -Always $env:ALWAYS -Ignore $env:IGNORE'

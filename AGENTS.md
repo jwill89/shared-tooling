@@ -12,7 +12,7 @@ The lint, test, CI and deploy pieces a set of projects share, held by each as a 
 - **One version, exact tags.** The whole repo carries the version in `VERSION`, and a project points its submodule and every workflow ref at the same tag, so a release is one tag and there is no moving `v1`. The bump follows what a project must do to take it (CHANGELOG.md's header).
 - **The CHANGELOG is written as you go.** Each change a project would notice gets its bullet under `## [Unreleased]` in the same change, written to [What a changelog entry says](standards/docs-and-agents.md#what-a-changelog-entry-says): what changed as the project meets it, naming the task, input, function or file it touches.
 - **Comments describe the code.** No comment names a plan, a standards file, a project or a decision, so each still reads true after those move on.
-- **One script behind each check.** A shared task and the workflow step that do the same check call the same script (`Invoke-ScriptLint.ps1`, `Sync-RepoFiles.ps1`, `Update-ChangelogLinks.ps1`, `Test-SharedVersion.ps1`, `typecheck-specs.mjs`, `coverage_floor.py`), so a project's `task check` and its CI can't drift apart.
+- **One script behind each check.** A shared task and the workflow step that do the same check call the same script (`Invoke-ScriptLint.ps1`, `Sync-RepoFiles.ps1`, `Update-ChangelogLinks.ps1`, `Test-SharedVersion.ps1`, `typecheck-specs.mjs`, `coverage_floor.py`, `Get-ChangedArea.ps1`), so a project's `task check` and its CI can't drift apart.
 - **Pinned tools.** Each workflow takes its tools' versions as inputs with exact defaults, and the matching task runs the same version, so a release is what moves a tool, on purpose.
 - **A rule lives once.** A rule is one bullet in one file of `standards/`, ending with how it is checked, and other files link to it. A rule a tool can check goes into that tool's shared config in the same change.
 - **The deploy module holds no host details.** Every host, user, path and port comes from a parameter, filled by the project from its git-ignored deploy config.
@@ -43,6 +43,8 @@ The lint, test, CI and deploy pieces a set of projects share, held by each as a 
 - **A tar on `docker build`'s standard input.** It tells a tar from a Dockerfile by the first 1 KB, which a pax tar, .NET's default, fills with an extended header, so the tar is read as a Dockerfile; `runner/` writes ustar.
 - **`wsl.exe --` goes through a shell.** It hands the rest of the line to the distro's shell, which re-splits and expands it; `--exec` passes each argument as it is, so `runner/` always uses `--exec`.
 - **`task shared:update` hands over.** The script checks out the new tag, then runs that release's own copy for the rest, so a change to what the update does reaches a project when it moves to the release that has the change, run by that release's code.
+- **A command for `Invoke-CiCheck.ps1` is bash's.** It runs in bash, and the pwsh step passes it in single quotes, so a value the step sets in `env:` is written `$NAME` and bash expands it; in double quotes PowerShell would expand it first, to nothing.
+- **A skipped job skips what needs it.** A job whose area didn't change is skipped, and so is every job that needs it, a release job or an end-to-end suite included, unless that job's `if:` starts `!failure() && !cancelled()`.
 - **A file a project's Prettier checks.** A JSON or JSONC file the tooling writes into a project (`tsconfig.vitest.json`) is written as Prettier writes it, short arrays on one line, or the project's format check fails.
 
 ## Recipes
@@ -61,7 +63,7 @@ The lint, test, CI and deploy pieces a set of projects share, held by each as a 
 2. Head it with a comment saying what it runs and the call, `uses: jwill89/shared-tooling/.github/workflows/<name>.yml@v1.0.0`.
 3. Give it `permissions: contents: read`, and more only on the job that needs it; check out with `persist-credentials: false`.
 4. Pin each action to a tag that exists (`actions/checkout@v7`), or to an exact release where the action has no major tag.
-5. Run each check through the script a shared task runs, adding that task to `repo/Taskfile.yml` in the same change.
+5. Run each check through the script a shared task runs, adding that task to `repo/Taskfile.yml` in the same change, and run it in a `pwsh` step through `ci/Invoke-CiCheck.ps1` (`-Name`, and `-Command` as bash reads it), with `CI_TOOLS` set on the job; end the job with the two CI report steps the others end with.
 6. Where this repo can run it on itself, call it from `ci.yml` by its local path.
 7. Add it to the README's list of workflows and the CI example where projects call it, note it under Unreleased, and run `task check` (actionlint).
 

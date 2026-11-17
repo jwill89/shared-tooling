@@ -49,6 +49,9 @@ jobs:
     defaults:
       run:
         working-directory: ${{ inputs.dir }}
+    env:
+      # Each check runs through ci/Invoke-CiCheck.ps1, which records it for the run's report.
+      CI_TOOLS: ${{ github.workspace }}/shared/ci
     steps:
       - uses: actions/checkout@v7
         with:
@@ -73,21 +76,42 @@ jobs:
           restore-keys: composer-${{ runner.os }}-${{ inputs.php-version }}-
 
       - name: Install
-        run: composer install --prefer-dist --no-interaction --no-progress
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'composer install' -Command 'composer install --prefer-dist --no-interaction --no-progress'
 
       - name: Prepare
         if: inputs.before != ''
+        shell: pwsh
         env:
           BEFORE: ${{ inputs.before }}
-        run: bash -c "$BEFORE"
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'Prepare' -Command 'bash -c "$BEFORE"'
 
       # Dev packages included in the audit: they run here and on developer machines too.
       - name: Commands
+        shell: pwsh
         env:
           COMMANDS: ${{ inputs.commands }}
         run: |
-          for command in $COMMANDS; do
-            echo "::group::composer $command"
-            composer "$command"
-            echo "::endgroup::"
-          done
+          foreach ($command in -split $env:COMMANDS) {
+            & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name "composer $command" -Command "composer $command" -Group
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+
+      # On a failure, the job's checks go up for report.yml to merge into the run's report.
+      - name: CI report
+        id: ci-report
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        run: '& "$env:CI_TOOLS/Complete-CiReport.ps1"'
+
+      - name: Upload the CI report
+        if: failure() && steps.ci-report.outputs.name != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.ci-report.outputs.name }}
+          path: ${{ runner.temp }}/ci-report
+          retention-days: 7
+          if-no-files-found: ignore
