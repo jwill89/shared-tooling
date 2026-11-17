@@ -12,7 +12,7 @@ The lint, test, CI and deploy pieces a set of projects share, held by each as a 
 - **One version, exact tags.** The whole repo carries the version in `VERSION`, and a project points its submodule and every workflow ref at the same tag, so a release is one tag and there is no moving `v1`. The bump follows what a project must do to take it (CHANGELOG.md's header).
 - **The CHANGELOG is written as you go.** Each change a project would notice gets its bullet under `## [Unreleased]` in the same change, written to [What a changelog entry says](standards/docs-and-agents.md#what-a-changelog-entry-says): what changed as the project meets it, naming the task, input, function or file it touches.
 - **Comments describe the code.** No comment names a plan, a standards file, a project or a decision, so each still reads true after those move on.
-- **One script behind each check.** A shared task and the workflow step that do the same check call the same script (`Invoke-ScriptLint.ps1`, `Sync-RepoFiles.ps1`, `Update-ChangelogLinks.ps1`, `Test-SharedVersion.ps1`, `typecheck-specs.mjs`, `coverage_floor.py`, `Get-ChangedArea.ps1`), so a project's `task check` and its CI can't drift apart.
+- **One script behind each check.** A shared task and the workflow step that do the same check call the same script (`Invoke-ScriptLint.ps1`, `Sync-RepoFiles.ps1`, `Update-ChangelogLinks.ps1`, `Test-SharedVersion.ps1`, `typecheck-specs.mjs`, `coverage_floor.py`, `Get-ChangedArea.ps1`, `Invoke-NpmAudit.ps1`), so a project's `task check` and its CI can't drift apart.
 - **Pinned tools.** Each workflow takes its tools' versions as inputs with exact defaults, and the matching task runs the same version, so a release is what moves a tool, on purpose.
 - **A rule lives once.** A rule is one bullet in one file of `standards/`, ending with how it is checked, and other files link to it. A rule a tool can check goes into that tool's shared config in the same change.
 - **The deploy module holds no host details.** Every host, user, path and port comes from a parameter, filled by the project from its git-ignored deploy config.
@@ -104,5 +104,5 @@ The lint, test, CI and deploy pieces a set of projects share, held by each as a 
 
 ## Not yet meeting the standards
 
-- Since 2026-11-14: the PowerShell scripts and the deploy module have no automated tests; each release replays its changed remote shell in WSL by hand (testing.md, Every stack).
+- Since 2026-11-14: the PowerShell scripts and the deploy module have no automated tests, apart from `repo/Invoke-NpmAudit.ps1`'s (`task test:scripts`); each release replays its changed remote shell in WSL by hand (testing.md, Every stack).
 - Since 2026-11-14: the root Taskfile has no `task test` (docs-and-agents.md, Working in a repo).
