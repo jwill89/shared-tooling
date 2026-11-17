@@ -67,6 +67,11 @@ tasks:
     cmds:
       - node scripts/test-presets.mjs
 
+  test:scripts:
+    desc: The scripts' own tests - repo/Invoke-NpmAudit.ps1 on recorded npm audit reports
+    cmds:
+      - pwsh -NoProfile -File scripts/Test-NpmAudit.ps1
+
   release:
     desc: Make a release (-- 1.1.0) - the version everywhere, the CHANGELOG entry and its links, a commit and a tag
     cmds:
@@ -84,6 +89,7 @@ tasks:
       - task: lint
       - task: scaler
       - task: presets
+      - task: test:scripts
       - task: shared:vuln
 
   # This machine's self-hosted runners (runner/README.md), set up from this repo, which

@@ -1,6 +1,7 @@
 # The advisories OSV-Scanner (osv.yml) may pass over, copied beside each npm lockfile that
 # needs them as osv-scanner.toml (web/osv-scanner.toml, frontend/osv-scanner.toml): the
-# scanner reads the file next to the lockfile it scans. Keep only the entries a lockfile
+# scanner reads the file next to the lockfile it scans, and so does web.yml's npm audit,
+# which matches an entry by the advisory's GHSA id. Keep only the entries a lockfile
 # has. standards/packages.md has the rule: an advisory is passed over only when it reaches
 # nothing that ships (lint, test and build tooling) and no fix fits its dependents' ranges,
 # each with its reason and a date, three months out, when it is looked at again.
@@ -28,3 +29,13 @@ reason = "Test and build tooling only (js-beautify, workbox-build); the fix, glo
 id = "GHSA-gcqx-w48m-w2h4"
 ignoreUntil = 2027-02-07
 reason = "Build tooling only (workbox-build through @rollup/plugin-node-resolve), merging our own options; no fixed release yet."
+
+# picomatch through 4.0.7: denial of service from a crafted extglob pattern, and no release
+# fixes it yet. It comes with Vite, Vitest, Stylelint, vue-tsc and ESLint's fast-glob (lint/web),
+# and with vue-router 5's file-routing build plugin, whose packages npm counts as shipping
+# though the router's browser code imports none of them: check the built app holds no
+# picomatch code before passing it over. Our own configs write every pattern.
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf"
+ignoreUntil = 2027-02-17
+reason = "Build, lint and test tooling only (Vite, Vitest, Stylelint, vue-tsc, ESLint, and vue-router's unused build plugin); no picomatch release fixes it yet."

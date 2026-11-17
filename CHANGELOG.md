@@ -8,6 +8,15 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Added
+
+- `task shared:web:audit` (`repo/Invoke-NpmAudit.ps1`) runs the npm audit `web.yml` runs, on a front end's folder (`DIR=web` by default), so a project's `task check` and CI pass over the same advisories. A project task that runs `npm audit --audit-level=high --omit=dev` itself swaps to it.
+
+### Changed
+
+- `web.yml`'s audit step honours the `osv-scanner.toml` beside the front end's lockfile, the file OSV-Scanner reads. It passes over each advisory an `[[IgnoredVulns]]` entry names by its GHSA id until the entry's `ignoreUntil`, printing each with its reason, and passes over with them each package npm flags only through those, such as `vue-router` through `picomatch`. Any other advisory of high severity or above in the packages that ship still fails it, and with no `osv-scanner.toml` it passes and fails as `npm audit --audit-level=high --omit=dev` did. `standards/packages.md` (Audits) says so.
+- `repo/osv-scanner.example.toml` holds an entry for picomatch's ReDoS advisory (GHSA-fc5q-39xc-vjpf, through 4.0.7, no fixed release yet), which comes with Vite, Vitest, Stylelint, vue-tsc, ESLint's fast-glob and vue-router 5's build plugin. A project copies it beside each lockfile that has picomatch once it has checked its built app holds none of picomatch's code.
+
 ## [2.17.0] - 2026-11-17
 
 ### Added

@@ -1,0 +1,214 @@
+{
+  "auditReportVersion": 2,
+  "vulnerabilities": {
+    "@vue-macros/common": {
+      "name": "@vue-macros/common",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "unplugin-utils"
+      ],
+      "effects": [
+        "vue-router"
+      ],
+      "range": ">=3.0.0-alpha.0",
+      "nodes": [
+        "node_modules/@vue-macros/common"
+      ],
+      "fixAvailable": {
+        "name": "vue-router",
+        "version": "4.6.5",
+        "isSemVerMajor": true
+      }
+    },
+    "fdir": {
+      "name": "fdir",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "picomatch"
+      ],
+      "effects": [
+        "tinyglobby"
+      ],
+      "range": ">=5.2.1",
+      "nodes": [
+        "node_modules/tinyglobby/node_modules/fdir"
+      ],
+      "fixAvailable": {
+        "name": "vite",
+        "version": "6.2.7",
+        "isSemVerMajor": true
+      }
+    },
+    "picomatch": {
+      "name": "picomatch",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1247710,
+          "name": "picomatch",
+          "dependency": "picomatch",
+          "title": "picomatch vulnerable to ReDoS through single-branch repeated extglobs",
+          "url": "https://github.com/advisories/GHSA-fc5q-39xc-vjpf",
+          "severity": "high",
+          "cwe": [
+            "CWE-1333"
+          ],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<=4.0.7"
+        }
+      ],
+      "effects": [
+        "fdir",
+        "tinyglobby",
+        "unplugin",
+        "unplugin-utils",
+        "vite",
+        "vue-router"
+      ],
+      "range": "*",
+      "nodes": [
+        "node_modules/tinyglobby/node_modules/picomatch",
+        "node_modules/unplugin-utils/node_modules/picomatch",
+        "node_modules/unplugin/node_modules/picomatch",
+        "node_modules/vite/node_modules/picomatch",
+        "node_modules/vue-router/node_modules/picomatch"
+      ],
+      "fixAvailable": {
+        "name": "vite",
+        "version": "6.2.7",
+        "isSemVerMajor": true
+      }
+    },
+    "tinyglobby": {
+      "name": "tinyglobby",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "fdir",
+        "picomatch"
+      ],
+      "effects": [
+        "vite",
+        "vue-router"
+      ],
+      "range": "*",
+      "nodes": [
+        "node_modules/tinyglobby"
+      ],
+      "fixAvailable": {
+        "name": "vite",
+        "version": "6.2.7",
+        "isSemVerMajor": true
+      }
+    },
+    "unplugin": {
+      "name": "unplugin",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "picomatch"
+      ],
+      "effects": [
+        "vue-router"
+      ],
+      "range": ">=2.3.0",
+      "nodes": [
+        "node_modules/unplugin"
+      ],
+      "fixAvailable": {
+        "name": "vue-router",
+        "version": "4.6.5",
+        "isSemVerMajor": true
+      }
+    },
+    "unplugin-utils": {
+      "name": "unplugin-utils",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "picomatch"
+      ],
+      "effects": [
+        "@vue-macros/common",
+        "vue-router"
+      ],
+      "range": "*",
+      "nodes": [
+        "node_modules/unplugin-utils"
+      ],
+      "fixAvailable": {
+        "name": "vue-router",
+        "version": "4.6.5",
+        "isSemVerMajor": true
+      }
+    },
+    "vite": {
+      "name": "vite",
+      "severity": "high",
+      "isDirect": true,
+      "via": [
+        "picomatch",
+        "tinyglobby"
+      ],
+      "effects": [
+        "vue-router"
+      ],
+      "range": ">=6.3.0-beta.0",
+      "nodes": [
+        "node_modules/vite"
+      ],
+      "fixAvailable": {
+        "name": "vite",
+        "version": "6.2.7",
+        "isSemVerMajor": true
+      }
+    },
+    "vue-router": {
+      "name": "vue-router",
+      "severity": "high",
+      "isDirect": true,
+      "via": [
+        "@vue-macros/common",
+        "picomatch",
+        "tinyglobby",
+        "unplugin",
+        "unplugin-utils",
+        "vite"
+      ],
+      "effects": [],
+      "range": ">=5.0.0-beta.0",
+      "nodes": [
+        "node_modules/vue-router"
+      ],
+      "fixAvailable": {
+        "name": "vue-router",
+        "version": "4.6.5",
+        "isSemVerMajor": true
+      }
+    }
+  },
+  "metadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 8,
+      "critical": 0,
+      "total": 8
+    },
+    "dependencies": {
+      "prod": 110,
+      "dev": 317,
+      "optional": 33,
+      "peer": 1,
+      "peerOptional": 0,
+      "total": 459
+    }
+  }
+}

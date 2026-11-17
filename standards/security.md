@@ -151,7 +151,7 @@ API statuses and the cache baseline are in [api-and-realtime.md](api-and-realtim
 
 The audit jobs each stack runs, and how packages are added and updated, are in [packages.md](packages.md).
 
-- `npm audit` fails on high and above, for shipped packages only (`--audit-level=high --omit=dev`), in CI. It is the shared `web.yml` default. [CI]
+- `npm audit` fails on high and above, for shipped packages only (`--audit-level=high --omit=dev`), in CI, apart from an advisory the `osv-scanner.toml` beside the lockfile passes over ([packages.md](packages.md#audits)). It is the shared `web.yml` default, and `task shared:web:audit` runs it locally. [CI]
 - In CI, `composer audit` includes dev packages, since they run there and on developer machines. [CI]
 - A security fix comes from the package itself. A framework's security release is applied even before the advisory database lists it. [review]
 - A finding in code the app never runs waits for its package's own fix, never a forced version. [review]

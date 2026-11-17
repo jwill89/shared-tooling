@@ -4,8 +4,8 @@ name: CI
 # analyzer settings, its docs with its own Markdown config and the CHANGELOG's links, the
 # golangci sync tool linted by the template it ships, the runners' scaler as go.yml checks
 # a module, the shared ruff config loading on the Python script it ships, every workflow
-# with actionlint, every lint/web config and test preset loading from its own install, and
-# OSV-Scanner over the lockfiles. Each job runs when its area changed (changes.yml), and a
+# with actionlint, every lint/web config and test preset loading from its own install, the
+# scripts' own tests, and OSV-Scanner over the lockfiles. Each job runs when its area changed (changes.yml), and a
 # run that fails ends with one report of what failed (report.yml).
 
 on:
@@ -33,6 +33,7 @@ jobs:
         python: test/python/** lint/python/**
         workflows: .github/**
         web: lint/web/** test/a11y/** test/web/** scripts/test-presets.mjs
+        tests: repo/Invoke-NpmAudit.ps1 scripts/Test-NpmAudit.ps1 scripts/fixtures/**
         osv: repo/Invoke-VulnerabilityScan.ps1
 
   scripts:
@@ -283,6 +284,37 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # The scripts' own tests, as `task test:scripts` runs them.
+  tests:
+    needs: changes
+    if: fromJSON(needs.changes.outputs.areas).tests
+    # A pull request from a fork runs on GitHub's runners, never on a self-hosted one.
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-24.04' || vars.CI_RUNNER || 'ubuntu-24.04' }}
+    env:
+      CI_TOOLS: ${{ github.workspace }}/ci
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: npm audit script
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'npm audit script' -Command 'pwsh -NoProfile -File scripts/Test-NpmAudit.ps1'
+      - name: CI report
+        id: ci-report
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        run: '& "$env:CI_TOOLS/Complete-CiReport.ps1"'
+      - name: Upload the CI report
+        if: failure() && steps.ci-report.outputs.name != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.ci-report.outputs.name }}
+          path: ${{ runner.temp }}/ci-report
+          retention-days: 7
+          if-no-files-found: ignore
+
   osv:
     needs: changes
     if: fromJSON(needs.changes.outputs.areas).lockfiles || fromJSON(needs.changes.outputs.areas).osv
@@ -291,7 +323,7 @@ jobs:
       shared-path: .
 
   report:
-    needs: [changes, scripts, docs, go, scaler, python, workflows, web, osv]
+    needs: [changes, scripts, docs, go, scaler, python, workflows, web, tests, osv]
     if: failure()
     uses: ./.github/workflows/report.yml
     permissions:

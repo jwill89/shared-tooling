@@ -93,6 +93,11 @@ tasks:
     cmds:
       - node "{{.SHARED}}/test/web/typecheck-specs.mjs" "{{.DIR | default "web"}}" {{.CLI_ARGS}}
 
+  web:audit:
+    desc: npm audit of the packages a front end ships, failing on a high advisory unless the osv-scanner.toml beside its lockfile passes it over, as web.yml does (DIR=web)
+    cmds:
+      - pwsh -NoProfile -File "{{.SHARED}}/repo/Invoke-NpmAudit.ps1" -Path "{{.DIR | default "web"}}"
+
   python:setup:
     desc: Make .venv with uv on the Python .python-version names, then install the dev requirements, every hash checked (DIR=. REQUIREMENTS=requirements-dev.txt)
     dir: '{{.DIR | default "."}}'

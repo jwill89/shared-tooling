@@ -10,3 +10,11 @@
 id = "GHSA-g3hv-75wg-m249"
 ignoreUntil = 2027-02-07
 reason = "Dev tooling only (ESLint and its plugins); the fix, minimatch 11.0.1, is outside ESLint's ^10.2 range."
+
+# picomatch through 4.0.7: denial of service from a crafted extglob pattern, and no release
+# fixes it yet. It comes with @vue/eslint-config-typescript (fast-glob and micromatch) and
+# Stylelint (and its tinyglobby). The shared configs write every pattern.
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf"
+ignoreUntil = 2027-02-17
+reason = "Lint tooling only (@vue/eslint-config-typescript through fast-glob, and Stylelint); no picomatch release fixes it yet."

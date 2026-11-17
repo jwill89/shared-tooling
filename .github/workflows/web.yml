@@ -36,7 +36,7 @@ on:
         type: boolean
         default: false
       audit:
-        description: Fail on a high advisory in the packages that ship to the browser.
+        description: Fail on a high advisory in the packages that ship to the browser, unless the osv-scanner.toml beside the lockfile passes it over.
         type: boolean
         default: true
       artifact-path:
@@ -152,11 +152,13 @@ jobs:
         if: inputs.fontawesome
         run: rm -f ~/.npmrc
 
+      # npm audit --omit=dev, failing at high as --audit-level=high does, with the advisories
+      # the osv-scanner.toml beside the lockfile passes over left out, as osv.yml leaves them.
       - name: Advisories (packages that ship)
         if: inputs.audit
         shell: pwsh
         run: |
-          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'npm audit' -Command 'npm audit --audit-level=high --omit=dev'
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'npm audit' -Command 'pwsh -NoProfile -File "$GITHUB_WORKSPACE/shared/repo/Invoke-NpmAudit.ps1"'
 
       - uses: shivammathur/setup-php@v2
         if: inputs.php-version != ''
