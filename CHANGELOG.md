@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.16.1] - 2026-11-16
+
 ### Fixed
 
 - `task shared:push` commits a Python update's `.in` file and the `.txt` compiled beside it as dependency files, where it stopped the push saying they changed while updating.
@@ -461,7 +463,8 @@ A major: a project's own Stylelint moves to 18.
 - `repo/`: the shared `.editorconfig` and `.gitattributes`, the Taskfile include, the Dependabot example, and `task shared:update` with its version check.
 - `.github/workflows`: reusable workflows for each stack (`web`, `go`, `php`, `dotnet`, `pwsh`, `docs`, `osv`).
 
-[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.16.0...HEAD
+[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.16.1...HEAD
+[2.16.1]: https://github.com/jwill89/shared-tooling/compare/v2.16.0...v2.16.1
 [2.16.0]: https://github.com/jwill89/shared-tooling/compare/v2.15.2...v2.16.0
 [2.15.2]: https://github.com/jwill89/shared-tooling/compare/v2.15.1...v2.15.2
 [2.15.1]: https://github.com/jwill89/shared-tooling/compare/v2.15.0...v2.15.1
