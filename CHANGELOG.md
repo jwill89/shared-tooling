@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.17.0] - 2026-11-17
+
 ### Added
 
 - `changes.yml` runs only the CI jobs a change needs. A project's `ci.yml` names its areas in a `changes` job, and each job's `if:` reads whether its area changed (`fromJSON(needs.changes.outputs.areas).<area>`).
@@ -479,7 +481,8 @@ A major: a project's own Stylelint moves to 18.
 - `repo/`: the shared `.editorconfig` and `.gitattributes`, the Taskfile include, the Dependabot example, and `task shared:update` with its version check.
 - `.github/workflows`: reusable workflows for each stack (`web`, `go`, `php`, `dotnet`, `pwsh`, `docs`, `osv`).
 
-[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.16.1...HEAD
+[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.17.0...HEAD
+[2.17.0]: https://github.com/jwill89/shared-tooling/compare/v2.16.1...v2.17.0
 [2.16.1]: https://github.com/jwill89/shared-tooling/compare/v2.16.0...v2.16.1
 [2.16.0]: https://github.com/jwill89/shared-tooling/compare/v2.15.2...v2.16.0
 [2.15.2]: https://github.com/jwill89/shared-tooling/compare/v2.15.1...v2.15.2
