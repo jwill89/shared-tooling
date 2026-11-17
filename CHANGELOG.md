@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.16.0] - 2026-11-16
+
 ### Fixed
 
 - The deploy module's large transfers no longer crawl over the held connection: an upload or download of 1 MB or more (`Invoke-Upload`, `Send-File`, `Get-File`, and so `Copy-LiveDatabase`, `Copy-LiveFolder` and each `Sync-LiveFolder` batch) runs on an SSH connection of its own, about 8 MB/s where a channel of the shared one moved about 0.5 MB/s. A smaller one, and every remote command, still rides the held connection, and the module opens no more than four connections in any 30 seconds, waiting when it must, so `ufw limit ssh` never refuses one. `Get-File` reads the file's size and SHA-256 before the download rather than after.
@@ -455,7 +457,8 @@ A major: a project's own Stylelint moves to 18.
 - `repo/`: the shared `.editorconfig` and `.gitattributes`, the Taskfile include, the Dependabot example, and `task shared:update` with its version check.
 - `.github/workflows`: reusable workflows for each stack (`web`, `go`, `php`, `dotnet`, `pwsh`, `docs`, `osv`).
 
-[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.15.2...HEAD
+[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.16.0...HEAD
+[2.16.0]: https://github.com/jwill89/shared-tooling/compare/v2.15.2...v2.16.0
 [2.15.2]: https://github.com/jwill89/shared-tooling/compare/v2.15.1...v2.15.2
 [2.15.1]: https://github.com/jwill89/shared-tooling/compare/v2.15.0...v2.15.1
 [2.15.0]: https://github.com/jwill89/shared-tooling/compare/v2.14.0...v2.15.0
