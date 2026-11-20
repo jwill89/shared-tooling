@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.19.2] - 2026-11-20
+
 ### Fixed
 
 - `task shared:ci:share` runs the command it was given: a command with one argument, its default `task test` among them, reached the program a character at a time (`task t e s t`).
@@ -514,7 +516,8 @@ A major: a project's own Stylelint moves to 18.
 - `repo/`: the shared `.editorconfig` and `.gitattributes`, the Taskfile include, the Dependabot example, and `task shared:update` with its version check.
 - `.github/workflows`: reusable workflows for each stack (`web`, `go`, `php`, `dotnet`, `pwsh`, `docs`, `osv`).
 
-[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.19.1...HEAD
+[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.19.2...HEAD
+[2.19.2]: https://github.com/jwill89/shared-tooling/compare/v2.19.1...v2.19.2
 [2.19.1]: https://github.com/jwill89/shared-tooling/compare/v2.19.0...v2.19.1
 [2.19.0]: https://github.com/jwill89/shared-tooling/compare/v2.18.0...v2.19.0
 [2.18.0]: https://github.com/jwill89/shared-tooling/compare/v2.17.0...v2.18.0
