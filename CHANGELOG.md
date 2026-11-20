@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.19.1] - 2026-11-20
+
 ### Changed
 
 - The self-hosted runners hold the running jobs to `Cpus` of the distro's processors as a cpuset, where a CPU quota froze every running job at once whenever the jobs together had spent it, and `Cpus` is now a whole number. Each job is told its share of those CPUs, the config's new `JobCpus` (by default `Cpus` shared evenly between `MaxJobs`), in `CI_CPUS`, `GOMAXPROCS` and `DOTNET_PROCESSOR_COUNT`, so its tests run as many workers as it has CPUs; `MaxJobs` defaults to no more jobs than give each two CPUs; and `task shared:runner:status` shows the processors and the share. The runners take it when they next start from shared-tooling's own checkout (runner/README.md).
@@ -508,7 +510,8 @@ A major: a project's own Stylelint moves to 18.
 - `repo/`: the shared `.editorconfig` and `.gitattributes`, the Taskfile include, the Dependabot example, and `task shared:update` with its version check.
 - `.github/workflows`: reusable workflows for each stack (`web`, `go`, `php`, `dotnet`, `pwsh`, `docs`, `osv`).
 
-[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.19.0...HEAD
+[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.19.1...HEAD
+[2.19.1]: https://github.com/jwill89/shared-tooling/compare/v2.19.0...v2.19.1
 [2.19.0]: https://github.com/jwill89/shared-tooling/compare/v2.18.0...v2.19.0
 [2.18.0]: https://github.com/jwill89/shared-tooling/compare/v2.17.0...v2.18.0
 [2.17.0]: https://github.com/jwill89/shared-tooling/compare/v2.16.1...v2.17.0
