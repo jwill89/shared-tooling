@@ -118,10 +118,8 @@ func (b *dockerBackend) start(ctx context.Context, s spec) (string, error) {
 	created, err := b.docker.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: "ci-" + s.repo + "-" + s.name,
 		Config: &container.Config{
-			Image: b.config.Image,
-			// The runner reads its configuration from here and clears it from its own
-			// environment, so the job's steps don't inherit it.
-			Env:    []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=" + s.jitConfig},
+			Image:  b.config.Image,
+			Env:    jobEnv(s.jitConfig, b.config.JobCpus),
 			Labels: labels,
 		},
 		HostConfig: host,
@@ -140,6 +138,22 @@ func (b *dockerBackend) start(ctx context.Context, s spec) (string, error) {
 		return "", fmt.Errorf("start the container: %w", err)
 	}
 	return created.ID, nil
+}
+
+// jobEnv is a job container's environment. The runner reads its configuration from
+// ACTIONS_RUNNER_INPUT_JITCONFIG and clears it from its own environment, so the job's
+// steps don't inherit it; they inherit the rest. A container sees the processors every
+// running job shares, not its own share of them, so a job is told its share: CI_CPUS for
+// the tools whose shared settings read it (Vitest's workers), and the knobs Go and .NET
+// read themselves, which size go test's packages at once and its tests' parallelism, and
+// dotnet test's.
+func jobEnv(jitConfig string, cpus int) []string {
+	env := []string{"ACTIONS_RUNNER_INPUT_JITCONFIG=" + jitConfig}
+	if cpus > 0 {
+		n := strconv.Itoa(cpus)
+		env = append(env, "CI_CPUS="+n, "GOMAXPROCS="+n, "DOTNET_PROCESSOR_COUNT="+n)
+	}
+	return env
 }
 
 func (b *dockerBackend) wait(ctx context.Context, handle string) (int64, error) {

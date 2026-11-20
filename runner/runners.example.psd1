@@ -19,13 +19,20 @@
     # Name      = 'wsl'
 
     # How many jobs may run at once across every repo; the rest wait in GitHub's queue.
-    # Defaults to as many as Memory holds at 1.5 GB each, and at most one per processor.
+    # Defaults to as many as Memory holds at 1.5 GB each, and no more than gives each two
+    # of the Cpus.
     # MaxJobs   = 7
 
-    # The CPUs and memory the running jobs share, however many there are. Default to half
-    # the distro's CPUs, and three quarters of its memory.
+    # The CPUs and memory the running jobs share, however many there are: Cpus is a whole
+    # number of the distro's processors, its last ones. Default to half the distro's
+    # processors, and three quarters of its memory.
     # Cpus      = 16
     # Memory    = '12g'
+
+    # How many CPUs each job is told it has (CI_CPUS, GOMAXPROCS, DOTNET_PROCESSOR_COUNT),
+    # which its tools size their workers to. Defaults to Cpus shared evenly between
+    # MaxJobs; more lets the jobs crowd each other when many run at once.
+    # JobCpus   = 2
 
     # The memory one job's container may use.
     # JobMemory = '8g'

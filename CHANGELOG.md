@@ -8,6 +8,10 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Changed
+
+- The self-hosted runners hold the running jobs to `Cpus` of the distro's processors as a cpuset, where a CPU quota froze every running job at once whenever the jobs together had spent it, and `Cpus` is now a whole number. Each job is told its share of those CPUs, the config's new `JobCpus` (by default `Cpus` shared evenly between `MaxJobs`), in `CI_CPUS`, `GOMAXPROCS` and `DOTNET_PROCESSOR_COUNT`, so its tests run as many workers as it has CPUs; `MaxJobs` defaults to no more jobs than give each two CPUs; and `task shared:runner:status` shows the processors and the share. The runners take it when they next start from shared-tooling's own checkout (runner/README.md).
+
 ## [2.19.0] - 2026-11-20
 
 ### Added
@@ -19,7 +23,6 @@ The changes a project would notice in shared-tooling, by release. A project take
 ### Changed
 
 - `vitestDefaults` runs one worker for each CPU of `CI_CPUS` but one when it is set, so a CI job runs as many spec files at once as its share of the CPUs allows rather than one for every processor of the machine, and makes `waitTimeout` `expect.poll`'s default timeout in place of one second.
-- The self-hosted runners hold the running jobs to `Cpus` of the distro's processors as a cpuset, where a CPU quota froze every running job at once whenever the jobs together had spent it, and `Cpus` is now a whole number. Each job is told its share of those CPUs, the config's new `JobCpus` (by default `Cpus` shared evenly between `MaxJobs`), in `CI_CPUS`, `GOMAXPROCS` and `DOTNET_PROCESSOR_COUNT`, so its tests run as many workers as it has CPUs; `MaxJobs` defaults to no more jobs than give each two CPUs; and `task shared:runner:status` shows the processors and the share. The runners take it when they next start from shared-tooling's own checkout (runner/README.md).
 
 ## [2.18.0] - 2026-11-17
 

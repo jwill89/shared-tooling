@@ -28,6 +28,8 @@ func TestReadConfig(t *testing.T) {
 		{"no image", strings.Replace(valid, `"image":"ci-runner:1"`, `"image":""`, 1), "no image"},
 		{"no jobs", strings.Replace(valid, `"maxJobs":4`, `"maxJobs":0`, 1), "maxJobs"},
 		{"a negative size", strings.Replace(valid, `"shmSize":2048`, `"shmSize":-1`, 1), "below 0"},
+		{"a share of the CPUs", strings.Replace(valid, `"token"`, `"jobCpus":2,"token"`, 1), ""},
+		{"a negative share of the CPUs", strings.Replace(valid, `"token"`, `"jobCpus":-1,"token"`, 1), "below 0"},
 		{"a parent that isn't a slice", strings.Replace(valid, `"ci.slice"`, `"/ci"`, 1), "slice"},
 		{"no parent", strings.Replace(valid, `"ci.slice"`, `""`, 1), ""},
 		{"an unknown backend", strings.Replace(valid, `"token"`, `"backend":"vm","token"`, 1), "neither"},

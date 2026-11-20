@@ -33,7 +33,7 @@ jobs:
         python: test/python/** lint/python/**
         workflows: .github/**
         web: lint/web/** test/a11y/** test/web/** scripts/test-presets.mjs
-        tests: repo/Invoke-NpmAudit.ps1 scripts/Test-NpmAudit.ps1 scripts/fixtures/** scripts/Test-CiShare.ps1
+        tests: repo/Invoke-NpmAudit.ps1 scripts/Test-NpmAudit.ps1 scripts/fixtures/** scripts/Test-CiShare.ps1 runner/CiRunner.psm1 scripts/Test-CiRunner.ps1
         osv: repo/Invoke-VulnerabilityScan.ps1
 
   scripts:
@@ -304,6 +304,10 @@ jobs:
         shell: pwsh
         run: |
           & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'CI share script' -Command 'pwsh -NoProfile -File scripts/Test-CiShare.ps1'
+      - name: Runner limits
+        shell: pwsh
+        run: |
+          & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'Runner limits' -Command 'pwsh -NoProfile -File scripts/Test-CiRunner.ps1'
       - name: CI report
         id: ci-report
         if: failure()

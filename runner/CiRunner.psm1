@@ -15,6 +15,8 @@ Add-Type -AssemblyName System.Formats.Tar
 $script:StateDir = Join-Path $env:USERPROFILE '.ci-runner'
 $script:DefaultConfigPath = Join-Path $script:StateDir 'runners.psd1'
 $script:PidPath = Join-Path $script:StateDir 'supervisor.pid'
+# The limits the last start set (Set-CiLimit), which task shared:ci:share reads.
+$script:LimitsPath = Join-Path $script:StateDir 'limits.json'
 $script:LogDir = Join-Path $script:StateDir 'logs'
 $script:TaskName = 'CI runners'
 $script:JobImage = 'ci-runner'
@@ -87,9 +89,8 @@ function Read-CiConfig {
     if ($config.JobMemory -notmatch '^\d+[mg]$') { throw "The config's JobMemory '$($config.JobMemory)' isn't a size such as 8g." }
     if ($config.CacheSize -notmatch '^\d+[mg]$') { throw "The config's CacheSize '$($config.CacheSize)' isn't a size such as 30g." }
     if ($config.ContainsKey('Memory') -and $config.Memory -notmatch '^\d+[mg]$') { throw "The config's Memory '$($config.Memory)' isn't a size such as 12g." }
-    if ($config.ContainsKey('MaxJobs') -and ($config.MaxJobs -isnot [int] -or $config.MaxJobs -lt 1)) { throw "The config's MaxJobs '$($config.MaxJobs)' isn't a whole number of 1 or more." }
-    if ($config.ContainsKey('Cpus') -and (($config.Cpus -isnot [int] -and $config.Cpus -isnot [double]) -or $config.Cpus -le 0)) {
-        throw "The config's Cpus '$($config.Cpus)' isn't a number above 0."
+    foreach ($key in 'MaxJobs', 'Cpus', 'JobCpus') {
+        if ($config.ContainsKey($key) -and ($config[$key] -isnot [int] -or $config[$key] -lt 1)) { throw "The config's $key '$($config[$key])' isn't a whole number of 1 or more." }
     }
     foreach ($repo in $config.Repos) {
         if ($repo -notmatch '^[A-Za-z0-9._-]+$') { throw "The config's repo '$repo' isn't a repo name." }
@@ -172,31 +173,53 @@ function Wait-CiDocker {
     throw "Docker isn't answering in the $Distro distro. Look at: wsl -d $Distro -u root -- systemctl status docker"
 }
 
+function Get-CiLimit {
+    # The limits the jobs share, from the config and the distro's size: Cpus defaults to
+    # half the distro's processors, leaving the rest to whatever else the machine is doing;
+    # Memory to three quarters of the distro's memory; MaxJobs to as many jobs as Memory
+    # holds at 1.5 GB each (about what a front end's build and tests peak at with their
+    # file cache), and no more than gives each two of the CPUs; and JobCpus, what each job
+    # is told it has, to its even share of the CPUs. Pure, so its arithmetic is testable.
+    param(
+        [Parameter(Mandatory)] [hashtable] $Config,
+        [Parameter(Mandatory)] [int] $Processors,
+        [Parameter(Mandatory)] [long] $MemoryTotal
+    )
+    $cpus = if ($Config.ContainsKey('Cpus')) { [Math]::Min($Config.Cpus, $Processors) } else { [Math]::Max(1, [Math]::Floor($Processors / 2)) }
+    $memory = if ($Config.ContainsKey('Memory')) { ConvertTo-CiByte $Config.Memory } else { [long] ($MemoryTotal * 0.75) }
+    $maxJobs = if ($Config.ContainsKey('MaxJobs')) { $Config.MaxJobs } else { [Math]::Max(1, [Math]::Min([Math]::Floor($cpus / 2), [Math]::Floor($memory / 1.5GB))) }
+    $jobCpus = if ($Config.ContainsKey('JobCpus')) { [Math]::Min($Config.JobCpus, $cpus) } else { [Math]::Max(1, [Math]::Floor($cpus / $maxJobs)) }
+    return [pscustomobject]@{
+        Cpus        = [int] $cpus
+        # The last of the distro's processors, so the first stay with its own services.
+        AllowedCpus = '{0}-{1}' -f ($Processors - $cpus), ($Processors - 1)
+        Memory      = $memory
+        MaxJobs     = [int] $maxJobs
+        JobCpus     = [int] $jobCpus
+    }
+}
+
 function Set-CiLimit {
     # Writes the systemd slice every job's container runs in, so the jobs together use at
-    # most the config's Cpus and Memory, and returns the limits. Cpus defaults to half the
-    # distro's processors, leaving the rest to whatever else the machine is doing; Memory
-    # to three quarters of the distro's; and MaxJobs to as many jobs as Memory holds at
-    # 1.5 GB each, about what a front end's build and tests peak at with their file cache,
-    # and no more than one per processor.
+    # most the config's Cpus and Memory (Get-CiLimit), and returns the limits. The CPUs are
+    # a cpuset (AllowedCPUs), not a quota: a container can't see a quota on its slice, so
+    # its tools sized their workers from every processor, and once the jobs together spent
+    # the quota it froze the whole slice, every job's tests with it, for the rest of each
+    # 100 ms period. nproc, Node and Go see a cpuset, and it only shares the processors
+    # out. A slice that is running takes the new limits at the daemon-reload.
     [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)] [hashtable] $Config)
     $size = @(Invoke-CiDistro -Distro $Config.Distro -Command 'sh', '-c', 'nproc && sed -n "s/^MemTotal: *\([0-9]*\) kB$/\1/p" /proc/meminfo')
-    $processors = [int] $size[0]
-    $cpus = if ($Config.ContainsKey('Cpus')) { [double] $Config.Cpus } else { [Math]::Max(1, [Math]::Floor($processors / 2)) }
-    $memory = if ($Config.ContainsKey('Memory')) { ConvertTo-CiByte $Config.Memory } else { [long] ([long] $size[1] * 1KB * 0.75) }
-    $maxJobs = if ($Config.ContainsKey('MaxJobs')) { $Config.MaxJobs } else { [int] [Math]::Max(1, [Math]::Min($processors, [Math]::Floor($memory / 1.5GB))) }
-    $unit = "[Unit]`nDescription=CI jobs, which share these limits`n`n[Slice]`nCPUQuota=$([int] ($cpus * 100))%`nMemoryMax=$memory`n"
+    $limits = Get-CiLimit -Config $Config -Processors ([int] $size[0]) -MemoryTotal ([long] $size[1] * 1KB)
+    $unit = "[Unit]`nDescription=CI jobs, which share these limits`n`n[Slice]`nAllowedCPUs=$($limits.AllowedCpus)`nMemoryMax=$($limits.Memory)`n"
     if ($PSCmdlet.ShouldProcess($script:Slice, 'Set the jobs'' limits')) {
         Invoke-CiDistro -Distro $Config.Distro -InputText $unit -Command @(
             'sh', '-c', 'tr -d "\r" > "/etc/systemd/system/$0" && systemctl daemon-reload', $script:Slice
         ) | Out-Null
+        # For task shared:ci:share, which runs a repo's checks with a job's share.
+        $limits | ConvertTo-Json | Set-Content -LiteralPath $script:LimitsPath
     }
-    return [pscustomobject]@{
-        Cpus    = $cpus
-        Memory  = $memory
-        MaxJobs = $maxJobs
-    }
+    return $limits
 }
 
 function Get-CiRunnerRelease {
@@ -335,6 +358,7 @@ function Get-CiScalerSetting {
         # without a restart and never leaves the scaler naming a removed image.
         image        = "$($script:JobImage):current"
         jobMemory    = ConvertTo-CiByte $Config.JobMemory
+        jobCpus      = $Limits.JobCpus
         # Chrome needs more /dev/shm than Docker's 64 MB.
         shmSize      = 2GB
         cgroupParent = $script:Slice
@@ -738,8 +762,8 @@ function Start-CiRunner {
                     Start-Sleep -Seconds 30
                 }
             }
-            Write-CiLog ("Serving {0} repos as '{1}': up to {2} jobs at once, sharing {3} CPUs and {4:N1} GB." -f
-                $config.Repos.Count, $config.Name, $limits.MaxJobs, $limits.Cpus, ($limits.Memory / 1GB))
+            Write-CiLog ("Serving {0} repos as '{1}': up to {2} jobs at once, sharing {3} CPUs ({4}) and {5:N1} GB, each told it has {6} CPUs." -f
+                $config.Repos.Count, $config.Name, $limits.MaxJobs, $limits.Cpus, $limits.AllowedCpus, ($limits.Memory / 1GB), $limits.JobCpus)
             if ($config.WindowsRepos) {
                 Write-CiLog ("Serving {0} repos' Windows jobs as '{1}-windows': up to {2} at once." -f
                     $config.WindowsRepos.Count, $config.Name, $config.WindowsMaxJobs)
@@ -967,9 +991,10 @@ function Get-CiRunnerStatus {
     )
     Write-Host "Scaler: $(if ($scaler) { $scaler } else { 'not running' }), serving $($config.Repos.Count) repos as '$($config.Name)'."
     $limits = Invoke-CiDistro -Distro $config.Distro -AllowFailure -Command @(
-        'systemctl', 'show', $script:Slice, '--property', 'CPUQuotaPerSecUSec,MemoryMax,MemoryCurrent'
+        'systemctl', 'show', $script:Slice, '--property', 'AllowedCPUs,MemoryMax,MemoryCurrent'
     )
-    Write-Host "Jobs' limits and use: $($limits -join ', ')"
+    $share = if (Test-Path -LiteralPath $script:LimitsPath) { (Get-Content -LiteralPath $script:LimitsPath -Raw | ConvertFrom-Json).JobCpus }
+    Write-Host "Jobs' limits and use: $($limits -join ', ')$(if ($share) { "; each job told it has $share CPUs" })"
     $log = Join-Path $script:LogDir 'scaler.log'
     if (Test-Path -LiteralPath $log) {
         Get-Content -LiteralPath $log -Tail 5 | ForEach-Object { Write-Host "  $_" }

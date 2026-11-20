@@ -38,6 +38,10 @@ type Config struct {
 	// JobMemory is the most memory one job's container may use, in bytes; 0 sets no limit
 	// of its own (docker).
 	JobMemory int64 `json:"jobMemory"`
+	// JobCpus is how many CPUs each job may count on, its share of the slice's: each job's
+	// container is told it (jobEnv), so its tools size their workers to it rather than to
+	// every processor they can see. 0 tells it nothing (docker).
+	JobCpus int `json:"jobCpus"`
 	// ShmSize is the size of each container's /dev/shm, in bytes, which Chrome needs
 	// (docker).
 	ShmSize int64 `json:"shmSize"`
@@ -129,7 +133,7 @@ func (c Config) validateDocker(served map[string]bool) error {
 	switch {
 	case c.Image == "":
 		return errors.New("no image")
-	case c.JobMemory < 0, c.ShmSize < 0:
+	case c.JobMemory < 0, c.ShmSize < 0, c.JobCpus < 0:
 		return errors.New("a size is below 0")
 	case c.CgroupParent != "" && !strings.HasSuffix(c.CgroupParent, ".slice"):
 		return fmt.Errorf("cgroupParent %q isn't a systemd slice", c.CgroupParent)
