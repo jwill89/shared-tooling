@@ -168,6 +168,11 @@ tasks:
     cmds:
       - pwsh -NoProfile -File "{{.SHARED}}/ci/Get-CiReport.ps1" {{.CLI_ARGS}}
 
+  ci:share:
+    desc: Run a command (task test by default) with the CPUs a job on the self-hosted runners has - its share, told in CI_CPUS, GOMAXPROCS and DOTNET_PROCESSOR_COUNT, and held to that many processors (CPUS=4 -- task test:coverage)
+    cmds:
+      - '{{if .CPUS}}CI_CPUS={{.CPUS}} {{end}}pwsh -NoProfile -File "{{.SHARED}}/ci/Invoke-CiShare.ps1" {{.CLI_ARGS}}'
+
   # This machine's self-hosted runners (runner/README.md), which run the CI of every repo
   # whose CI_RUNNER variable names them, and only between a start and a stop.
   runner:start:

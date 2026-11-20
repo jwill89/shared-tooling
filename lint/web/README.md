@@ -6,7 +6,7 @@
 
 | Import | What it is |
 | --- | --- |
-| `@jwill89/lint-web` | ESLint for Vue 3 + TypeScript: Vue's recommended rules, typescript-eslint's `strictTypeChecked`, vuejs-accessibility's recommended rules, the curated rules below, test-file relaxations, and Prettier's conflict list last. |
+| `@jwill89/lint-web` | ESLint for Vue 3 + TypeScript: Vue's recommended rules, typescript-eslint's `strictTypeChecked`, vuejs-accessibility's recommended rules, the curated rules below, test-file relaxations and the specs' wait rule, and Prettier's conflict list last. |
 | `@jwill89/lint-web` named `vueConventions` | The Vue style-guide rules six front ends already state: `<script setup lang="ts">` only, typed refs, macros in order, buttons with a type, no inline styles, no unregistered components. |
 | `@jwill89/lint-web` named `tsStylistic` | typescript-eslint's `stylisticTypeChecked` rules, with `prefer-nullish-coalescing` leaving strings and booleans to `\|\|`. |
 | `@jwill89/lint-web` named `defineConfigWithVueTs`, `vueTsConfigs` | Re-exported from this package's install, for a project that needs more of them (see "One copy of each plugin"). |
@@ -21,6 +21,8 @@
 | `@jwill89/lint-web/tsconfig.vitest.json` | What the Vitest specs add to the app's config: Node's and Vite's types, and an empty `exclude` so the specs the app config leaves out are taken in. A project's `tsconfig.vitest.json` extends the app's config and then this. |
 
 The curated rules: `prefer-const`, `no-param-reassign`, `eqeqeq` (smart), `curly` (all), `object-shorthand`, `no-console` (warn and error allowed), `consistent-type-imports`, `no-unused-vars` (a leading `_` opts out), `naming-convention` (PascalCase for types and enum members only, so API types stay as each API's JSON has them: camelCase by the standards, snake_case in older APIs until they move), `restrict-template-expressions` (numbers and booleans allowed), `no-confusing-void-expression` (arrow shorthand allowed), and `label-has-for` satisfied by nesting or by `for`/`id`.
+
+In the specs (`*.spec.ts`, `*.test.ts` and anything under `__tests__/`), both the Vue and the React config refuse `vi.waitFor` and `vi.waitUntil` called without a timeout, through `no-restricted-syntax` (`eslint-specs.js`): their own 1 s fails on a busy CI runner. Wait with `soon()` from `shared/test/web/wait.js`, or pass a timeout. A project that sets `no-restricted-syntax` for its specs replaces the rule, so it puts the shared entry first in its own, from `specWaitRules`, a named export of both configs: `'no-restricted-syntax': [...specWaitRules['no-restricted-syntax'], { selector: '…', message: '…' }]`.
 
 `curly` comes back on after Prettier's conflict list. In the old eslint-config, Prettier's list was last and switched it off, so it never ran; expect new findings when a project moves over (`eslint --fix` adds the braces).
 

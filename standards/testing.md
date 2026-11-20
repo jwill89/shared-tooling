@@ -43,6 +43,8 @@ What every project tests, how it tests it, and where each stack keeps and runs i
 - Every new setting gets a default, a validation check, and a test that a bad value is refused. [test]
 - A cached response gets a test that writes, then reads, and expects the fresh data. [test]
 - A new gate is proven by planting a violation and watching it fail. [review]
+- A test that waits for something to happen checks again until it holds, within a budget fit for a CI job: five seconds in a unit spec, `test/web`'s `waitTimeout`. It never waits at a library's own default timeout (`vi.waitFor`'s second) and never sleeps a fixed time, since a CI job's thread can get far less of a CPU than a desk's for a second at a time, and a wait that passes costs only the time it took. [review]
+- Tests that wait or time something pass at a CI job's share of the CPUs before the change is done: `task shared:ci:share` runs `task test`, or the command after `--`, with the CPUs a job on the self-hosted runners has and its tools sized to them, so a test that passes only with a desk's spare CPUs fails there first. [review]
 - Passing checks are necessary, not sufficient: run the app on a throwaway database and use the changed behaviour, reading the result from the page, not the console. [review]
 - A mechanical refactor is done by script and checked by script: method bodies byte-identical, spec paths and schemas unchanged. [review]
 - A CSS refactor is checked with a computed-style walk over every route, signed in and out, before and after. [review]
@@ -51,7 +53,8 @@ What every project tests, how it tests it, and where each stack keeps and runs i
 
 - Specs live in `src/__tests__/`, named `*.spec.ts`. [review]
 - The Vitest config lives inside `vite.config.ts`, as `test: vitestDefaults({ ... })` from the shared `test/web` preset, and adds only the include, the floor and a setup file. [review]
-- The preset sets jsdom, puts mocks and stubbed globals back after each test, and measures v8 coverage over all of `src`, so a project doesn't restate any of that. [CI]
+- The preset sets jsdom, puts mocks and stubbed globals back after each test, measures v8 coverage over all of `src`, runs a worker for each CPU but one of a CI job's share when `CI_CPUS` gives it, and makes `waitTimeout` `expect.poll`'s default, so a project doesn't restate any of that. [CI]
+- A spec waits for what the app does in its own time (a list opening, a request answered, a route followed) with `soon()` from `test/web/wait.js` or with `expect.poll`, both at `waitTimeout`; a `vi.waitFor` or `vi.waitUntil` names its own timeout. [lint: no-restricted-syntax]
 - Tests that need a DOM run on jsdom, the preset's default; a suite with no DOM test passes `environment: 'node'`. [review]
 - The setup file stands in only for browser APIs jsdom lacks. [review]
 - A React app's specs use the same preset and the same rules; only the mounting library differs. [review]
@@ -69,6 +72,7 @@ What every project tests, how it tests it, and where each stack keeps and runs i
 ## Go
 
 - CI runs `go test -race -shuffle=on ./...` with a coverage profile and the floor, through `go.yml`. [CI]
+- On the self-hosted runners a job's `GOMAXPROCS` is its share of the CPUs, so `go test` runs that many packages at once, and each package that many parallel tests; a project sets neither `-p` nor `-parallel` above it. [review]
 - Locally `go test ./...` is enough, since the race detector needs gcc. [review]
 - Decisions ("what should happen") live in pure functions, apart from the code that carries them out, so they test without the outside service; test them table-driven. [review]
 - Tests that need a migrated database copy one that a shared test package migrates once per test binary; only the database package's own tests migrate step by step. [review]

@@ -5,6 +5,10 @@ import reactHooks from 'eslint-plugin-react-hooks'
 import globals from 'globals'
 import tseslint from 'typescript-eslint'
 
+import { specWaitRules } from './eslint-specs.js'
+
+export { specWaitRules }
+
 /**
  * Shared ESLint flat config for React + TypeScript front ends. The same curated rules as the Vue config, on typescript-eslint's
  * strictTypeChecked, React's hooks rules and JSX accessibility.
@@ -81,6 +85,7 @@ export default tseslint.config(
       '@typescript-eslint/require-await': 'off',
       '@typescript-eslint/no-floating-promises': 'off',
       '@typescript-eslint/unbound-method': 'off',
+      ...specWaitRules,
     },
   },
 

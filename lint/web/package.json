@@ -26,6 +26,7 @@
     "eslint.js",
     "eslint-react.js",
     "eslint-js.js",
+    "eslint-specs.js",
     "prettier.js",
     "prettier.d.ts",
     "stylelint.js",

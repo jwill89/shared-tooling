@@ -8,6 +8,17 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Added
+
+- `task shared:ci:share` (`ci/Invoke-CiShare.ps1`) runs `task test`, or the command after `--`, with the CPUs a job on the self-hosted runners has: its share of them (the runners' `JobCpus`, or `CPUS=4`), given in `CI_CPUS`, `GOMAXPROCS` and `DOTNET_PROCESSOR_COUNT`, and the command held to that many processors. A test that passes only with a desk's spare CPUs fails there before it fails in CI; `standards/testing.md` asks for it of tests that wait or time something.
+- `soon()` in `test/web/wait.js` waits for what a spec checks for up to `waitTimeout`, five seconds, exported from `test/web/vitest.js`, where `vi.waitFor` waits one second. A spec imports it by path, as `vite.config.ts` imports the preset.
+- `@jwill89/lint-web` and `@jwill89/lint-web/react` refuse, in specs, a `vi.waitFor` or `vi.waitUntil` that names no timeout (`no-restricted-syntax`): wait with `soon()`, or pass one. A project whose specs set `no-restricted-syntax` themselves puts the shared entry first in theirs, from `specWaitRules`, a named export of both. `standards/testing.md` (Every stack, Vitest) has the rule.
+
+### Changed
+
+- `vitestDefaults` runs one worker for each CPU of `CI_CPUS` but one when it is set, so a CI job runs as many spec files at once as its share of the CPUs allows rather than one for every processor of the machine, and makes `waitTimeout` `expect.poll`'s default timeout in place of one second.
+- The self-hosted runners hold the running jobs to `Cpus` of the distro's processors as a cpuset, where a CPU quota froze every running job at once whenever the jobs together had spent it, and `Cpus` is now a whole number. Each job is told its share of those CPUs, the config's new `JobCpus` (by default `Cpus` shared evenly between `MaxJobs`), in `CI_CPUS`, `GOMAXPROCS` and `DOTNET_PROCESSOR_COUNT`, so its tests run as many workers as it has CPUs; `MaxJobs` defaults to no more jobs than give each two CPUs; and `task shared:runner:status` shows the processors and the share. The runners take it when they next start from shared-tooling's own checkout (runner/README.md).
+
 ## [2.18.0] - 2026-11-17
 
 ### Added

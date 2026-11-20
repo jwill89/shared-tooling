@@ -16,11 +16,17 @@ export interface VitestDefaultsOptions {
   coverageExclude?: string[]
 }
 
+/** How long a test waits for what the app does in its own time, in milliseconds. */
+export declare const waitTimeout: number
+
 export declare function vitestDefaults(options?: VitestDefaultsOptions): {
   environment: 'jsdom' | 'node'
   include: string[]
   setupFiles: string[]
   testTimeout: number
+  /** Set from CI_CPUS, when it is: one worker for each CPU but one. */
+  maxWorkers?: number
+  expect: { poll: { timeout: number } }
   restoreMocks: true
   unstubGlobals: true
   coverage: {

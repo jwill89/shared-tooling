@@ -4,6 +4,10 @@ import { defineConfigWithVueTs, vueTsConfigs } from '@vue/eslint-config-typescri
 import configPrettier from '@vue/eslint-config-prettier'
 import tseslint from 'typescript-eslint'
 
+import { specWaitRules } from './eslint-specs.js'
+
+export { specWaitRules }
+
 /**
  * Shared ESLint flat config for jwill89 Vue 3 + TypeScript front ends.
  *
@@ -99,6 +103,7 @@ export default defineConfigWithVueTs(
       '@typescript-eslint/require-await': 'off',
       '@typescript-eslint/no-floating-promises': 'off',
       '@typescript-eslint/unbound-method': 'off',
+      ...specWaitRules,
     },
   },
 
