@@ -8,6 +8,10 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Fixed
+
+- `task shared:ci:share` runs the command it was given: a command with one argument, its default `task test` among them, reached the program a character at a time (`task t e s t`).
+
 ## [2.19.1] - 2026-11-20
 
 ### Changed

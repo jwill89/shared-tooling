@@ -10,8 +10,9 @@
     scratch folder that holds a limits.json or none, and a pwsh child as the command, which
     prints the processors its affinity allows and the three variables it was given. Checks
     the share each case should give: CI_CPUS's, else the runners' JobCpus, else 2, and no
-    more than the processors there are; that the command's exit code comes back; and that
-    an argument starting with a dash reaches the command. Prints ok or FAIL for each case,
+    more than the processors there are; that the command's exit code comes back; that an
+    argument starting with a dash reaches the command; and that a command with one
+    argument gets it whole and one with none gets none. Prints ok or FAIL for each case,
     and exits 1 when any fails.
 
 .EXAMPLE
@@ -70,6 +71,25 @@ try {
     } else {
         $failed++
         Write-Host "FAIL  the command's exit code comes back: exit $LASTEXITCODE, want 7"
+    }
+
+    # One argument, as the default `task test` has, reaches the command whole, not a
+    # character at a time; and a command with none gets none.
+    $version = & $pwsh -Version
+    $out = & $pwsh -NoProfile -File $share $pwsh -Version 2>&1 | Select-Object -Last 1
+    if ($LASTEXITCODE -eq 0 -and "$out" -eq "$version") {
+        Write-Host 'ok    a command with one argument gets it whole'
+    } else {
+        $failed++
+        Write-Host "FAIL  a command with one argument gets it whole: exit $LASTEXITCODE, printed '$out', want '$version'"
+    }
+    $hostName = & hostname
+    $out = & $pwsh -NoProfile -File $share hostname 2>&1 | Select-Object -Last 1
+    if ($LASTEXITCODE -eq 0 -and "$out" -eq "$hostName") {
+        Write-Host 'ok    a command with no arguments gets none'
+    } else {
+        $failed++
+        Write-Host "FAIL  a command with no arguments gets none: exit $LASTEXITCODE, printed '$out', want '$hostName'"
     }
 } finally {
     foreach ($name in $saved.Keys) {

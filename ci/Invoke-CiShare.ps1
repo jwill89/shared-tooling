@@ -37,7 +37,9 @@
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 
-$command = if ($args.Count) { @($args) } else { @('task', 'test') }
+# The @() outside the if: a statement's output unrolls, so a command of one word would be
+# a string, and its [0] the word's first letter.
+$command = @(if ($args.Count) { $args } else { 'task', 'test' })
 
 $cpus = 0
 if (-not [int]::TryParse("$env:CI_CPUS", [ref] $cpus) -or $cpus -lt 1) {
@@ -68,7 +70,10 @@ $env:DOTNET_PROCESSOR_COUNT = "$cpus"
 Write-Information ("Running '{0}' with a CI job's {1} CPUs: processors {2}, and CI_CPUS, GOMAXPROCS and DOTNET_PROCESSOR_COUNT {1}." -f
     ($command -join ' '), $cpus, ($chosen -join ',')) -InformationAction Continue
 
-$program, $arguments = $command
+# Always an array: `$program, $arguments = $command` would leave a lone argument a string,
+# which splatting hands over a character at a time (`task test` as `task t e s t`).
+$program = $command[0]
+$arguments = @($command | Select-Object -Skip 1)
 if ($IsWindows) {
     # A process Windows starts takes its parent's affinity.
     $mask = 0L
