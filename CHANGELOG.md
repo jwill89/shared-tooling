@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.19.0] - 2026-11-20
+
 ### Added
 
 - `task shared:ci:share` (`ci/Invoke-CiShare.ps1`) runs `task test`, or the command after `--`, with the CPUs a job on the self-hosted runners has: its share of them (the runners' `JobCpus`, or `CPUS=4`), given in `CI_CPUS`, `GOMAXPROCS` and `DOTNET_PROCESSOR_COUNT`, and the command held to that many processors. A test that passes only with a desk's spare CPUs fails there before it fails in CI; `standards/testing.md` asks for it of tests that wait or time something.
@@ -503,7 +505,8 @@ A major: a project's own Stylelint moves to 18.
 - `repo/`: the shared `.editorconfig` and `.gitattributes`, the Taskfile include, the Dependabot example, and `task shared:update` with its version check.
 - `.github/workflows`: reusable workflows for each stack (`web`, `go`, `php`, `dotnet`, `pwsh`, `docs`, `osv`).
 
-[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.18.0...HEAD
+[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.19.0...HEAD
+[2.19.0]: https://github.com/jwill89/shared-tooling/compare/v2.18.0...v2.19.0
 [2.18.0]: https://github.com/jwill89/shared-tooling/compare/v2.17.0...v2.18.0
 [2.17.0]: https://github.com/jwill89/shared-tooling/compare/v2.16.1...v2.17.0
 [2.16.1]: https://github.com/jwill89/shared-tooling/compare/v2.16.0...v2.16.1
