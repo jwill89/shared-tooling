@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.19.3] - 2026-11-22
+
 ### Changed
 
 - `repo/dependabot.example.yml`'s `github-actions` block ignores `jwill89/shared-tooling*`. Dependabot no longer opens a pull request for each shared workflow a project calls, each moving one `uses:` ref ahead of the `shared/` submodule. The block also groups the other actions' minors and patches into one pull request, as the other ecosystems do. A project copies the block's `groups` and `ignore` into its `.github/dependabot.yml` and closes any such pull requests still open; `standards/packages.md` (Updates) has the rule.
@@ -525,7 +527,8 @@ A major: a project's own Stylelint moves to 18.
 - `repo/`: the shared `.editorconfig` and `.gitattributes`, the Taskfile include, the Dependabot example, and `task shared:update` with its version check.
 - `.github/workflows`: reusable workflows for each stack (`web`, `go`, `php`, `dotnet`, `pwsh`, `docs`, `osv`).
 
-[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.19.2...HEAD
+[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.19.3...HEAD
+[2.19.3]: https://github.com/jwill89/shared-tooling/compare/v2.19.2...v2.19.3
 [2.19.2]: https://github.com/jwill89/shared-tooling/compare/v2.19.1...v2.19.2
 [2.19.1]: https://github.com/jwill89/shared-tooling/compare/v2.19.0...v2.19.1
 [2.19.0]: https://github.com/jwill89/shared-tooling/compare/v2.18.0...v2.19.0
