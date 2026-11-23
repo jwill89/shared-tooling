@@ -484,6 +484,29 @@ function Limit-CiCache {
     }
 }
 
+function Limit-CiPageCache {
+    # Hands back to Windows the memory the jobs' file cache holds. Linux keeps the files a
+    # job reads in its page cache, charged to the jobs' slice, until the slice reaches its
+    # MemoryMax, and WSL returns only memory Linux frees, so after a few jobs the VM would
+    # hold the slice's whole limit while the jobs use a fraction of it. This reclaims the
+    # slice's inactive file pages, the ones not read again lately, which keeps what the
+    # running jobs reuse; with no job running, all its file pages. swappiness=0 holds the
+    # reclaim to the cache, so no job's own memory is swapped out. Returns the kernel's
+    # refusal, if any; finding less to reclaim than it was asked for isn't one.
+    param([Parameter(Mandatory)] [string] $Distro)
+    $reclaim = @'
+cg=/sys/fs/cgroup/$0
+[ -f "$cg/memory.reclaim" ] || exit 0
+if ls -d "$cg"/*.scope >/dev/null 2>&1; then key=inactive_file; else key=file; fi
+bytes=$(sed -n "s/^$key //p" "$cg/memory.stat")
+[ "${bytes:-0}" -ge 67108864 ] || exit 0
+/bin/echo "$bytes swappiness=0" 2>&1 >"$cg/memory.reclaim" | grep -v 'Resource temporarily unavailable'
+exit 0
+'@
+    $output = Invoke-CiDistro -Distro $Distro -AllowFailure -Command 'sh', '-c', ($reclaim -replace "`r"), $script:Slice
+    return ($output -join "`n").Trim()
+}
+
 function Stop-CiWindowsScaler {
     # Stops the Windows scaler through its stop file, which ends its runners: a job running
     # on one fails. Whatever outlives it, a scaler or a runner a crash left, is ended here.
@@ -709,7 +732,9 @@ function Install-CiRunner {
        stops. It holds a long poll open on each repo's scale set and starts a runner's
        container for each job GitHub assigns it, up to MaxJobs at once across the repos.
        With WindowsRepos, runs the Windows scaler beside it the same way.
-    5. Every six hours, empties a cache grown past CacheSize, rebuilds what the runner's
+    5. Every 30 seconds, hands the jobs' file cache back to Windows as it goes unread
+       (Limit-CiPageCache), all of it once no job is running.
+    6. Every six hours, empties a cache grown past CacheSize, rebuilds what the runner's
        new release or a change to scaler/ needs, and restarts a scaler on it; running
        Linux jobs finish on the image they started on.
     Ctrl+C, or Stop-CiRunner, ends it. Logs go to %USERPROFILE%\.ci-runner\logs:
@@ -781,6 +806,7 @@ function Start-CiRunner {
             }
 
             $lastUpkeep = Get-Date
+            $cacheRefused = $false
             while ($true) {
                 foreach ($name in @($scalers.Keys)) {
                     $scaler = $scalers[$name]
@@ -844,6 +870,11 @@ function Start-CiRunner {
                     } catch {
                         Write-CiLog "Upkeep failed, trying again in six hours: $_"
                     }
+                }
+                $refused = Limit-CiPageCache -Distro $config.Distro
+                if ($refused -and -not $cacheRefused) {
+                    $cacheRefused = $true
+                    Write-CiLog "The kernel won't reclaim the jobs' file cache, so WSL's VM keeps it until the runners stop: $refused"
                 }
                 Start-Sleep -Seconds 30
             }

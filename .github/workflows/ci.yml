@@ -66,6 +66,8 @@ jobs:
         with:
           go-version-file: lint/go/go.mod
           cache-dependency-path: lint/go/go.sum
+          # A self-hosted runner keeps Go's caches itself (runner/README.md).
+          cache: ${{ runner.environment == 'github-hosted' }}
       - name: golangci config is current
         shell: pwsh
         run: |
@@ -118,6 +120,8 @@ jobs:
         with:
           go-version-file: runner/scaler/go.mod
           cache-dependency-path: runner/scaler/go.sum
+          # A self-hosted runner keeps Go's caches itself (runner/README.md).
+          cache: ${{ runner.environment == 'github-hosted' }}
       - name: golangci config is current
         working-directory: lint/go
         shell: pwsh
@@ -217,6 +221,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: stable
+          # A self-hosted runner keeps Go's caches itself (runner/README.md).
+          cache: ${{ runner.environment == 'github-hosted' }}
       - name: actionlint
         shell: pwsh
         run: |
