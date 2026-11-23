@@ -43,6 +43,7 @@ type repoScaler struct {
 	scaleSet  int
 	runners   map[string]*runner
 	assigned  int
+	waiting   int
 	failures  int
 	holdUntil time.Time
 }
@@ -189,7 +190,9 @@ func (s *repoScaler) handle(ctx context.Context, session *scaleset.MessageSessio
 }
 
 // converge starts or retires runners so the repo has one for each job GitHub has
-// assigned it. stats is nil after a poll that ended empty, and the last ones stand.
+// assigned it, as far as the machine has room: a job without a place waits until a
+// runner exits, whose exit cuts the waiting repos' polls short so they plan again. stats
+// is nil after a poll that ended empty, and the last ones stand.
 func (s *repoScaler) converge(ctx context.Context, stats *scaleset.RunnerScaleSetStatistic) {
 	s.mu.Lock()
 	if stats != nil {
@@ -208,13 +211,29 @@ func (s *repoScaler) converge(ctx context.Context, stats *scaleset.RunnerScaleSe
 	if held {
 		start = 0
 	}
-	for range start {
+	waiting := 0
+	if want := start; want > 0 {
+		start = s.pool.reserve(s.repo, want)
+		waiting = want - start
+	}
+	s.mu.Lock()
+	changed := waiting != s.waiting
+	s.waiting = waiting
+	s.mu.Unlock()
+	if changed && waiting > 0 {
+		s.log.Info("jobs waiting for room on the machine", "waiting", waiting, "maxJobs", s.config.MaxJobs)
+	}
+	for i := range start {
 		if err := s.startRunner(ctx); err != nil {
 			s.log.Error("couldn't start a runner", "error", err)
 			s.mu.Lock()
 			s.failures++
 			s.holdUntil = time.Now().Add(backoff(s.failures))
 			s.mu.Unlock()
+			// The places this runner and the ones after it reserved go back.
+			for range start - i {
+				s.pool.done(s.repo)
+			}
 			break
 		}
 	}
@@ -224,7 +243,7 @@ func (s *repoScaler) converge(ctx context.Context, stats *scaleset.RunnerScaleSe
 }
 
 // startRunner asks GitHub for a single-use runner in the scale set and has the backend
-// start it; it takes one job and exits.
+// start it, in a place converge has reserved; it takes one job and exits.
 func (s *repoScaler) startRunner(ctx context.Context) error {
 	s.mu.Lock()
 	github, setID := s.github, s.scaleSet
@@ -253,19 +272,19 @@ func (s *repoScaler) startRunner(ctx context.Context) error {
 	return nil
 }
 
-// adopt takes on a runner an earlier run of the scaler left running. Its state is
-// unknown, so it counts as busy: it exits after its job, or takes the next one.
+// adopt takes on a runner an earlier run of the scaler left running, and counts its place.
+// Its state is unknown, so it counts as busy: it exits after its job, or takes the next one.
 func (s *repoScaler) adopt(ctx context.Context, f found) {
+	s.pool.add(s.repo)
 	s.track(ctx, f.name, &runner{id: f.runnerID, handle: f.handle, started: f.started, busy: true})
 	s.log.Info("took on a running runner", "runner", f.name)
 }
 
-// track counts a runner against the machine's limit and watches it.
+// track watches a runner whose place on the machine is already counted.
 func (s *repoScaler) track(ctx context.Context, name string, r *runner) {
 	s.mu.Lock()
 	s.runners[name] = r
 	s.mu.Unlock()
-	s.pool.add(s.repo)
 	go s.watch(ctx, name, r)
 }
 

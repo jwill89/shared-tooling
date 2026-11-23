@@ -527,22 +527,33 @@ function Get-CiGitHubRunner {
 
 function Remove-CiGitHubRunner {
     # Deregisters this machine's offline runners (with -All, every one of them), the ones a
-    # stop or a crash left behind.
+    # stop or a crash left behind. GitHub refuses one it still counts as running a job, as it
+    # does for a while after a stop removes the job's container; those go in one warning,
+    # and a later start removes them once GitHub has failed their jobs.
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)] [hashtable] $Config,
         [switch] $All
     )
+    $kept = [System.Collections.Generic.List[string]]::new()
     foreach ($repo in $Config.Repos) {
         $runners = @(Get-CiGitHubRunner -Config $Config -Repo $repo | Where-Object { $All -or $_.Status -eq 'offline' })
         foreach ($runner in $runners) {
             if ($PSCmdlet.ShouldProcess("$repo/$($runner.Name)", 'Deregister the runner')) {
                 $result = gh api -X DELETE "repos/$($Config.Owner)/$repo/actions/runners/$($runner.Id)" 2>&1
                 if ($LASTEXITCODE -ne 0) {
-                    Write-Warning "Couldn't deregister $repo/$($runner.Name): $result"
+                    if ("$result" -match 'is currently running a job') {
+                        $kept.Add("$repo/$($runner.Name)")
+                    } else {
+                        Write-Warning "Couldn't deregister $repo/$($runner.Name): $result"
+                    }
                 }
             }
         }
+    }
+    if ($kept.Count) {
+        Write-Warning ("GitHub kept {0} runner(s) it still counts as running a job: {1}. Their jobs fail once GitHub sees the runners gone, and the next start deregisters them." -f
+            $kept.Count, ($kept -join ', '))
     }
 }
 

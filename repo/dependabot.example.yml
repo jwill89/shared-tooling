@@ -109,3 +109,13 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    groups:
+      actions-minor:
+        patterns: ['*']
+        update-types: [minor, patch]
+    ignore:
+      # shared-tooling's workflows move together with the shared/ submodule, all to one
+      # release, through `task shared:update`. Dependabot names each workflow file apart
+      # (jwill89/shared-tooling/.github/workflows/web.yml), so left to it, each would get
+      # a pull request of its own and move its ref alone, off the submodule's release.
+      - dependency-name: 'jwill89/shared-tooling*'

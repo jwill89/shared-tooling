@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -63,6 +65,78 @@ func TestPoolCutsPollsShortWhenTheRoomChanges(t *testing.T) {
 	p.done("b")
 	if full.Err() == nil || own.Err() == nil {
 		t.Fatal("the polls offering no room weren't cut short when room came free")
+	}
+}
+
+func TestPoolReservesNoMoreThanTheRoom(t *testing.T) {
+	t.Parallel()
+	p := newPool(7)
+	if got := p.reserve("a", 25); got != 7 {
+		t.Fatalf("25 jobs on an idle machine of 7 got %d places, want 7", got)
+	}
+	if got := p.reserve("b", 1); got != 0 {
+		t.Fatalf("a full machine gave %d places, want 0", got)
+	}
+	if got := p.reserve("a", 0); got != 0 {
+		t.Fatalf("wanting none gave %d places", got)
+	}
+	p.done("a")
+	if got := p.reserve("b", 3); got != 1 {
+		t.Fatalf("a freed place gave %d, want 1", got)
+	}
+	if offered, _ := pollFor(p, "a"); offered != 6 {
+		t.Fatalf("a full machine offered %d to a repo with 6 runners, want 6", offered)
+	}
+}
+
+func TestPoolReservesTheLastPlaceOnce(t *testing.T) {
+	t.Parallel()
+	const repos, maxJobs = 18, 7
+	p := newPool(maxJobs)
+	var wg sync.WaitGroup
+	got := make([]int, repos)
+	for i := range repos {
+		wg.Go(func() { got[i] = p.reserve(fmt.Sprint("repo-", i), 3) })
+	}
+	wg.Wait()
+	total := 0
+	for _, n := range got {
+		total += n
+	}
+	if total != maxJobs {
+		t.Fatalf("repos reserving side by side got %d places, want %d", total, maxJobs)
+	}
+}
+
+func TestPoolCutsPollsShortWhenAReservationFillsIt(t *testing.T) {
+	t.Parallel()
+	p := newPool(3)
+	_, roomy := pollFor(p, "a")
+	p.reserve("b", 2)
+	if roomy.Err() != nil {
+		t.Fatal("a poll was cut short while room was left")
+	}
+	p.reserve("b", 5)
+	if roomy.Err() == nil {
+		t.Fatal("a poll offering room wasn't cut short when a reservation filled the machine")
+	}
+}
+
+func TestPoolCountsAnAdoptedRunnerPastTheLimit(t *testing.T) {
+	t.Parallel()
+	p := newPool(1)
+	p.add("a")
+	p.add("a")
+	if got := p.reserve("b", 1); got != 0 {
+		t.Fatalf("an overfull machine gave %d places, want 0", got)
+	}
+	p.done("a")
+	if got := p.reserve("b", 1); got != 0 {
+		t.Fatalf("a machine still full gave %d places, want 0", got)
+	}
+	p.done("a")
+	if got := p.reserve("b", 1); got != 1 {
+		t.Fatalf("a machine with room gave %d places, want 1", got)
 	}
 }
 

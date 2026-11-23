@@ -8,6 +8,15 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Changed
+
+- `repo/dependabot.example.yml`'s `github-actions` block ignores `jwill89/shared-tooling*`. Dependabot no longer opens a pull request for each shared workflow a project calls, each moving one `uses:` ref ahead of the `shared/` submodule. The block also groups the other actions' minors and patches into one pull request, as the other ecosystems do. A project copies the block's `groups` and `ignore` into its `.github/dependabot.yml` and closes any such pull requests still open; `standards/packages.md` (Updates) has the rule.
+
+### Fixed
+
+- The self-hosted runners hold `MaxJobs`. GitHub treats the capacity each poll reports as a hint, and the scaler started a runner for every job GitHub assigned. A burst of pull requests then ran 25 jobs on a limit of 7, and the shared CPUs and memory slowed every job to a crawl. Now the scaler starts no runner past `MaxJobs`, and a job GitHub assigns beyond it waits until a running job ends. `scaler.log` notes when jobs wait. The runners take it when they next start from shared-tooling's own checkout.
+- `task shared:runner:stop` prints one warning that lists the runners GitHub still counts as running a job, where it printed GitHub's refusal once per runner. Those runners are deregistered at the next start.
+
 ## [2.19.2] - 2026-11-20
 
 ### Fixed

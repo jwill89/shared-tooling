@@ -15,6 +15,10 @@
                      setting given, too large or too small for the distro
       Read-CiConfig  the CPU settings it refuses: Cpus, MaxJobs and JobCpus must each be
                      a whole number of 1 or more
+      Remove-CiGitHubRunner
+                     with gh swapped for a function in the module's scope: it deregisters
+                     only this machine's runners, lists the ones GitHub keeps as running a
+                     job in one warning, and warns apart for any other refusal
 
     Prints ok or FAIL for each case, and exits 1 when any fails. Nothing here starts WSL,
     Docker or gh.
@@ -115,6 +119,53 @@ try {
         } else {
             $failed++
             Write-Host "FAIL  Read-CiConfig: $($case.Name): $(if ($got) { $got } else { 'no error' })"
+        }
+    }
+
+    # GitHub's answers for one repo: runner 1 still running a job, 2 removed, 3 refused for
+    # another reason, and 4 another machine's.
+    $removal = & $module {
+        param($config)
+        $script:ghCalls = [System.Collections.Generic.List[string]]::new()
+        function script:gh {
+            $line = $args -join ' '
+            $script:ghCalls.Add($line)
+            $code = 0
+            $output = @()
+            if ($line -match '^api repos/owner/app/actions/runners ') {
+                $output = "1`twsl-busy`toffline`ttrue", "2`twsl-idle`toffline`tfalse", "3`twsl-down`toffline`tfalse", "4`tother-1`toffline`tfalse"
+            } elseif ($line -match 'DELETE repos/owner/app/actions/runners/1$') {
+                $code = 1
+                $output = 'gh: Bad request - Runner wsl-busy is currently running a job and cannot be deleted. (HTTP 422)'
+            } elseif ($line -match 'DELETE repos/owner/app/actions/runners/3$') {
+                $code = 1
+                $output = 'gh: Server Error (HTTP 500)'
+            }
+            # A function sets no exit code of its own, so the caller's check reads this one.
+            Set-Variable -Name LASTEXITCODE -Value $code -Scope Global
+            $output
+        }
+        try {
+            $warnings = $null
+            Remove-CiGitHubRunner -Config $config -All -WarningVariable warnings -WarningAction SilentlyContinue
+            [pscustomobject]@{ Warnings = @($warnings | ForEach-Object { "$_" }); Calls = @($script:ghCalls) }
+        } finally {
+            Remove-Item -LiteralPath Function:\gh
+        }
+    } @{ Owner = 'owner'; Repos = @('app'); Name = 'wsl' }
+    $deletes = @($removal.Calls | Where-Object { $_ -match 'DELETE' } | ForEach-Object { ($_ -split '/')[-1] })
+    $removalCases = @(
+        @{ Name = "deletes this machine's runners only"; Pass = ($deletes -join ',') -eq '1,2,3' }
+        @{ Name = 'lists the runners GitHub keeps in one warning'; Pass = @($removal.Warnings | Where-Object { $_ -match 'kept 1 runner\(s\).*app/wsl-busy' }).Count -eq 1 }
+        @{ Name = 'warns apart for any other refusal'; Pass = @($removal.Warnings | Where-Object { $_ -match "Couldn't deregister app/wsl-down: .*HTTP 500" }).Count -eq 1 }
+        @{ Name = 'warns nothing else'; Pass = $removal.Warnings.Count -eq 2 }
+    )
+    foreach ($case in $removalCases) {
+        if ($case.Pass) {
+            Write-Host "ok    Remove-CiGitHubRunner: $($case.Name)"
+        } else {
+            $failed++
+            Write-Host "FAIL  Remove-CiGitHubRunner: $($case.Name): deleted $($deletes -join ','); warned $($removal.Warnings -join ' | ')"
         }
     }
 } finally {
