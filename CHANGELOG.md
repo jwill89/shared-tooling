@@ -8,6 +8,10 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+### Added
+
+- The self-hosted runners stop themselves once no job has run for an hour, as `task shared:runner:stop` does, so runners left started don't hold WSL's memory. The runner config's new `IdleMinutes` sets the wait, and 0 keeps them running until a stop; `task shared:runner:start` starts them again. The runners take it when they next start from shared-tooling's own checkout.
+
 ### Fixed
 
 - The self-hosted runners hand the memory the jobs' file cache holds back to Windows. Linux kept every file a job read cached in the jobs' slice until the slice reached `Memory`, so after a few jobs WSL's VM held about 13 GB while the running jobs used about 3 GB. Every 30 seconds the runner loop now reclaims the cache the running jobs haven't read again lately, and all of it once none is running, without swapping out a job's own memory. The runners take it when they next start from shared-tooling's own checkout.

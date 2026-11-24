@@ -67,6 +67,7 @@ function Read-CiConfig {
         WindowsRepos   = @()
         WindowsMaxJobs = 1
         CacheSize      = '30g'
+        IdleMinutes    = 60
     }
     foreach ($key in $defaults.Keys) {
         if (-not $config.ContainsKey($key)) {
@@ -82,6 +83,7 @@ function Read-CiConfig {
         }
     }
     if ($config.WindowsMaxJobs -isnot [int] -or $config.WindowsMaxJobs -lt 1) { throw "The config's WindowsMaxJobs '$($config.WindowsMaxJobs)' isn't a whole number of 1 or more." }
+    if ($config.IdleMinutes -isnot [int] -or $config.IdleMinutes -lt 0) { throw "The config's IdleMinutes '$($config.IdleMinutes)' isn't a whole number of 0 or more." }
     # Every value reaches a command line, an API path or a limit, so each is held to a plain shape.
     if ($config.Owner -notmatch '^[A-Za-z0-9-]+$') { throw "The config's Owner '$($config.Owner)' isn't an account name." }
     if ($config.Distro -notmatch '^[A-Za-z0-9._-]+$') { throw "The config's Distro '$($config.Distro)' isn't a distro name." }
@@ -599,6 +601,37 @@ function Remove-CiContainer {
     }
 }
 
+function Test-CiJobRunning {
+    # Whether a job is running: a Linux job's container, or a Windows job's folder. A
+    # distro that doesn't answer counts as running one, so nothing stops on a guess.
+    param([Parameter(Mandatory)] [hashtable] $Config)
+    if (Get-ChildItem -LiteralPath (Join-Path $script:WindowsDir 'jobs') -Directory -ErrorAction SilentlyContinue) {
+        return $true
+    }
+    $ids = Invoke-CiDistro -Distro $Config.Distro -AllowFailure -Command 'docker', 'ps', '--quiet', '--filter', "label=$script:JobLabel"
+    return $LASTEXITCODE -ne 0 -or [bool] $ids
+}
+
+function Stop-CiStack {
+    # What a stop ends once the runner loop is gone: the scalers, every job container (a job
+    # running in one fails), this machine's runner registrations, and the distro, which
+    # with no other distro running lets WSL stop its VM.
+    [CmdletBinding(SupportsShouldProcess)]
+    param([Parameter(Mandatory)] [hashtable] $Config)
+    Stop-CiWindowsScaler
+    if (Test-CiDistro -Distro $Config.Distro -Running) {
+        Stop-CiScaler -Distro $Config.Distro
+        Remove-CiContainer -Distro $Config.Distro
+    }
+    Remove-CiGitHubRunner -Config $Config -All
+    if ((Test-CiDistro -Distro $Config.Distro -Running) -and $PSCmdlet.ShouldProcess($Config.Distro, 'Shut the distro down')) {
+        wsl.exe --terminate $Config.Distro | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Couldn't shut the $($Config.Distro) distro down (exit $LASTEXITCODE)."
+        }
+    }
+}
+
 function Move-CiLog {
     # Keeps one older copy of a log that has grown past 10 MB.
     param([Parameter(Mandatory)] [string] $Path)
@@ -737,6 +770,8 @@ function Install-CiRunner {
     6. Every six hours, empties a cache grown past CacheSize, rebuilds what the runner's
        new release or a change to scaler/ needs, and restarts a scaler on it; running
        Linux jobs finish on the image they started on.
+    7. Once no job has run for IdleMinutes (60), stops everything Stop-CiRunner stops and
+       returns, which ends the task; IdleMinutes = 0 leaves the runners running.
     Ctrl+C, or Stop-CiRunner, ends it. Logs go to %USERPROFILE%\.ci-runner\logs:
     supervisor.log for this loop, scaler.log and scaler-windows.log for the scalers.
 
@@ -775,6 +810,7 @@ function Start-CiRunner {
             $scalers.windows = [pscustomobject]@{ Log = Join-Path $script:LogDir 'scaler-windows.log'; Job = $null; Delay = 5; NextStart = Get-Date }
         }
         $windows = $null
+        $idle = $false
         try {
             # Just after a reboot or a sleep the network can come up after this starts, so the
             # steps that reach GitHub get ten minutes before the start counts as failed.
@@ -804,8 +840,12 @@ function Start-CiRunner {
                 Write-CiLog ("Serving {0} repos' Windows jobs as '{1}-windows': up to {2} at once." -f
                     $config.WindowsRepos.Count, $config.Name, $config.WindowsMaxJobs)
             }
+            if ($config.IdleMinutes) {
+                Write-CiLog "The runners stop themselves once no job has run for $($config.IdleMinutes) minutes."
+            }
 
             $lastUpkeep = Get-Date
+            $lastJob = Get-Date
             $cacheRefused = $false
             while ($true) {
                 foreach ($name in @($scalers.Keys)) {
@@ -876,6 +916,13 @@ function Start-CiRunner {
                     $cacheRefused = $true
                     Write-CiLog "The kernel won't reclaim the jobs' file cache, so WSL's VM keeps it until the runners stop: $refused"
                 }
+                if (Test-CiJobRunning -Config $config) {
+                    $lastJob = Get-Date
+                } elseif ($config.IdleMinutes -and ((Get-Date) - $lastJob).TotalMinutes -ge $config.IdleMinutes) {
+                    Write-CiLog "No job has run for $($config.IdleMinutes) minutes, so the runners are stopping; task shared:runner:start starts them again."
+                    $idle = $true
+                    break
+                }
                 Start-Sleep -Seconds 30
             }
         } finally {
@@ -891,6 +938,16 @@ function Start-CiRunner {
             foreach ($scaler in $scalers.Values) {
                 if ($scaler.Job) {
                     $scaler.Job | Remove-Job -Force
+                }
+            }
+            # Stopped for want of jobs, the loop stops the rest as Stop-CiRunner would, while
+            # its process id still says the runners are running.
+            if ($idle) {
+                try {
+                    Stop-CiStack -Config $config
+                    Write-CiLog 'The runners are stopped, and the distro is shut down.'
+                } catch {
+                    Write-CiLog "Couldn't stop everything: $_"
                 }
             }
             Remove-Item -LiteralPath $script:PidPath -ErrorAction SilentlyContinue
@@ -935,18 +992,7 @@ function Stop-CiRunner {
         $loop | Stop-Process -Force
     }
     Remove-Item -LiteralPath $script:PidPath -ErrorAction SilentlyContinue
-    Stop-CiWindowsScaler
-    if (Test-CiDistro -Distro $config.Distro -Running) {
-        Stop-CiScaler -Distro $config.Distro
-        Remove-CiContainer -Distro $config.Distro
-    }
-    Remove-CiGitHubRunner -Config $config -All
-    if ((Test-CiDistro -Distro $config.Distro -Running) -and $PSCmdlet.ShouldProcess($config.Distro, 'Shut the distro down')) {
-        wsl.exe --terminate $config.Distro | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            throw "Couldn't shut the $($config.Distro) distro down (exit $LASTEXITCODE)."
-        }
-    }
+    Stop-CiStack -Config $config
 }
 
 <#

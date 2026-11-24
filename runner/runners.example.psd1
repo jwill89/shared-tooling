@@ -41,6 +41,10 @@
     # them: the Linux jobs' volume, and the Windows jobs' caches, each.
     # CacheSize = '30g'
 
+    # How many minutes the runners wait with no job running before they stop themselves,
+    # as task shared:runner:stop does; 0 keeps them running until a stop.
+    # IdleMinutes = 60
+
     # The WSL distro the containers run in (Install-CiRunner -Distro).
     # Distro    = 'ci-runner'
 

@@ -13,8 +13,8 @@
       Get-CiLimit    the limits the jobs share and each job's share of the CPUs, from a
                      config and a distro's processors and memory: the defaults, and each
                      setting given, too large or too small for the distro
-      Read-CiConfig  the CPU settings it refuses: Cpus, MaxJobs and JobCpus must each be
-                     a whole number of 1 or more
+      Read-CiConfig  the settings it refuses: Cpus, MaxJobs and JobCpus must each be a
+                     whole number of 1 or more, and IdleMinutes one of 0 or more
       Remove-CiGitHubRunner
                      with gh swapped for a function in the module's scope: it deregisters
                      only this machine's runners, lists the ones GitHub keeps as running a
@@ -103,6 +103,11 @@ try {
         @{ Name = 'a share of no CPUs is refused'; Lines = 'JobCpus = 0'; Error = "JobCpus '0' isn't a whole number" }
         @{ Name = 'a share in words is refused'; Lines = "JobCpus = 'two'"; Error = "JobCpus 'two' isn't a whole number" }
         @{ Name = 'no jobs is refused'; Lines = 'MaxJobs = 0'; Error = "MaxJobs '0' isn't a whole number" }
+        @{ Name = 'an idle stop in minutes is taken'; Lines = 'IdleMinutes = 30'; Error = '' }
+        @{ Name = 'no idle stop is taken'; Lines = 'IdleMinutes = 0'; Error = '' }
+        @{ Name = 'a fraction of a minute idle is refused'; Lines = 'IdleMinutes = 1.5'; Error = "IdleMinutes '1.5' isn't a whole number of 0 or more" }
+        @{ Name = 'an idle stop below 0 is refused'; Lines = 'IdleMinutes = -5'; Error = "IdleMinutes '-5' isn't a whole number of 0 or more" }
+        @{ Name = 'an idle stop in words is refused'; Lines = "IdleMinutes = 'an hour'"; Error = "IdleMinutes 'an hour' isn't a whole number of 0 or more" }
     )
     $path = Join-Path $scratch 'runners.psd1'
     foreach ($case in $configCases) {
