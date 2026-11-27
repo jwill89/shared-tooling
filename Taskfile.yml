@@ -68,9 +68,10 @@ tasks:
       - node scripts/test-presets.mjs
 
   test:scripts:
-    desc: The scripts' own tests - repo/Invoke-NpmAudit.ps1 on recorded npm audit reports, ci/Invoke-CiShare.ps1's share of the CPUs, and runner/CiRunner.psm1's limits
+    desc: The scripts' own tests - repo/Invoke-NpmAudit.ps1 on recorded npm audit reports, repo/npm-take-updates.mjs on made-up lockfiles, ci/Invoke-CiShare.ps1's share of the CPUs, and runner/CiRunner.psm1's limits
     cmds:
       - pwsh -NoProfile -File scripts/Test-NpmAudit.ps1
+      - node scripts/test-npm-take-updates.mjs
       - pwsh -NoProfile -File scripts/Test-CiShare.ps1
       - pwsh -NoProfile -File scripts/Test-CiRunner.ps1
 

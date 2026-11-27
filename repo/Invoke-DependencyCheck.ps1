@@ -47,8 +47,10 @@
 .PARAMETER Update
     Take the in-range updates: for npm, each package's range raised to the new version and
     its family's lockfile entries dropped (npm-take-updates.mjs), then npm install, so
-    packages that pin each other move together; go get each module at its version then go
-    mod tidy; composer update then composer bump for those packages; dotnet add package; and
+    packages that pin each other move together, and the lockfile held to npm ci's check
+    (npm ci --dry-run): resolved again with npm install --package-lock-only when it fails
+    it, and the update stopped when it still does; go get each module at its version then
+    go mod tidy; composer update then composer bump for those packages; dotnet add package; and
     for Python, each package's floor in its .in file raised to the new version (>=, == or ~=),
     then every compiled file in that folder made again by the command its header records,
     with --upgrade-package for each, a file another one reads (-r, -c) first, and the
@@ -123,6 +125,21 @@ function Get-NpmNewestInMajor {
     if ($LASTEXITCODE -ne 0 -or -not $raw) { return $null }
     $newest = @($raw | Out-String | ConvertFrom-Json)[-1]
     if ($newest -and (Test-NewerVersion $newest $Current)) { $newest } else { $null }
+}
+
+function Get-NpmLockfileProblem {
+    # What npm ci refuses in the folder's lockfile, as CI's install would meet it: npm's lines
+    # naming each package the lockfile lacks or holds at a version package.json doesn't allow,
+    # or its first error line when it names none; nothing when the lockfile passes. A dry run
+    # leaves node_modules as it is.
+    param([string] $Directory)
+    $output = @(npm ci --dry-run --no-audit --no-fund --prefix $Directory 2>&1 | ForEach-Object { "$_" })
+    $code = $LASTEXITCODE
+    if ($code -eq 0) { return }
+    $named = @($output | Where-Object { $_ -match '^npm error (Missing|Invalid): ' } | ForEach-Object { $_ -replace '^npm error ', '' })
+    if ($named) { return $named }
+    $line = $output | Where-Object { $_ -match '^npm error \S' } | Select-Object -First 1
+    if ($line) { $line -replace '^npm error ', '' } else { "npm ci --dry-run exited $code" }
 }
 
 function ConvertTo-PythonVersion {
@@ -585,6 +602,20 @@ try {
                     # with its integrity still comes from the cache, so Font Awesome isn't fetched again.
                     npm install --no-audit --prefix $first.Directory
                     if ($LASTEXITCODE -ne 0) { throw "npm install failed in $($first.Directory)." }
+                    # npm install doesn't always resolve a dropped entry again when only a package it
+                    # kept needs it, and npm ci then refuses the lockfile. So the lockfile is held to
+                    # npm ci's check here, before anything is committed, and resolved again in full
+                    # when it fails it, node_modules following.
+                    $problem = @(Get-NpmLockfileProblem -Directory $first.Directory)
+                    if ($problem) {
+                        Write-Output "  npm ci would refuse the lockfile ($($problem -join '; ')); resolving it again with npm install --package-lock-only."
+                        npm install --package-lock-only --no-audit --prefix $first.Directory
+                        if ($LASTEXITCODE -ne 0) { throw "npm install --package-lock-only failed in $($first.Directory)." }
+                        npm install --no-audit --prefix $first.Directory
+                        if ($LASTEXITCODE -ne 0) { throw "npm install failed in $($first.Directory)." }
+                        $problem = @(Get-NpmLockfileProblem -Directory $first.Directory)
+                        if ($problem) { throw "npm ci still refuses the lockfile in $($first.Directory): $($problem -join '; ')." }
+                    }
                 }
                 'gomod' {
                     foreach ($entry in $group.Group) {

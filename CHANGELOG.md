@@ -14,6 +14,7 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ### Fixed
 
+- `task shared:push` and `task shared:deps:update` no longer leave an npm lockfile that `npm ci` refuses. An in-range update to one `@types/` package, such as `@types/node`, made the lockfile lose other `@types/` packages that only a package left as it was needs, so CI's install stopped with `Missing: @types/json-schema@7.0.15 from lock file`. An update now moves only the package and the packages of its scope pinned to it by exact versions, as Tiptap's are, which still move together. The lockfile is then checked with `npm ci --dry-run`, resolved again with `npm install --package-lock-only` when it fails, and the step stops before anything is committed when it still fails.
 - The self-hosted runners hand the memory the jobs' file cache holds back to Windows. Linux kept every file a job read cached in the jobs' slice until the slice reached `Memory`, so after a few jobs WSL's VM held about 13 GB while the running jobs used about 3 GB. Every 30 seconds the runner loop now reclaims the cache the running jobs haven't read again lately, and all of it once none is running, without swapping out a job's own memory. The runners take it when they next start from shared-tooling's own checkout.
 
 ## [2.19.3] - 2026-11-22
