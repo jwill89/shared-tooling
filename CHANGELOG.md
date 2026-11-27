@@ -8,6 +8,8 @@ The changes a project would notice in shared-tooling, by release. A project take
 
 ## [Unreleased]
 
+## [2.19.4] - 2026-11-27
+
 ### Added
 
 - The self-hosted runners stop themselves once no job has run for an hour, as `task shared:runner:stop` does, so runners left started don't hold WSL's memory. The runner config's new `IdleMinutes` sets the wait, and 0 keeps them running until a stop; `task shared:runner:start` starts them again. The runners take it when they next start from shared-tooling's own checkout.
@@ -536,7 +538,8 @@ A major: a project's own Stylelint moves to 18.
 - `repo/`: the shared `.editorconfig` and `.gitattributes`, the Taskfile include, the Dependabot example, and `task shared:update` with its version check.
 - `.github/workflows`: reusable workflows for each stack (`web`, `go`, `php`, `dotnet`, `pwsh`, `docs`, `osv`).
 
-[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.19.3...HEAD
+[Unreleased]: https://github.com/jwill89/shared-tooling/compare/v2.19.4...HEAD
+[2.19.4]: https://github.com/jwill89/shared-tooling/compare/v2.19.3...v2.19.4
 [2.19.3]: https://github.com/jwill89/shared-tooling/compare/v2.19.2...v2.19.3
 [2.19.2]: https://github.com/jwill89/shared-tooling/compare/v2.19.1...v2.19.2
 [2.19.1]: https://github.com/jwill89/shared-tooling/compare/v2.19.0...v2.19.1
