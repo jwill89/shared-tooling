@@ -81,7 +81,7 @@ jobs:
           echo "::error::Pass cache-path and cache-key-files together: the files' contents key the cache."
           exit 1
 
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: astral-sh/setup-uv@v10.4.0
         with:
           version: ${{ inputs.uv-version }}
           working-directory: ${{ inputs.dir }}

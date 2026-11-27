@@ -206,7 +206,7 @@ jobs:
         run: |
           & "$env:CI_TOOLS/Invoke-CiCheck.ps1" -Name 'composer install' -Command 'composer install --prefer-dist --no-interaction --no-progress'
 
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: astral-sh/setup-uv@v10.4.0
         if: inputs.python-version-file != ''
         with:
           version: ${{ inputs.uv-version }}
